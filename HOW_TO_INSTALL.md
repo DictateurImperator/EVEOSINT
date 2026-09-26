@@ -312,7 +312,7 @@ Run:
 
 ```bash
 cd ~/eveosint/web
-../venv/bin/python create_user.py
+../venv/bin/python app/create_user.py
 ```
 
 Choose:
