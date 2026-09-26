@@ -1,0 +1,460 @@
+{% extends "base.html" %}
+
+{% block content %}
+<style>
+  .sysmap-page { min-width: 0; }
+  .sysmap-head { display:grid; grid-template-columns:minmax(0,1fr) auto minmax(0,1fr); align-items:start; gap:18px; margin-bottom:14px; }
+  .sysmap-breadcrumbs { display:flex; flex-wrap:wrap; align-items:center; gap:7px; margin-bottom:6px; color:#94a3b8; font-size:.86rem; }
+  .sysmap-breadcrumbs a { color:#93c5fd; text-decoration:none; }
+  .sysmap-breadcrumbs a:hover { color:#dbeafe; }
+  .sysmap-toolbar { display:flex; gap:7px; flex-wrap:wrap; justify-self:end; }
+  .system-view-switch { display:inline-flex; align-items:center; gap:4px; justify-self:center; padding:4px; border:1px solid #334155; border-radius:13px; background:rgba(10,16,27,.96); box-shadow:0 8px 26px rgba(0,0,0,.28); }
+  .system-view-switch a, .system-view-switch span { min-width:118px; padding:9px 16px; border-radius:9px; text-align:center; text-decoration:none; font-size:.86rem; font-weight:900; letter-spacing:.045em; text-transform:uppercase; }
+  .system-view-switch a { color:#93c5fd; border:1px solid transparent; }
+  .system-view-switch a:hover { color:#fff; background:rgba(37,99,235,.18); border-color:rgba(96,165,250,.45); }
+  .system-view-switch .active { color:#fff; background:#0d6efd; border:1px solid #60a5fa; box-shadow:0 0 18px rgba(13,110,253,.24); }
+  .sysmap-grid { display:grid; grid-template-columns:minmax(0,1fr) 260px; gap:14px; min-height:690px; }
+  .sysmap-canvas { position:relative; min-width:0; height:min(76vh,860px); min-height:620px; overflow:hidden; border:1px solid #263449; border-radius:18px; background:radial-gradient(circle at 50% 50%,rgba(30,41,59,.50),rgba(7,12,21,.97) 68%),#070c15; user-select:none; }
+  .sysmap-canvas svg { width:100%; height:100%; display:block; cursor:grab; touch-action:none; }
+  .sysmap-canvas svg.dragging { cursor:grabbing; }
+  .sysmap-side { min-width:0; height:min(76vh,860px); min-height:620px; overflow:hidden; display:flex; flex-direction:column; border:1px solid #263449; border-radius:18px; background:rgba(10,16,27,.88); }
+  .sysmap-side-head { padding:14px; border-bottom:1px solid #263449; }
+  .sysmap-side-list { overflow:auto; padding:8px; }
+  .sysmap-side-item { display:block; padding:9px 10px; margin-bottom:3px; border-radius:9px; color:#dbe4f0; text-decoration:none; }
+  .sysmap-side-item:hover { background:rgba(148,163,184,.10); color:#fff; }
+  .sysmap-side-meta { display:block; margin-top:2px; color:#718096; font-size:.76rem; }
+  .sysmap-help { position:absolute; left:12px; bottom:10px; z-index:4; padding:5px 8px; border-radius:7px; background:rgba(3,7,18,.74); color:#718096; font-size:.72rem; pointer-events:none; }
+  .sysmap-tooltip { position:absolute; z-index:8; max-width:380px; padding:9px 11px; border:1px solid #475569; border-radius:9px; background:rgba(5,10,18,.97); color:#dce6f2; font-size:.78rem; line-height:1.4; pointer-events:none; box-shadow:0 12px 30px rgba(0,0,0,.4); display:none; }
+  .orbit-ring { fill:none; stroke:rgba(148,163,184,.13); stroke-width:1; vector-effect:non-scaling-stroke; }
+  .parent-link { stroke:rgba(100,116,139,.22); stroke-width:1; stroke-dasharray:3 4; vector-effect:non-scaling-stroke; }
+  .space-object { cursor:help; }
+  .space-object .object-halo { fill:rgba(7,12,21,.78); stroke:rgba(148,163,184,.40); stroke-width:1; vector-effect:non-scaling-stroke; }
+  .space-object:hover .object-halo { stroke:#e2e8f0; stroke-width:1.6; filter:drop-shadow(0 0 6px rgba(226,232,240,.22)); }
+  .space-image { pointer-events:none; }
+  .star-object .object-halo { stroke:#f59e0b; filter:drop-shadow(0 0 8px rgba(245,158,11,.28)); }
+  .planet-object .object-halo { stroke:#94a3b8; }
+  .planet-object.has-moons { cursor:pointer; }
+  .planet-object.has-moons:hover .object-halo { stroke:#f8fafc; }
+  .moon-badge circle { fill:#0f172a; stroke:#e2e8f0; stroke-width:1; vector-effect:non-scaling-stroke; }
+  .moon-badge text { fill:#fff; font-size:10px; font-weight:800; text-anchor:middle; dominant-baseline:middle; pointer-events:none; }
+  .planet-object.moons-open .moon-badge circle { fill:#2563eb; stroke:#bfdbfe; }
+  .moon-object .object-halo { stroke:#64748b; }
+  .belt-object .object-halo { stroke:#a78bfa; stroke-dasharray:2 2; }
+  .station-object .object-halo { stroke:#38bdf8; }
+  .gate-node { cursor:pointer; }
+  .gate-node .object-halo { fill:rgba(38,25,8,.74); stroke:#f59e0b; stroke-width:1.5; vector-effect:non-scaling-stroke; }
+  .gate-node:hover .object-halo { stroke:#fde68a; stroke-width:2.2; filter:drop-shadow(0 0 8px rgba(245,158,11,.42)); }
+  .sysmap-legend { display:flex; gap:8px 14px; flex-wrap:wrap; margin:0 0 12px; color:#94a3b8; font-size:.75rem; }
+  .legend-item { display:inline-flex; align-items:center; gap:5px; }
+  .legend-dot { width:9px; height:9px; border-radius:50%; display:inline-block; border:1px solid rgba(255,255,255,.4); }
+  @media(max-width:1050px){ .sysmap-head{grid-template-columns:1fr auto;} .system-view-switch{grid-column:1 / -1; grid-row:2; margin-top:4px;} .sysmap-grid{grid-template-columns:1fr;} .sysmap-side{height:260px;min-height:260px;} }
+</style>
+
+<div class="sysmap-page">
+  <div class="sysmap-head">
+    <div>
+      <div class="sysmap-breadcrumbs">
+        {% for crumb in map_payload.breadcrumbs %}
+          {% if not loop.last %}<a href="{{ crumb.url }}">{{ crumb.label }}</a><span>›</span>{% else %}<span>{{ crumb.label }}</span>{% endif %}
+        {% endfor %}
+      </div>
+      <h1 class="h3 fw-bold mb-1">MAP — {{ map_payload.title }}</h1>
+      <div class="muted-line">{{ map_payload.subtitle }}{% if map_payload.security is not none %} · sec {{ '%.2f'|format(map_payload.security|float) }}{% endif %}</div>
+    </div>
+    <div class="system-view-switch" aria-label="System view">
+      <span class="active">MAP</span>
+      <a href="{{ map_payload.system_profile_url }}">KILLBOARD</a>
+    </div>
+    <div class="sysmap-toolbar">
+      <button class="btn btn-sm btn-outline-secondary" type="button" id="mapZoomOut">−</button>
+      <button class="btn btn-sm btn-outline-secondary" type="button" id="mapFit">Fit</button>
+      <button class="btn btn-sm btn-outline-secondary" type="button" id="mapZoomIn">+</button>
+      {% if map_payload.region_id %}<a class="btn btn-sm btn-outline-primary" href="/map/region/{{ map_payload.region_id }}">Region</a>{% endif %}
+    </div>
+  </div>
+
+  <div class="sysmap-legend">
+    <span class="legend-item"><span class="legend-dot" style="background:#fde68a"></span>Star</span>
+    <span class="legend-item"><span class="legend-dot" style="background:#64748b"></span>Planet</span>
+    <span class="legend-item"><span class="legend-dot" style="background:#94a3b8"></span>Moon</span>
+    <span class="legend-item"><span class="legend-dot" style="background:#a78bfa"></span>Belt</span>
+    <span class="legend-item"><span class="legend-dot" style="background:#38bdf8"></span>NPC station</span>
+    <span class="legend-item"><span class="legend-dot" style="background:#f59e0b"></span>Stargate → click to jump</span>
+  </div>
+
+  <div class="sysmap-grid">
+    <div class="sysmap-canvas" id="systemMapCanvas">
+      <svg id="systemMapSvg" viewBox="0 0 1200 760" aria-label="{{ map_payload.title }} system map"></svg>
+      <div class="sysmap-tooltip" id="systemMapTooltip"></div>
+      <div class="sysmap-help">Drag to pan · wheel to zoom · click a stargate to open the next system</div>
+    </div>
+    <aside class="sysmap-side">
+      <div class="sysmap-side-head">
+        <div class="fw-bold">{{ map_payload.side_title }}</div>
+        <div class="muted-line small">{{ map_payload.gates|length }} exits</div>
+      </div>
+      <div class="sysmap-side-list">
+        {% for item in map_payload.side_items %}
+          <a class="sysmap-side-item" href="{{ item.url }}">
+            {{ item.name }}
+            <span class="sysmap-side-meta">{{ item.meta }}</span>
+          </a>
+        {% else %}
+          <div class="p-2 muted-line">No stargates.</div>
+        {% endfor %}
+      </div>
+    </aside>
+  </div>
+</div>
+
+<script>
+(() => {
+  const data = {{ map_data_json|safe }};
+  const svg = document.getElementById('systemMapSvg');
+  const canvas = document.getElementById('systemMapCanvas');
+  const tooltip = document.getElementById('systemMapTooltip');
+  const NS = 'http://www.w3.org/2000/svg';
+  const W = 1200, H = 760, CX = W/2, CY = H/2;
+  const objects = Array.isArray(data.objects) ? data.objects : [];
+  const gates = Array.isArray(data.gates) ? data.gates : [];
+  const byId = new Map(objects.map(o => [String(o.id), o]));
+  const moons = objects.filter(o => o.kind === 'moon');
+  const moonsByPlanet = new Map();
+  moons.forEach(m => {
+    const key=String(m.orbit_id || '');
+    if (!moonsByPlanet.has(key)) moonsByPlanet.set(key, []);
+    moonsByPlanet.get(key).push(m);
+  });
+  moonsByPlanet.forEach(list => list.sort((a,b)=>(a.orbit_index||999)-(b.orbit_index||999) || Number(a.id)-Number(b.id)));
+
+  const svgEl = (tag, attrs={}) => {
+    const e = document.createElementNS(NS, tag);
+    Object.entries(attrs).forEach(([k,v]) => e.setAttribute(k, v));
+    return e;
+  };
+  const dist = p => Math.hypot(Number(p?.x||0), Number(p?.y||0), Number(p?.z||0));
+  const angle = p => Math.atan2(Number(p?.z||0), Number(p?.x||0));
+  const relative = (a,b) => ({x:Number(a?.x||0)-Number(b?.x||0), y:Number(a?.y||0)-Number(b?.y||0), z:Number(a?.z||0)-Number(b?.z||0)});
+
+  const planets = objects.filter(o => o.kind === 'planet').sort((a,b) => (a.celestial_index||999)-(b.celestial_index||999));
+  const star = objects.find(o => o.kind === 'star');
+  const maxPlanetD = Math.max(1, ...planets.map(p => dist(p.position)), ...gates.map(g => dist(g.position)));
+  const planetMinR = 85, planetMaxR = 270;
+  const compressedRadius = d => {
+    if (d <= 0) return 0;
+    const denom = Math.log1p(maxPlanetD);
+    return planetMinR + (Math.log1p(d) / denom) * (planetMaxR - planetMinR);
+  };
+
+  if (star) { star._x=CX; star._y=CY; }
+  planets.forEach((p, i) => {
+    const a = angle(p.position);
+    const r = compressedRadius(dist(p.position));
+    p._x = CX + Math.cos(a)*r;
+    p._y = CY + Math.sin(a)*r;
+    p._orbitR = r;
+  });
+
+  // Keep the system overview readable: moons are hidden until their planet is clicked.
+  // Belts/stations stay around their parent; moons get a clean local ring when expanded.
+  const childrenByParent = new Map();
+  objects.filter(o => ['moon','belt','station'].includes(o.kind)).forEach(o => {
+    const key = String(o.orbit_id || 'none');
+    if (!childrenByParent.has(key)) childrenByParent.set(key, []);
+    childrenByParent.get(key).push(o);
+  });
+
+  childrenByParent.forEach((children, parentId) => {
+    const parent = byId.get(parentId);
+    if (!parent || parent._x == null) return;
+    const moonChildren = children.filter(c => c.kind === 'moon').sort((a,b)=>(a.orbit_index||999)-(b.orbit_index||999) || Number(a.id)-Number(b.id));
+    const visibleChildren = children.filter(c => c.kind !== 'moon').sort((a,b)=>(a.orbit_index||999)-(b.orbit_index||999) || Number(a.id)-Number(b.id));
+
+    visibleChildren.forEach((child, idx) => {
+      const rel = relative(child.position, parent.position);
+      let a = Math.atan2(rel.z, rel.x);
+      if (!Number.isFinite(a) || Math.hypot(rel.x, rel.z) < 1) a = (idx / Math.max(1, visibleChildren.length))*Math.PI*2;
+      // Alternate rings so several stations/belts on the same bearing don't sit on top of each other.
+      const base = child.kind === 'station' ? 42 : 34;
+      const ring = base + (idx % 3)*14;
+      a += (idx - (visibleChildren.length-1)/2) * 0.11;
+      child._x = parent._x + Math.cos(a)*ring;
+      child._y = parent._y + Math.sin(a)*ring;
+    });
+
+    moonChildren.forEach((child, idx) => {
+      const count = moonChildren.length;
+      const rel = relative(child.position, parent.position);
+      let baseAngle = Math.atan2(rel.z, rel.x);
+      if (!Number.isFinite(baseAngle)) baseAngle = 0;
+      const ringIndex = Math.floor(idx / 8);
+      const slot = idx % 8;
+      const slotsOnRing = Math.min(8, count - ringIndex*8);
+      const ring = 48 + ringIndex*22;
+      // Preserve the real direction as an anchor, but distribute moons so they remain readable.
+      const a = count === 1 ? baseAngle : baseAngle + ((slot - (slotsOnRing-1)/2) * (Math.PI*2/Math.max(10, slotsOnRing+2)));
+      child._x = parent._x + Math.cos(a)*ring;
+      child._y = parent._y + Math.sin(a)*ring;
+    });
+  });
+
+  // Small deterministic anti-overlap pass for planets while keeping each orbital radius.
+  for (let pass=0; pass<8; pass++) {
+    for (let i=0; i<planets.length; i++) for (let j=i+1; j<planets.length; j++) {
+      const a=planets[i], b=planets[j];
+      const dx=b._x-a._x, dy=b._y-a._y, d=Math.hypot(dx,dy);
+      if (d >= 38 || d < 0.001) continue;
+      let aa=Math.atan2(a._y-CY,a._x-CX), ab=Math.atan2(b._y-CY,b._x-CX);
+      const push=Math.min(.10,(38-d)/Math.max(90,(a._orbitR+b._orbitR)/2));
+      aa-=push; ab+=push;
+      a._x=CX+Math.cos(aa)*a._orbitR; a._y=CY+Math.sin(aa)*a._orbitR;
+      b._x=CX+Math.cos(ab)*b._orbitR; b._y=CY+Math.sin(ab)*b._orbitR;
+    }
+  }
+
+  gates.forEach((g, idx) => {
+    let a = angle(g.position);
+    if (!Number.isFinite(a)) a = (idx / Math.max(1,gates.length))*Math.PI*2;
+    const r = 345;
+    g._x = CX + Math.cos(a)*r;
+    g._y = CY + Math.sin(a)*r;
+  });
+
+  const root = svgEl('g', {id:'viewport'});
+  svg.appendChild(root);
+
+  // Planet orbit rings.
+  planets.forEach(p => root.appendChild(svgEl('circle', {cx:CX, cy:CY, r:p._orbitR, class:'orbit-ring'})));
+
+  const moonVisualsByPlanet = new Map();
+  const planetGroups = new Map();
+  let expandedPlanetId = null;
+  function registerMoonVisual(parentId, el){
+    const key=String(parentId || '');
+    if (!moonVisualsByPlanet.has(key)) moonVisualsByPlanet.set(key, []);
+    moonVisualsByPlanet.get(key).push(el);
+    el.style.display='none';
+  }
+
+  // Parent links for belts/stations are always visible. Moon links follow moon visibility.
+  objects.filter(o => ['moon','belt','station'].includes(o.kind) && o._x != null).forEach(o => {
+    const parent = byId.get(String(o.orbit_id));
+    if (!parent || parent._x == null) return;
+    const line=svgEl('line', {x1:parent._x, y1:parent._y, x2:o._x, y2:o._y, class:'parent-link'});
+    root.appendChild(line);
+    if (o.kind === 'moon') registerMoonVisual(o.orbit_id, line);
+  });
+
+  function setPlanetMoons(planetId, open){
+    const key=String(planetId);
+    (moonVisualsByPlanet.get(key) || []).forEach(el => { el.style.display=open ? '' : 'none'; });
+    const pg=planetGroups.get(key);
+    if(pg) pg.classList.toggle('moons-open', open);
+  }
+  function togglePlanetMoons(planetId){
+    const key=String(planetId);
+    if(expandedPlanetId && expandedPlanetId !== key) setPlanetMoons(expandedPlanetId, false);
+    const opening = expandedPlanetId !== key;
+    setPlanetMoons(key, opening);
+    expandedPlanetId = opening ? key : null;
+  }
+
+  function showTip(evt, html){
+    tooltip.innerHTML = html;
+    tooltip.style.display='block';
+    const r=canvas.getBoundingClientRect();
+    tooltip.style.left=Math.min(r.width-310, Math.max(8, evt.clientX-r.left+14))+'px';
+    tooltip.style.top=Math.min(r.height-120, Math.max(8, evt.clientY-r.top+14))+'px';
+  }
+  const hideTip=()=>{tooltip.style.display='none';};
+
+  const typeImageUrl = (typeId, variation='render', size=64) =>
+    `https://images.evetech.net/types/${encodeURIComponent(typeId)}/${variation}?size=${size}`;
+
+  function addTypeImage(group, item, size, preferRender=true){
+    const haloR = Math.max(7, size/2 + 2);
+    group.appendChild(svgEl('circle',{cx:item._x,cy:item._y,r:haloR,class:'object-halo'}));
+    if (!item.type_id) return;
+    const image=svgEl('image',{
+      x:item._x-size/2,
+      y:item._y-size/2,
+      width:size,
+      height:size,
+      class:'space-image',
+      preserveAspectRatio:'xMidYMid meet'
+    });
+    let fallbackUsed = !preferRender;
+    image.setAttribute('href', typeImageUrl(item.type_id, preferRender ? 'render' : 'icon', 64));
+    image.addEventListener('error',()=>{
+      if (fallbackUsed) return;
+      fallbackUsed = true;
+      image.setAttribute('href', typeImageUrl(item.type_id, 'icon', 64));
+    });
+    group.appendChild(image);
+  }
+
+  const esc = value => String(value ?? '').replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
+  const finite = value => value !== null && value !== undefined && value !== '' && Number.isFinite(Number(value));
+  const num = (value, digits=2) => Number(value).toLocaleString(undefined,{maximumFractionDigits:digits});
+  const sci = value => {
+    const n=Number(value);
+    if(!Number.isFinite(n)) return null;
+    if(Math.abs(n) >= 1e12 || (Math.abs(n) > 0 && Math.abs(n) < .001)) return n.toExponential(3);
+    return n.toLocaleString(undefined,{maximumFractionDigits:3});
+  };
+  const duration = seconds => {
+    const s=Number(seconds); if(!Number.isFinite(s)) return null;
+    const abs=Math.abs(s);
+    if(abs >= 31557600) return `${num(s/31557600,2)} years`;
+    if(abs >= 86400) return `${num(s/86400,2)} days`;
+    if(abs >= 3600) return `${num(s/3600,2)} h`;
+    if(abs >= 60) return `${num(s/60,2)} min`;
+    return `${num(s,2)} s`;
+  };
+  const radius = metres => finite(metres) ? `${num(Number(metres)/1000,2)} km` : null;
+  const orbitRadius = metres => {
+    if(!finite(metres)) return null;
+    const m=Number(metres), au=m/149597870700;
+    return au >= .01 ? `${num(au,3)} AU` : `${num(m/1000,0)} km`;
+  };
+  const temperature = kelvin => {
+    if(!finite(kelvin)) return null;
+    const k=Number(kelvin); return `${num(k,1)} K (${num(k-273.15,1)} °C)`;
+  };
+  const gravity = value => {
+    if(!finite(value)) return null;
+    const g=Number(value); return `${num(g,3)} m/s² (${num(g/9.80665,3)} g)`;
+  };
+  const row = (label, value) => value === null || value === undefined || value === '' ? '' : `<div><span style="color:#94a3b8">${esc(label)}:</span> ${esc(value)}</div>`;
+  const section = title => `<div style="margin-top:7px;padding-top:6px;border-top:1px solid #334155;color:#bfdbfe;font-weight:700">${esc(title)}</div>`;
+
+  function physicalRows(d){
+    d=d||{};
+    let html='';
+    if(finite(d.radius_m)) html += row('Radius', radius(d.radius_m));
+    if(finite(d.temperature_k)) html += row('Temperature', temperature(d.temperature_k));
+    if(finite(d.surface_gravity_m_s2)) html += row('Surface gravity', gravity(d.surface_gravity_m_s2));
+    if(finite(d.escape_velocity_m_s)) html += row('Escape velocity', `${num(Number(d.escape_velocity_m_s)/1000,3)} km/s`);
+    if(finite(d.density)) html += row('Density', `${num(d.density,3)} kg/m³`);
+    if(finite(d.pressure)) html += row('Pressure', num(d.pressure,6));
+    if(finite(d.mass_dust)) html += row('Solid mass', `${sci(d.mass_dust)} kg`);
+    if(finite(d.mass_gas)) html += row('Gas mass', `${sci(d.mass_gas)} kg`);
+    if(finite(d.rotation_rate_s)) html += row('Rotation', duration(d.rotation_rate_s));
+    if(finite(d.orbit_radius_m)) html += row('Orbit radius', orbitRadius(d.orbit_radius_m));
+    if(finite(d.orbit_period_s)) html += row('Orbit period', duration(d.orbit_period_s));
+    if(finite(d.eccentricity)) html += row('Eccentricity', num(d.eccentricity,6));
+    if(d.locked === true) html += row('Tidally locked', 'Yes');
+    if(d.locked === false) html += row('Tidally locked', 'No');
+    if(d.spectral_class) html += row('Spectral class', d.spectral_class);
+    if(finite(d.luminosity)) html += row('Luminosity', `${num(d.luminosity,6)} × Sun`);
+    if(finite(d.age_s)) html += row('Age', duration(d.age_s));
+    if(finite(d.life_s)) html += row('Expected life', duration(d.life_s));
+    return html;
+  }
+
+  function systemRows(){
+    const i=data.system_info||{};
+    let html=section('System');
+    if(i.region_name) html += row('Region', i.region_name);
+    if(i.constellation_name) html += row('Constellation', i.constellation_name);
+    if(finite(i.security)) html += row('Security', num(i.security,3));
+    if(i.security_class) html += row('Security class', i.security_class);
+    if(i.faction_name) html += row('Faction', i.faction_name);
+    html += row('Planets', i.planet_count ?? 0);
+    html += row('Moons', i.moon_count ?? 0);
+    html += row('NPC stations', i.station_count ?? 0);
+    html += row('Stargates', i.gate_count ?? 0);
+    return html;
+  }
+
+  function objectTooltip(o){
+    const kindName = ({star:'Star',planet:'Planet',moon:'Moon',belt:'Asteroid Belt',station:'NPC Station'})[o.kind] || o.kind;
+    let html=`<div style="font-size:.88rem;font-weight:800;color:#f8fafc">${esc(o.name)}</div>`;
+    html += `<div style="color:#94a3b8;margin-bottom:4px">${esc(o.type_name || kindName)}</div>`;
+    html += physicalRows(o.details);
+    if(o.kind==='planet') {
+      if(o.population === true) html += row('Population', 'Present');
+      else if(o.population === false) html += row('Population', 'None');
+      const n=(moonsByPlanet.get(String(o.id))||[]).length;
+      if(n) html += row('Moons', `${n} · click planet to show/hide`);
+    }
+    if(o.kind==='station') {
+      if(o.owner_name) html += row('Owner', o.owner_name);
+      if(o.operation_name) html += row('Operation', o.operation_name);
+      if(finite(o.reprocessing_efficiency)) html += row('Reprocessing efficiency', `${num(Number(o.reprocessing_efficiency)*100,2)}%`);
+      if(finite(o.reprocessing_take)) html += row('Station take', `${num(Number(o.reprocessing_take)*100,2)}%`);
+    }
+    if(o.kind==='star') html += systemRows();
+    return html;
+  }
+
+  function drawObject(o){
+    if (o._x == null) return;
+    const sizes={star:44,planet:30,moon:18,belt:20,station:26};
+    const size=sizes[o.kind] || 22;
+    const moonCount=o.kind==='planet' ? (moonsByPlanet.get(String(o.id))||[]).length : 0;
+    const g=svgEl('g',{class:`space-object ${o.kind}-object${moonCount ? ' has-moons' : ''}`});
+    addTypeImage(g,o,size,o.kind!=='belt');
+    if(o.kind==='planet') {
+      planetGroups.set(String(o.id), g);
+      if(moonCount) {
+        const bx=o._x+size/2-1, by=o._y+size/2-1;
+        const badge=svgEl('g',{class:'moon-badge'});
+        badge.appendChild(svgEl('circle',{cx:bx,cy:by,r:8}));
+        const txt=svgEl('text',{x:bx,y:by+0.5}); txt.textContent=String(moonCount); badge.appendChild(txt);
+        g.appendChild(badge);
+        g.addEventListener('click',e=>{e.stopPropagation();togglePlanetMoons(o.id);});
+      }
+    }
+    g.addEventListener('mousemove', e => showTip(e, objectTooltip(o)));
+    g.addEventListener('mouseleave', hideTip);
+    root.appendChild(g);
+    if(o.kind==='moon') registerMoonVisual(o.orbit_id, g);
+  }
+  objects.filter(o=>o.kind==='star').forEach(drawObject);
+  objects.filter(o=>o.kind==='planet').forEach(drawObject);
+  objects.filter(o=>o.kind==='belt').forEach(drawObject);
+  objects.filter(o=>o.kind==='moon').forEach(drawObject);
+  objects.filter(o=>o.kind==='station').forEach(drawObject);
+
+  gates.forEach(gate => {
+    const group=svgEl('g',{class:'gate-node',tabindex:'0',role:'link','aria-label':`Stargate to ${gate.destination_system_name}`});
+    addTypeImage(group,gate,32,true);
+    group.addEventListener('click',e=>{ e.stopPropagation(); if(gate.url) window.location.href=gate.url; });
+    group.addEventListener('keydown',e=>{ if((e.key==='Enter'||e.key===' ')&&gate.url){e.preventDefault();window.location.href=gate.url;} });
+    group.addEventListener('mousemove',e=>{
+      let html=`<div style="font-size:.88rem;font-weight:800;color:#f8fafc">Stargate → ${esc(gate.destination_system_name)}</div>`;
+      html += `<div style="color:#94a3b8;margin-bottom:4px">${esc(gate.type_name || 'Stargate')}</div>`;
+      if(gate.destination_region_name) html += row('Destination region', gate.destination_region_name);
+      html += `<div style="margin-top:5px;color:#fde68a;font-weight:700">Click to jump</div>`;
+      showTip(e,html);
+    });
+    group.addEventListener('mouseleave',hideTip);
+    root.appendChild(group);
+  });
+
+  let scale=1, tx=0, ty=0, dragging=false, sx=0, sy=0, stx=0, sty=0;
+  function apply(){ root.setAttribute('transform',`translate(${tx} ${ty}) scale(${scale})`); }
+  function fit(){ scale=1; tx=0; ty=0; apply(); }
+  function zoom(factor){ scale=Math.max(.45,Math.min(3.5,scale*factor)); apply(); }
+  document.getElementById('mapFit').addEventListener('click',fit);
+  document.getElementById('mapZoomIn').addEventListener('click',()=>zoom(1.18));
+  document.getElementById('mapZoomOut').addEventListener('click',()=>zoom(1/1.18));
+  svg.addEventListener('wheel',e=>{ e.preventDefault(); zoom(e.deltaY<0?1.10:1/1.10); },{passive:false});
+  svg.addEventListener('pointerdown',e=>{
+    if(e.button!==0)return;
+    // Do not capture the pointer when clicking an interactive object.
+    // Pointer capture on the SVG retargeted pointerup/click to the map itself,
+    // which prevented planet and stargate click handlers from firing.
+    if(e.target.closest && e.target.closest('.gate-node, .planet-object.has-moons')) return;
+    dragging=true; sx=e.clientX;sy=e.clientY;stx=tx;sty=ty;
+    svg.classList.add('dragging');
+    svg.setPointerCapture(e.pointerId);
+  });
+  svg.addEventListener('pointermove',e=>{ if(!dragging)return; tx=stx+(e.clientX-sx);ty=sty+(e.clientY-sy);apply(); });
+  svg.addEventListener('pointerup',e=>{ dragging=false;svg.classList.remove('dragging');try{svg.releasePointerCapture(e.pointerId);}catch(_){}});
+  svg.addEventListener('pointercancel',()=>{dragging=false;svg.classList.remove('dragging');});
+  apply();
+})();
+</script>
+{% endblock %}

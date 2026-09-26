@@ -1,0 +1,789 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-start gap-3 mb-3">
+  <div>
+    <h1 class="h3 fw-bold mb-1">EntitiesINTEL — Coalition</h1>
+    <div class="muted-line">Coalition administration.</div>
+  </div>
+</div>
+
+<ul class="nav nav-tabs mb-4">
+  <li class="nav-item">
+    <a class="nav-link" href="/entities/coalition">Coalitions</a>
+  </li>
+  <li class="nav-item">
+    <a class="nav-link active" aria-current="page" href="/entities/coalition/manage">Manage</a>
+  </li>
+</ul>
+
+{% if error %}
+  <div class="alert alert-danger py-2">
+    {% if error == "name_required" %}Coalition name is required.
+    {% elif error == "coalition_not_found" %}Coalition not found.
+    {% else %}Action failed.{% endif %}
+  </div>
+{% endif %}
+
+{% if success %}
+  <div class="alert alert-success py-2">Action completed.</div>
+{% endif %}
+
+<div class="row g-4">
+  <div class="col-12 col-xl-8">
+    <section class="content-card p-3 p-md-4">
+      <div class="d-flex justify-content-between align-items-start gap-3 mb-3 flex-wrap">
+        <div>
+          <h2 class="h5 mb-1">Manage coalitions</h2>
+          <div class="muted-line small">Select a coalition to edit its information or membership rules.</div>
+        </div>
+
+        <form method="get" action="/entities/coalition/manage" class="d-flex gap-2" style="min-width:min(420px,100%);">
+          <input class="form-control" type="search" name="q" value="{{ query }}" placeholder="Name, short name or internal ID">
+          <button class="btn btn-outline-light" type="submit">Search</button>
+          {% if query %}<a class="btn btn-outline-secondary" href="/entities/coalition/manage">Clear</a>{% endif %}
+        </form>
+      </div>
+
+      <div class="table-responsive">
+        <table class="table table-dark table-hover align-middle mb-0">
+          <thead>
+            <tr>
+              <th>Coalition</th>
+              <th>Status</th>
+              <th>Current rules</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for coalition in coalitions %}
+              <tr>
+                <td>
+                  <a class="text-decoration-none fw-semibold" href="/coalition/{{ coalition.coalition_id }}">{{ coalition.name }}</a>
+                  {% if coalition.short_name %}<span class="muted-line">[{{ coalition.short_name }}]</span>{% endif %}
+                  <div class="muted-line small">Internal ID {{ coalition.coalition_id }}</div>
+                </td>
+                <td>
+                  {% if coalition.is_active %}<span class="badge text-bg-success">active</span>
+                  {% else %}<span class="badge text-bg-secondary">inactive</span>{% endif %}
+                </td>
+                <td>{{ coalition.current_rule_count }}</td>
+                <td class="text-end"><a class="btn btn-sm btn-outline-light" href="/coalition/{{ coalition.coalition_id }}/manage">Manage</a></td>
+              </tr>
+            {% else %}
+              <tr><td colspan="4" class="muted-line text-center py-4">No coalition found.</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  </div>
+
+  <div class="col-12 col-xl-4">
+    <section class="content-card p-3 p-md-4">
+      <h2 class="h5 mb-3">Create coalition</h2>
+      <form method="post" action="/admin/coalitions/create">
+        <div class="mb-3">
+          <label class="form-label" for="name">Name</label>
+          <input class="form-control" id="name" name="name" required>
+        </div>
+        <div class="mb-3">
+          <label class="form-label" for="short_name">Short name</label>
+          <input class="form-control" id="short_name" name="short_name" maxlength="64" placeholder="Optional">
+        </div>
+        <div class="mb-4">
+          <label class="form-label" for="description">Description</label>
+          <textarea class="form-control" id="description" name="description" rows="4" placeholder="Optional"></textarea>
+        </div>
+        <button class="btn btn-primary w-100" type="submit">Create coalition</button>
+      </form>
+    </section>
+  </div>
+</div>
+
+<section id="bulk-import" class="mt-5 pt-4 border-top">
+  <div class="d-flex justify-content-between align-items-start gap-3 mb-3 flex-wrap">
+    <div>
+      <h2 class="h4 mb-1">Bulk import</h2>
+      <div class="muted-line small">Import coalition history from a JSON file on your computer.</div>
+    </div>
+  </div>
+
+  <div class="row g-4">
+  <div class="col-12 col-xl-5">
+    <section class="content-card p-3 p-md-4">
+      <h2 class="h5 mb-3">JSON file</h2>
+
+      <form id="bulk-import-form" enctype="multipart/form-data">
+        <div class="mb-3">
+          <label class="form-label" for="json_file">File from your computer</label>
+          <input class="form-control" id="json_file" name="json_file" type="file" accept=".json,application/json" required>
+          <div class="form-text">Maximum file size: 25 MB.</div>
+        </div>
+
+        <div class="mb-4">
+          <label class="form-label" for="source">Source</label>
+          <input class="form-control" id="source" name="source" value="" placeholder="init" required>
+          <div class="form-text">This value is written to every imported membership rule.</div>
+        </div>
+
+        <div class="d-flex gap-2 flex-wrap">
+          <button class="btn btn-outline-info" id="preview-btn" type="button">Preview</button>
+          <button class="btn btn-primary" id="import-btn" type="button" disabled>Import</button>
+        </div>
+      </form>
+
+      <div class="alert alert-warning py-2 mt-4 mb-0 small">
+        Import writes nothing during Preview. Import re-validates the same file and then writes everything in one database transaction. Any error rolls the whole import back.
+      </div>
+    </section>
+
+    <section class="content-card p-3 p-md-4 mt-4">
+      <h2 class="h6 mb-3">Expected JSON</h2>
+      <pre class="mb-0 small"><code>[
+  {
+    "coalition": "PAPI",
+    "member": "PanFam",
+    "date_from": "2020-07-05",
+    "date_to": "2021-08-02",
+    "type": "COA"
+  }
+]</code></pre>
+      <div class="muted-line small mt-3">
+        Supported types: ALLIANCE, COA/COALITION, CORP/CORPORATION. Optional <code>operation</code>: include/+ or exclude/-. Missing operation defaults to include. Optional <code>notes</code> is preserved.
+      </div>
+    </section>
+  </div>
+
+  <div class="col-12 col-xl-7">
+    <section class="content-card p-3 p-md-4">
+      <div class="d-flex justify-content-between align-items-start gap-3 mb-3 flex-wrap">
+        <div>
+          <h2 class="h5 mb-1">Validation preview</h2>
+          <div class="muted-line small" id="preview-status">Select a file and source, then click Preview.</div>
+        </div>
+        <span class="badge text-bg-secondary" id="preview-state">not checked</span>
+      </div>
+
+      <div id="summary" class="row g-2 mb-4" style="display:none;">
+        <div class="col-6 col-md-4"><div class="border rounded p-2"><div class="muted-line small">Rows</div><div class="fw-bold" id="sum-rows">0</div></div></div>
+        <div class="col-6 col-md-4"><div class="border rounded p-2"><div class="muted-line small">Coalitions</div><div class="fw-bold" id="sum-coalitions">0</div></div></div>
+        <div class="col-6 col-md-4"><div class="border rounded p-2"><div class="muted-line small">New coalitions</div><div class="fw-bold" id="sum-new-coalitions">0</div></div></div>
+        <div class="col-6 col-md-4"><div class="border rounded p-2"><div class="muted-line small">Alliances</div><div class="fw-bold" id="sum-alliances">0</div></div></div>
+        <div class="col-6 col-md-4"><div class="border rounded p-2"><div class="muted-line small">Coalition links</div><div class="fw-bold" id="sum-coa">0</div></div></div>
+        <div class="col-6 col-md-4"><div class="border rounded p-2"><div class="muted-line small">Corporations</div><div class="fw-bold" id="sum-corps">0</div></div></div>
+        <div class="col-6 col-md-4"><div class="border rounded p-2"><div class="muted-line small">Smart matched</div><div class="fw-bold" id="sum-smart">0</div></div></div>
+      </div>
+
+      <div id="result-message"></div>
+
+      <div id="errors-wrap" style="display:none;">
+        <div class="d-flex justify-content-between align-items-center mb-2">
+          <h3 class="h6 mb-0">Errors / unresolved</h3>
+          <span class="badge text-bg-danger" id="error-count">0</span>
+        </div>
+        <div class="table-responsive">
+          <table class="table table-dark table-sm align-middle mb-0">
+            <thead><tr><th style="width:75px;">Row</th><th style="width:175px;">Code</th><th>Message</th><th style="min-width:390px;">Resolution</th></tr></thead>
+            <tbody id="errors-body"></tbody>
+          </table>
+        </div>
+        <div class="muted-line small mt-2" id="errors-extra"></div>
+      </div>
+    </section>
+  </div>
+</div>
+</section>
+
+<script>
+(() => {
+  const fileInput = document.getElementById('json_file');
+  const sourceInput = document.getElementById('source');
+  const previewBtn = document.getElementById('preview-btn');
+  const importBtn = document.getElementById('import-btn');
+  const previewStatus = document.getElementById('preview-status');
+  const previewState = document.getElementById('preview-state');
+  const summary = document.getElementById('summary');
+  const resultMessage = document.getElementById('result-message');
+  const errorsWrap = document.getElementById('errors-wrap');
+  const errorsBody = document.getElementById('errors-body');
+  const errorCount = document.getElementById('error-count');
+  const errorsExtra = document.getElementById('errors-extra');
+
+  let previewValid = false;
+  let lastReport = null;
+
+  function invalidatePreview() {
+    previewValid = false;
+    lastReport = null;
+    importBtn.disabled = true;
+    previewState.className = 'badge text-bg-secondary';
+    previewState.textContent = 'not checked';
+    previewStatus.textContent = 'File or source changed. Run Preview again.';
+    resultMessage.innerHTML = '';
+  }
+
+  function collectResolutions() {
+    const resolutions = {};
+    document.querySelectorAll('.resolution-select').forEach((select) => {
+      if (select.value) resolutions[String(select.dataset.row)] = Number(select.value);
+    });
+    return resolutions;
+  }
+
+  function formData(includeResolutions=false) {
+    const data = new FormData();
+    const file = fileInput.files && fileInput.files[0];
+    if (file) data.append('json_file', file, file.name);
+    data.append('source', sourceInput.value.trim());
+    if (includeResolutions) data.append('resolutions', JSON.stringify(collectResolutions()));
+    return data;
+  }
+
+  function validateInputs() {
+    if (!fileInput.files || !fileInput.files[0]) {
+      fileInput.focus();
+      resultMessage.innerHTML = '<div class="alert alert-danger py-2">Choose a JSON file.</div>';
+      return false;
+    }
+    if (!sourceInput.value.trim()) {
+      sourceInput.focus();
+      resultMessage.innerHTML = '<div class="alert alert-danger py-2">Source is required.</div>';
+      return false;
+    }
+    return true;
+  }
+
+  function candidateLabel(candidate, suggested=false) {
+    const bits = [];
+    if (suggested) bits.push('★ Suggested');
+    bits.push(candidate.name || `Alliance ${candidate.id}`);
+    if (candidate.ticker) bits.push(`[${candidate.ticker}]`);
+    bits.push(`ID ${candidate.id}`);
+    if (candidate.date_founded) bits.push(`founded ${candidate.date_founded}`);
+    if (candidate.date_compatible === false) bits.push('⚠ founded after relation');
+    if (candidate.is_deleted) bits.push('deleted');
+    return bits.join(' · ');
+  }
+
+  function updateImportAvailability() {
+    if (!lastReport) {
+      previewValid = false;
+      importBtn.disabled = true;
+      return;
+    }
+
+    if (lastReport.ready) {
+      previewValid = true;
+      importBtn.disabled = false;
+      return;
+    }
+
+    const hardErrors = Number(lastReport.hard_error_count ?? lastReport.error_count ?? 0);
+    const pending = Number(lastReport.pending_resolution_count ?? 0);
+    const selects = Array.from(document.querySelectorAll('.resolution-select'));
+    const allSelected = pending > 0 && selects.length === pending && selects.every((select) => !!select.value);
+
+    previewValid = hardErrors === 0 && allSelected;
+    importBtn.disabled = !previewValid;
+
+    if (previewValid) {
+      previewState.className = 'badge text-bg-warning';
+      previewState.textContent = 'choices ready';
+      previewStatus.textContent = 'All unresolved alliances have been selected. Import will re-validate every choice before writing.';
+      resultMessage.innerHTML = '<div class="alert alert-warning py-2">Manual resolutions are complete. Import is enabled; the server will validate them again.</div>';
+    }
+  }
+
+  function syncCandidateCards(select) {
+    const cell = select.closest('td');
+    if (!cell) return;
+    cell.querySelectorAll('.alliance-candidate-card').forEach((card) => {
+      const active = !!select.value && card.dataset.allianceId === select.value;
+      card.classList.toggle('border-info', active);
+      card.classList.toggle('bg-dark', active);
+      card.classList.toggle('border-secondary', !active);
+    });
+  }
+
+  function collapseResolution(select) {
+    const cell = select.closest('td');
+    if (!cell || !select.value) return;
+
+    const details = cell.querySelector('.resolution-details');
+    const summary = cell.querySelector('.resolution-collapsed');
+    const label = cell.querySelector('.resolution-collapsed-label');
+    if (!details || !summary || !label) return;
+
+    const option = select.options[select.selectedIndex];
+    label.textContent = option ? option.textContent : `Alliance ID ${select.value}`;
+    details.style.display = 'none';
+    summary.style.display = '';
+  }
+
+  function expandResolution(select) {
+    const cell = select.closest('td');
+    if (!cell) return;
+
+    const details = cell.querySelector('.resolution-details');
+    const summary = cell.querySelector('.resolution-collapsed');
+    if (!details || !summary) return;
+
+    summary.style.display = 'none';
+    details.style.display = '';
+  }
+
+  function wireResolutionSelect(select) {
+    select.addEventListener('change', () => {
+      const group = select.dataset.group || '';
+      const value = select.value;
+      syncCandidateCards(select);
+
+      if (group && value) {
+        document.querySelectorAll('.resolution-select').forEach((other) => {
+          if (other === select || other.dataset.group !== group) return;
+          const hasSameCandidate = Array.from(other.options).some((option) => option.value === value);
+          if (hasSameCandidate) {
+            other.value = value;
+            syncCandidateCards(other);
+            collapseResolution(other);
+          }
+        });
+      }
+
+      if (value) collapseResolution(select);
+      else expandResolution(select);
+      updateImportAvailability();
+    });
+  }
+
+  function allianceLogo(candidate) {
+    const wrap = document.createElement('div');
+    wrap.className = 'flex-shrink-0 rounded overflow-hidden border border-secondary d-flex align-items-center justify-content-center';
+    wrap.style.width = '48px';
+    wrap.style.height = '48px';
+
+    const placeholder = document.createElement('span');
+    placeholder.className = 'muted-line small fw-bold';
+    placeholder.textContent = '?';
+    placeholder.style.display = 'none';
+
+    const img = document.createElement('img');
+    img.src = `https://images.evetech.net/alliances/${candidate.id}/logo?size=64`;
+    img.alt = candidate.name ? `${candidate.name} logo` : `Alliance ${candidate.id} logo`;
+    img.loading = 'lazy';
+    img.width = 48;
+    img.height = 48;
+    img.style.objectFit = 'contain';
+    img.addEventListener('error', () => {
+      img.remove();
+      placeholder.style.display = 'inline';
+    }, {once: true});
+
+    wrap.append(img, placeholder);
+    return wrap;
+  }
+
+  function renderResolutionCell(error, cell) {
+    if (!error.resolution_required) {
+      cell.textContent = '—';
+      return;
+    }
+
+    const candidates = error.candidates || [];
+
+    const collapsed = document.createElement('div');
+    collapsed.className = 'resolution-collapsed border border-info rounded p-2';
+    collapsed.style.display = 'none';
+
+    const collapsedRow = document.createElement('div');
+    collapsedRow.className = 'd-flex align-items-center justify-content-between gap-2';
+
+    const collapsedText = document.createElement('div');
+    collapsedText.className = 'min-w-0';
+
+    const collapsedState = document.createElement('div');
+    collapsedState.className = 'small text-info fw-semibold';
+    collapsedState.textContent = 'Resolved';
+
+    const collapsedLabel = document.createElement('div');
+    collapsedLabel.className = 'resolution-collapsed-label small text-truncate';
+
+    const changeButton = document.createElement('button');
+    changeButton.type = 'button';
+    changeButton.className = 'btn btn-sm btn-outline-light flex-shrink-0';
+    changeButton.textContent = 'Change';
+
+    collapsedText.append(collapsedState, collapsedLabel);
+    collapsedRow.append(collapsedText, changeButton);
+    collapsed.appendChild(collapsedRow);
+    cell.appendChild(collapsed);
+
+    const detailsWrap = document.createElement('div');
+    detailsWrap.className = 'resolution-details';
+    cell.appendChild(detailsWrap);
+
+    const select = document.createElement('select');
+    select.className = 'form-select form-select-sm resolution-select';
+    select.dataset.row = String(error.row);
+    select.dataset.group = error.resolution_group || '';
+
+    const empty = document.createElement('option');
+    empty.value = '';
+    empty.textContent = 'Choose alliance…';
+    select.appendChild(empty);
+
+    for (const candidate of candidates) {
+      const option = document.createElement('option');
+      option.value = String(candidate.id);
+      option.textContent = candidateLabel(candidate, candidate.id === error.recommended_id);
+      select.appendChild(option);
+    }
+
+    detailsWrap.appendChild(select);
+
+    const cards = document.createElement('div');
+    cards.className = 'd-grid gap-2 mt-2';
+
+    if (!candidates.length) {
+      const noCandidate = document.createElement('div');
+      noCandidate.className = 'small text-warning';
+      noCandidate.textContent = 'No candidate found automatically. You can choose another alliance by ID below.';
+      cards.appendChild(noCandidate);
+    }
+
+    for (const candidate of candidates) {
+      const suggested = candidate.id === error.recommended_id;
+      const card = document.createElement('button');
+      card.type = 'button';
+      card.className = `alliance-candidate-card btn text-start border ${suggested ? 'border-warning' : 'border-secondary'} p-2`;
+      card.dataset.allianceId = String(candidate.id);
+
+      const row = document.createElement('div');
+      row.className = 'd-flex align-items-center gap-2';
+      row.appendChild(allianceLogo(candidate));
+
+      const text = document.createElement('div');
+      text.className = 'flex-grow-1 min-w-0';
+
+      const title = document.createElement('div');
+      title.className = 'fw-semibold';
+      title.textContent = candidate.name || `Alliance ${candidate.id}`;
+      text.appendChild(title);
+
+      const details = document.createElement('div');
+      details.className = 'small muted-line';
+      const detailBits = [];
+      if (candidate.ticker) detailBits.push(`[${candidate.ticker}]`);
+      detailBits.push(`ID ${candidate.id}`);
+      if (candidate.date_founded) detailBits.push(`founded ${candidate.date_founded}`);
+      if (candidate.is_deleted) detailBits.push('deleted');
+      details.textContent = detailBits.join(' · ');
+      text.appendChild(details);
+
+      if (candidate.date_compatible === false) {
+        const warning = document.createElement('div');
+        warning.className = 'small text-danger';
+        warning.textContent = '⚠ Founded after this relation';
+        text.appendChild(warning);
+      }
+
+      row.appendChild(text);
+
+      if (suggested) {
+        const badge = document.createElement('span');
+        badge.className = 'badge text-bg-warning flex-shrink-0';
+        badge.textContent = '★ Suggested';
+        row.appendChild(badge);
+      }
+
+      card.appendChild(row);
+      card.addEventListener('click', () => {
+        select.value = String(candidate.id);
+        select.dispatchEvent(new Event('change'));
+      });
+      cards.appendChild(card);
+    }
+
+    detailsWrap.appendChild(cards);
+
+    const manualWrap = document.createElement('div');
+    manualWrap.className = 'mt-2 p-2 border border-secondary rounded';
+
+    const manualLabel = document.createElement('div');
+    manualLabel.className = 'small fw-semibold mb-1';
+    manualLabel.textContent = 'Choose another alliance';
+    manualWrap.appendChild(manualLabel);
+
+    const manualRow = document.createElement('div');
+    manualRow.className = 'input-group input-group-sm';
+
+    const manualInput = document.createElement('input');
+    manualInput.type = 'text';
+    manualInput.className = 'form-control';
+    manualInput.placeholder = 'Alliance name, ticker or ID';
+
+    const manualButton = document.createElement('button');
+    manualButton.type = 'button';
+    manualButton.className = 'btn btn-outline-info';
+    manualButton.textContent = 'Search';
+
+    const manualStatus = document.createElement('div');
+    manualStatus.className = 'small muted-line mt-1';
+    manualStatus.textContent = 'Searches entities.alliances. The selected ID is re-validated by the server before import.';
+
+    const manualResults = document.createElement('div');
+    manualResults.className = 'd-grid gap-2 mt-2';
+
+    function selectManualAlliance(result) {
+      const allianceId = Number(result.entity_id);
+      let option = Array.from(select.options).find((item) => item.value === String(allianceId));
+      if (!option) {
+        option = document.createElement('option');
+        option.value = String(allianceId);
+        const ticker = result.ticker ? ` [${result.ticker}]` : '';
+        option.textContent = `${result.name || 'Alliance'}${ticker} · ID ${allianceId} · manual`;
+        option.dataset.manual = '1';
+        select.appendChild(option);
+      }
+
+      select.value = String(allianceId);
+      select.dispatchEvent(new Event('change'));
+      manualStatus.className = 'small text-info mt-1';
+      manualStatus.textContent = `${result.name || 'Alliance'}${result.ticker ? ` [${result.ticker}]` : ''} · ID ${allianceId} selected manually.`;
+    }
+
+    async function searchManualAlliance() {
+      const query = manualInput.value.trim();
+      if (!query) {
+        manualStatus.className = 'small text-danger mt-1';
+        manualStatus.textContent = 'Enter an alliance name, ticker or ID.';
+        return;
+      }
+
+      manualButton.disabled = true;
+      manualStatus.className = 'small muted-line mt-1';
+      manualStatus.textContent = 'Searching…';
+      manualResults.innerHTML = '';
+
+      try {
+        const response = await fetch(`/admin/coalitions/member-search?q=${encodeURIComponent(query)}`);
+        if (!response.ok) throw new Error(`Erreur ${response.status}`);
+        const payload = await response.json();
+        const alliances = (payload.results || []).filter((item) => item.entity_type === 'alliance');
+
+        if (!alliances.length) {
+          manualStatus.className = 'small text-warning mt-1';
+          manualStatus.textContent = 'No alliance found for this search.';
+          return;
+        }
+
+        manualStatus.className = 'small muted-line mt-1';
+        manualStatus.textContent = `${alliances.length} alliance result(s). Click the one you want.`;
+
+        for (const result of alliances) {
+          const card = document.createElement('button');
+          card.type = 'button';
+          card.className = 'alliance-candidate-card btn text-start border border-secondary p-2';
+          card.dataset.allianceId = String(result.entity_id);
+
+          const row = document.createElement('div');
+          row.className = 'd-flex align-items-center gap-2';
+          row.appendChild(allianceLogo({id: result.entity_id, name: result.name}));
+
+          const text = document.createElement('div');
+          text.className = 'flex-grow-1 min-w-0';
+
+          const title = document.createElement('div');
+          title.className = 'fw-semibold';
+          title.textContent = result.name || `Alliance ${result.entity_id}`;
+
+          const details = document.createElement('div');
+          details.className = 'small muted-line';
+          const bits = [];
+          if (result.ticker) bits.push(`[${result.ticker}]`);
+          bits.push(`ID ${result.entity_id}`);
+          details.textContent = bits.join(' · ');
+
+          text.append(title, details);
+          row.appendChild(text);
+          card.appendChild(row);
+          card.addEventListener('click', () => selectManualAlliance(result));
+          manualResults.appendChild(card);
+        }
+      } catch (error) {
+        manualStatus.className = 'small text-danger mt-1';
+        manualStatus.textContent = window.eveosintPublicError(error);
+      } finally {
+        manualButton.disabled = false;
+      }
+    }
+
+    manualButton.addEventListener('click', searchManualAlliance);
+    manualInput.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter') {
+        event.preventDefault();
+        searchManualAlliance();
+      }
+    });
+
+    manualRow.append(manualInput, manualButton);
+    manualWrap.append(manualRow, manualStatus, manualResults);
+    detailsWrap.appendChild(manualWrap);
+
+    const groupHint = document.createElement('div');
+    groupHint.className = 'muted-line small mt-2';
+    groupHint.textContent = 'Click a suggested candidate, use the list, or enter another alliance ID manually. Candidate-list choices may also apply to identical unresolved names when that candidate is available.';
+    detailsWrap.appendChild(groupHint);
+
+    changeButton.addEventListener('click', () => expandResolution(select));
+
+    wireResolutionSelect(select);
+    syncCandidateCards(select);
+  }
+
+  function renderReport(report, imported=false) {
+    lastReport = report;
+    const types = report.type_counts || {};
+    document.getElementById('sum-rows').textContent = report.total_rows ?? 0;
+    document.getElementById('sum-coalitions').textContent = report.coalition_count ?? 0;
+    document.getElementById('sum-new-coalitions').textContent = report.new_coalition_count ?? 0;
+    document.getElementById('sum-alliances').textContent = types.ALLIANCE ?? 0;
+    document.getElementById('sum-coa').textContent = types.COA ?? 0;
+    document.getElementById('sum-corps').textContent = types.CORPORATION ?? 0;
+    document.getElementById('sum-smart').textContent = report.auto_resolution_count ?? 0;
+    summary.style.display = '';
+
+    const errors = report.errors || [];
+    const resolutionErrors = errors.filter((error) => error.resolution_required);
+    const hardErrors = errors.filter((error) => !error.resolution_required);
+    const shownHardErrors = hardErrors.slice(0, 250);
+    const shown = [...resolutionErrors, ...shownHardErrors];
+
+    errorsBody.innerHTML = '';
+    for (const error of shown) {
+      const tr = document.createElement('tr');
+      const rowTd = document.createElement('td');
+      const codeTd = document.createElement('td');
+      const msgTd = document.createElement('td');
+      const resolutionTd = document.createElement('td');
+
+      rowTd.textContent = error.row == null ? '—' : String(error.row);
+      codeTd.textContent = error.code || '';
+      msgTd.textContent = window.eveosintPublicError(error);
+      renderResolutionCell(error, resolutionTd);
+      tr.append(rowTd, codeTd, msgTd, resolutionTd);
+      errorsBody.appendChild(tr);
+    }
+
+    errorCount.textContent = String(report.error_count ?? errors.length);
+    const hiddenHardErrors = hardErrors.length - shownHardErrors.length;
+    errorsExtra.textContent = hiddenHardErrors > 0 ? `${hiddenHardErrors} additional hard error(s) not displayed.` : '';
+    errorsWrap.style.display = errors.length ? '' : 'none';
+
+    if (imported && report.imported) {
+      previewState.className = 'badge text-bg-success';
+      previewState.textContent = 'imported';
+      previewStatus.textContent = `${report.filename || 'JSON'} imported with source “${report.source || ''}”.`;
+      resultMessage.innerHTML = `<div class="alert alert-success py-2">Import complete: ${report.total_rows ?? 0} rule(s), ${report.new_coalition_count ?? 0} new coalition(s). Smart matched: ${report.auto_resolution_count ?? 0}; manual choices: ${report.user_resolution_count ?? 0}.</div>`;
+      previewValid = false;
+      importBtn.disabled = true;
+      return;
+    }
+
+    if (report.ready) {
+      previewState.className = 'badge text-bg-success';
+      previewState.textContent = 'ready';
+      previewStatus.textContent = `${report.filename || 'JSON'} validated. No database write has been performed.`;
+      resultMessage.innerHTML = `<div class="alert alert-success py-2">Validation passed. Smart resolver matched ${report.auto_resolution_count ?? 0} alliance row(s) automatically. Import is enabled.</div>`;
+      previewValid = true;
+      importBtn.disabled = false;
+      return;
+    }
+
+    const pending = Number(report.pending_resolution_count ?? resolutionErrors.length);
+    const hard = Number(report.hard_error_count ?? hardErrors.length);
+
+    if (hard === 0 && pending > 0) {
+      previewState.className = 'badge text-bg-warning';
+      previewState.textContent = 'needs choices';
+      previewStatus.textContent = `${pending} alliance resolution(s) need confirmation.`;
+      resultMessage.innerHTML = `<div class="alert alert-warning py-2">Smart resolver matched ${report.auto_resolution_count ?? 0} alliance row(s). Choose an alliance for the ${pending} remaining ambiguous/unmatched row(s).</div>`;
+    } else {
+      previewState.className = 'badge text-bg-danger';
+      previewState.textContent = 'blocked';
+      previewStatus.textContent = `${report.filename || 'JSON'} cannot be imported until the hard errors are fixed.`;
+      resultMessage.innerHTML = `<div class="alert alert-danger py-2">Validation has ${hard} hard error(s) and ${pending} alliance choice(s). Nothing was written.</div>`;
+    }
+
+    previewValid = false;
+    importBtn.disabled = true;
+    updateImportAvailability();
+  }
+
+  async function postFile(url, includeResolutions=false) {
+    const response = await fetch(url, {method: 'POST', body: formData(includeResolutions)});
+    let report;
+    try {
+      report = await response.json();
+    } catch (_) {
+      throw new Error(`Erreur ${response.status || 500}`);
+    }
+    if (!response.ok) {
+      throw new Error(report.error || `Erreur ${response.status}`);
+    }
+    return report;
+  }
+
+  fileInput.addEventListener('change', invalidatePreview);
+  sourceInput.addEventListener('input', invalidatePreview);
+
+  previewBtn.addEventListener('click', async () => {
+    if (!validateInputs()) return;
+    previewBtn.disabled = true;
+    importBtn.disabled = true;
+    previewState.className = 'badge text-bg-info';
+    previewState.textContent = 'checking';
+    previewStatus.textContent = 'Uploading and validating…';
+    resultMessage.innerHTML = '';
+    try {
+      const report = await postFile('/admin/coalitions/bulk-import/preview', false);
+      renderReport(report, false);
+    } catch (error) {
+      previewValid = false;
+      lastReport = null;
+      previewState.className = 'badge text-bg-danger';
+      previewState.textContent = 'error';
+      previewStatus.textContent = window.eveosintPublicError(error);
+      resultMessage.innerHTML = `<div class="alert alert-danger py-2">${window.eveosintPublicError(error)}</div>`;
+    } finally {
+      previewBtn.disabled = false;
+    }
+  });
+
+  importBtn.addEventListener('click', async () => {
+    if (!previewValid || !validateInputs()) return;
+    if (!confirm('Import this JSON now? The server will validate the file and all manual alliance choices again before writing.')) return;
+
+    previewBtn.disabled = true;
+    importBtn.disabled = true;
+    previewState.className = 'badge text-bg-info';
+    previewState.textContent = 'importing';
+    previewStatus.textContent = 'Re-validating and importing in one transaction…';
+    resultMessage.innerHTML = '';
+    try {
+      const report = await postFile('/admin/coalitions/bulk-import', true);
+      renderReport(report, true);
+    } catch (error) {
+      previewValid = false;
+      previewState.className = 'badge text-bg-danger';
+      previewState.textContent = 'error';
+      previewStatus.textContent = window.eveosintPublicError(error);
+      resultMessage.innerHTML = `<div class="alert alert-danger py-2">${window.eveosintPublicError(error)}</div>`;
+    } finally {
+      previewBtn.disabled = false;
+    }
+  });
+})();
+</script>
+{% endblock %}

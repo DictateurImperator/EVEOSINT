@@ -1,0 +1,62 @@
+{% if error %}
+  <div class="alert alert-danger py-2 mb-0">{{ error }}</div>
+{% elif subset %}
+  <div class="d-flex justify-content-between align-items-center gap-2 flex-wrap mb-2">
+    <div class="muted-line small">{{ subset.pagination.total_rows }} pilots · page {{ subset.pagination.page }} / {{ subset.pagination.total_pages }}</div>
+    <div class="d-flex gap-2">
+      {% if subset.pagination.has_prev %}
+        <button type="button" class="btn btn-sm btn-outline-light population-subset-page" data-url="/api/alliance/{{ subset.alliance_id }}/population/pilots/subset?metric={{ subset.metric|urlencode }}&date={{ subset.date|urlencode }}&window={{ subset.activity_window_days }}&mode={{ subset.activity_mode|urlencode }}&core_months={{ subset.core_months }}&page={{ subset.pagination.prev_page }}{% if subset.corporation_id is not none %}&corporation_id={{ subset.corporation_id }}{% endif %}{% if subset.outside_alliance %}&outside=1{% endif %}">Previous</button>
+      {% endif %}
+      {% if subset.pagination.has_next %}
+        <button type="button" class="btn btn-sm btn-outline-light population-subset-page" data-url="/api/alliance/{{ subset.alliance_id }}/population/pilots/subset?metric={{ subset.metric|urlencode }}&date={{ subset.date|urlencode }}&window={{ subset.activity_window_days }}&mode={{ subset.activity_mode|urlencode }}&core_months={{ subset.core_months }}&page={{ subset.pagination.next_page }}{% if subset.corporation_id is not none %}&corporation_id={{ subset.corporation_id }}{% endif %}{% if subset.outside_alliance %}&outside=1{% endif %}">Next</button>
+      {% endif %}
+    </div>
+  </div>
+
+  <div class="table-responsive">
+    <table class="table table-dark table-sm table-hover align-middle mb-0">
+      <thead><tr><th>Character</th><th>Corporation</th><th>Alliance</th></tr></thead>
+      <tbody>
+        {% for pilot in subset.pilots %}
+          <tr>
+            <td>
+              <a class="population-pilot-entity text-decoration-none" href="/character/{{ pilot.character_id }}">
+                <img class="population-pilot-icon" src="https://images.evetech.net/characters/{{ pilot.character_id }}/portrait?size=64" alt="" loading="lazy" onerror="this.style.display='none'">
+                <span>{{ pilot.name }}</span>
+              </a>
+            </td>
+            <td>
+              {% if pilot.corporation %}
+                <a class="population-org-entity text-decoration-none" href="/corporation/{{ pilot.corporation.corporation_id }}">
+                  <img class="population-org-icon" src="https://images.evetech.net/corporations/{{ pilot.corporation.corporation_id }}/logo?size=64" alt="" loading="lazy" onerror="this.style.display='none'">
+                  <span>{{ pilot.corporation.name }}{% if pilot.corporation.ticker %} [{{ pilot.corporation.ticker }}]{% endif %}</span>
+                </a>
+              {% else %}<span class="muted-line">Unknown</span>{% endif %}
+            </td>
+            <td>
+              {% if pilot.alliance %}
+                <a class="population-org-entity text-decoration-none" href="/alliance/{{ pilot.alliance.alliance_id }}">
+                  <img class="population-org-icon" src="https://images.evetech.net/alliances/{{ pilot.alliance.alliance_id }}/logo?size=64" alt="" loading="lazy" onerror="this.style.display='none'">
+                  <span>{{ pilot.alliance.name }}{% if pilot.alliance.ticker %} [{{ pilot.alliance.ticker }}]{% endif %}</span>
+                </a>
+              {% else %}<span class="muted-line">No alliance</span>{% endif %}
+            </td>
+          </tr>
+        {% else %}
+          <tr><td colspan="3" class="muted-line">No pilots.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  {% if subset.pagination.has_prev or subset.pagination.has_next %}
+    <div class="d-flex justify-content-end gap-2 mt-2">
+      {% if subset.pagination.has_prev %}
+        <button type="button" class="btn btn-sm btn-outline-light population-subset-page" data-url="/api/alliance/{{ subset.alliance_id }}/population/pilots/subset?metric={{ subset.metric|urlencode }}&date={{ subset.date|urlencode }}&window={{ subset.activity_window_days }}&mode={{ subset.activity_mode|urlencode }}&core_months={{ subset.core_months }}&page={{ subset.pagination.prev_page }}{% if subset.corporation_id is not none %}&corporation_id={{ subset.corporation_id }}{% endif %}{% if subset.outside_alliance %}&outside=1{% endif %}">Previous</button>
+      {% endif %}
+      {% if subset.pagination.has_next %}
+        <button type="button" class="btn btn-sm btn-outline-light population-subset-page" data-url="/api/alliance/{{ subset.alliance_id }}/population/pilots/subset?metric={{ subset.metric|urlencode }}&date={{ subset.date|urlencode }}&window={{ subset.activity_window_days }}&mode={{ subset.activity_mode|urlencode }}&core_months={{ subset.core_months }}&page={{ subset.pagination.next_page }}{% if subset.corporation_id is not none %}&corporation_id={{ subset.corporation_id }}{% endif %}{% if subset.outside_alliance %}&outside=1{% endif %}">Next</button>
+      {% endif %}
+    </div>
+  {% endif %}
+{% endif %}

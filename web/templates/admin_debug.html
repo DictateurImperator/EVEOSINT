@@ -1,0 +1,207 @@
+{% extends "base.html" %}
+{% block content %}
+<style>
+  .debug-grid { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:10px; }
+  .debug-stat { border:1px solid rgba(148,163,184,.15); border-radius:12px; background:rgba(15,23,42,.52); padding:12px; }
+  .debug-stat .value { font-size:1.06rem; font-weight:800; color:#f8fafc; }
+  .debug-phase { display:grid; grid-template-columns:42px minmax(0,1fr) 130px; gap:12px; align-items:start; border-top:1px solid rgba(148,163,184,.10); padding:11px 0; }
+  .debug-phase:first-child { border-top:0; }
+  .phase-index { width:34px; height:34px; display:grid; place-items:center; border-radius:10px; background:rgba(59,130,246,.12); color:#bfdbfe; font-weight:800; }
+  .phase-title { font-weight:700; }
+  .phase-meta { color:#94a3b8; font-size:.78rem; margin-top:2px; }
+  .phase-metrics { display:flex; flex-wrap:wrap; gap:6px; margin-top:7px; }
+  .debug-pill { display:inline-flex; gap:5px; align-items:center; padding:3px 7px; border-radius:999px; background:rgba(95,170,255,.08); border:1px solid rgba(95,170,255,.16); color:#b9c6d8; font-size:.72rem; }
+  .debug-pill strong { color:#f1f5f9; }
+  .log-viewer { max-height:440px; min-height:220px; overflow:auto; background:#05080d; border:1px solid rgba(148,163,184,.16); border-radius:12px; padding:12px; color:#cbd5e1; font-size:.75rem; white-space:pre-wrap; }
+  .bench-note { border-left:3px solid #3b82f6; padding:8px 12px; background:rgba(59,130,246,.07); border-radius:0 10px 10px 0; }
+  .bulk-progress { height:7px; background:rgba(148,163,184,.13); border-radius:999px; overflow:hidden; }
+  .bulk-progress > div { height:100%; background:#60a5fa; width:0; transition:width .25s ease; }
+  @media (max-width:1000px){ .debug-grid{grid-template-columns:repeat(2,minmax(0,1fr));} }
+  @media (max-width:640px){ .debug-grid{grid-template-columns:1fr;} .debug-phase{grid-template-columns:36px minmax(0,1fr);} .debug-phase-status{grid-column:2;} }
+</style>
+
+<div class="d-flex flex-wrap justify-content-between align-items-start gap-3 mb-4">
+  <div>
+    <h1 class="h3 fw-bold mb-1">Debug</h1>
+    <div class="muted-line">Isolated benchmark playground for expensive pipeline fragments.</div>
+  </div>
+  {% if can_run and debug.running %}
+  <form method="post" action="/admin/debug/stop">
+    <button class="btn btn-outline-danger" type="submit">Stop debug run</button>
+  </form>
+  {% endif %}
+</div>
+
+{% if error %}
+<div class="alert alert-danger py-2">
+  {% if error == 'already_running' %}A debug run is already running.
+  {% elif error == 'cleanup_failed' %}Debug cleanup failed.
+  {% elif error == 'stop_failed' %}Could not stop the debug run.
+  {% else %}Debug run could not be started.{% endif %}
+</div>
+{% endif %}
+{% if success %}
+<div class="alert alert-success py-2">
+  {% if success == 'cleaned' %}Debug tables cleaned.
+  {% elif success == 'stop_requested' %}Stop requested.
+  {% else %}Debug run started.{% endif %}
+</div>
+{% endif %}
+
+<section class="content-card p-3 p-md-4 mb-4">
+  <div class="d-flex justify-content-between gap-3 align-items-start mb-3">
+    <div>
+      <h2 class="h5 mb-1">Affiliation benchmark · Steps 1 → 4</h2>
+      <div class="muted-line small">Target hypothesis: one-pass SQL preparation + streamed parallel bulk calls.</div>
+    </div>
+    <span class="badge text-bg-info">isolated</span>
+  </div>
+
+  <div class="bench-note small mb-4">
+    This module reads production source/history/current tables, but writes only to <code>entities.esi_affiliation_debug_*</code>.
+    With <strong>Store ESI payload</strong> enabled, each bulk also applies the production-like DEBUG plumbing: result upsert,
+    batch status update, character mismatch queue, simulated current-affiliation update, unique corporation collapse and alliance-mismatch queue.
+    It does <strong>not</strong> call character/corporation histories and never modifies production current/history/queue tables.
+  </div>
+
+  {% if can_run %}
+  <form method="post" action="/admin/debug/run/affiliation-1-4" class="row g-3">
+    <div class="col-md-4">
+      <label class="form-label small">Source table</label>
+      <input class="form-control" name="source_table" value="entities.recent_killmail_pilots">
+    </div>
+    <div class="col-md-2">
+      <label class="form-label small">Column</label>
+      <input class="form-control" name="source_column" value="character_id">
+    </div>
+    <div class="col-md-2">
+      <label class="form-label small">Limit</label>
+      <input class="form-control" name="limit" placeholder="empty = full">
+    </div>
+    <div class="col-md-1">
+      <label class="form-label small">Workers</label>
+      <input class="form-control" type="number" min="1" max="16" name="workers" value="4">
+    </div>
+    <div class="col-md-1">
+      <label class="form-label small">Batch</label>
+      <input class="form-control" type="number" min="1" max="999" name="batch_size" value="999">
+    </div>
+    <div class="col-md-2">
+      <label class="form-label small">ESI calls / min</label>
+      <input class="form-control" type="number" min="1" max="300" name="rate_limit" value="280">
+    </div>
+    <div class="col-12 d-flex flex-wrap gap-4 align-items-center">
+      <label class="form-check mb-0"><input class="form-check-input" type="checkbox" name="store_results" checked> <span class="form-check-label">Store ESI payload + full isolated DB treatment</span></label>
+      <label class="form-check mb-0"><input class="form-check-input" type="checkbox" name="use_etag_cache"> <span class="form-check-label">Read existing batch ETag cache</span></label>
+      <label class="form-check mb-0"><input class="form-check-input" type="checkbox" name="skip_bulk"> <span class="form-check-label">Preparation only</span></label>
+    </div>
+    <div class="col-12 d-flex flex-wrap gap-2">
+      <button class="btn btn-primary" type="submit" {% if debug.running %}disabled{% endif %}>Run optimized Steps 1 → 4</button>
+    </div>
+  </form>
+  {% endif %}
+</section>
+
+<section class="content-card p-3 p-md-4 mb-4">
+  <div class="d-flex flex-wrap justify-content-between align-items-start gap-2 mb-3">
+    <div>
+      <h2 class="h5 mb-1">Current / latest benchmark</h2>
+      <div id="runMeta" class="muted-line small">{{ debug.run_id or 'No debug run yet' }}</div>
+    </div>
+    <div class="text-end">
+      <div id="runStatus" class="fw-bold">{{ debug.status or 'idle' }}</div>
+      <div id="runDuration" class="muted-line small"></div>
+    </div>
+  </div>
+
+  <div class="debug-grid mb-3">
+    <div class="debug-stat"><div class="muted-line small">Source pilots</div><div id="mSource" class="value">-</div></div>
+    <div class="debug-stat"><div class="muted-line small">Bulk candidates</div><div id="mCandidates" class="value">-</div></div>
+    <div class="debug-stat"><div class="muted-line small">Deleted excluded</div><div id="mDeleted" class="value">-</div></div>
+    <div class="debug-stat"><div class="muted-line small">Initial history debt</div><div id="mHistoryDebt" class="value">-</div></div>
+  </div>
+
+  <div class="debug-grid mb-3">
+    <div class="debug-stat"><div class="muted-line small">Bulk progress</div><div id="mBulkProgress" class="value">-</div><div class="bulk-progress mt-2"><div id="bulkBar"></div></div></div>
+    <div class="debug-stat"><div class="muted-line small">Observed calls/min</div><div id="mCpm" class="value">-</div></div>
+    <div class="debug-stat"><div class="muted-line small">Avg total / HTTP</div><div id="mLatency" class="value">-</div></div>
+    <div class="debug-stat"><div class="muted-line small">p50 / p95 total</div><div id="mPct" class="value">-</div></div>
+  </div>
+
+  <div class="debug-grid mb-3">
+    <div class="debug-stat"><div class="muted-line small">Avg DB apply / batch</div><div id="mDbApply" class="value">-</div></div>
+    <div class="debug-stat"><div class="muted-line small">Character mismatches</div><div id="mCharMismatch" class="value">-</div></div>
+    <div class="debug-stat"><div class="muted-line small">Distinct corporations</div><div id="mDistinctCorp" class="value">-</div></div>
+    <div class="debug-stat"><div class="muted-line small">Corp histories queued</div><div id="mCorpQueued" class="value">-</div></div>
+  </div>
+
+  <div id="phaseList"></div>
+</section>
+
+<section class="content-card p-3 p-md-4 mb-4">
+  <div class="d-flex justify-content-between align-items-center mb-2">
+    <div>
+      <h2 class="h5 mb-1">Debug log</h2>
+      <div class="muted-line small">Live log for this isolated benchmark.</div>
+    </div>
+    <button class="btn btn-sm btn-outline-light" type="button" id="refreshLog">Refresh</button>
+  </div>
+  <pre class="log-viewer" id="logViewer">Loading…</pre>
+</section>
+
+<section class="content-card p-3 p-md-4">
+  <div class="d-flex justify-content-between align-items-center mb-3">
+    <h2 class="h5 mb-0">Recent debug runs</h2>
+    {% if can_run %}
+    <form method="post" action="/admin/debug/cleanup" onsubmit="return confirm('Clean isolated debug work/result rows?');">
+      <button class="btn btn-sm btn-outline-secondary" type="submit" {% if debug.running %}disabled{% endif %}>Clean debug tables</button>
+    </form>
+    {% endif %}
+  </div>
+  <div class="table-responsive">
+    <table class="table table-dark table-hover align-middle mb-0">
+      <thead><tr><th>Run</th><th>Status</th><th>Started</th><th>Total</th><th>Source</th><th>Candidates</th><th>Bulk c/m</th><th>p95</th></tr></thead>
+      <tbody id="historyBody"></tbody>
+    </table>
+  </div>
+</section>
+
+<script>
+let state = {{ debug | tojson }};
+function esc(v){return String(v ?? '').replace(/[&<>'"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]));}
+function num(v){const n=Number(v); return Number.isFinite(n)?new Intl.NumberFormat('en-US').format(n):'-';}
+function dur(v){const n=Number(v); if(!Number.isFinite(n))return '-'; if(n<60)return `${n.toFixed(1)}s`; const h=Math.floor(n/3600),m=Math.floor((n%3600)/60),s=Math.round(n%60); return h?`${h}h ${m}m ${s}s`:`${m}m ${s}s`;}
+function metricPills(metrics){return Object.entries(metrics||{}).filter(([k,v])=>v!==null&&v!==undefined).map(([k,v])=>`<span class="debug-pill"><span>${esc(k.replaceAll('_',' '))}</span><strong>${typeof v==='number'?num(v):esc(v)}</strong></span>`).join('');}
+function badge(status){const map={done:'success',running:'warning',failed:'danger',stopped:'secondary'}; return `<span class="badge text-bg-${map[status]||'secondary'}">${esc(status||'waiting')}</span>`;}
+function render(s){
+  state=s;
+  const m=s.metrics||{}, b=s.bulk||{};
+  document.getElementById('runMeta').textContent=s.run_id?`${s.run_id} · ${s.variant||''} · ${s.source_table||''}`:'No debug run yet';
+  document.getElementById('runStatus').innerHTML=badge(s.status);
+  document.getElementById('runDuration').textContent=dur(s.duration_seconds);
+  document.getElementById('mSource').textContent=num(m.source_ids);
+  document.getElementById('mCandidates').textContent=num(m.affiliation_candidates);
+  document.getElementById('mDeleted').textContent=num(m.deleted);
+  document.getElementById('mHistoryDebt').textContent=num(m.without_history);
+  const done=Number(b.batches_done||0), total=Number(b.batches_total||0), pct=total?Math.min(100,done/total*100):0;
+  document.getElementById('mBulkProgress').textContent=total?`${num(done)} / ${num(total)}`:'-';
+  document.getElementById('bulkBar').style.width=`${pct}%`;
+  document.getElementById('mCpm').textContent=b.calls_per_minute!==undefined?`${Number(b.calls_per_minute||0).toFixed(1)} / min`:'-';
+  document.getElementById('mLatency').textContent=`${Number(b.avg_total_ms||0).toFixed(0)} / ${Number(b.avg_http_ms||0).toFixed(0)} ms`;
+  document.getElementById('mPct').textContent=`${Number(b.p50_total_ms||0).toFixed(0)} / ${Number(b.p95_total_ms||0).toFixed(0)} ms`;
+  document.getElementById('mDbApply').textContent=`${Number(b.avg_db_apply_ms||0).toFixed(0)} ms`;
+  document.getElementById('mCharMismatch').textContent=num(m.character_mismatches);
+  document.getElementById('mDistinctCorp').textContent=num(m.distinct_corporations);
+  document.getElementById('mCorpQueued').textContent=num(m.corporation_history_queued);
+  const phases=s.phases||[];
+  document.getElementById('phaseList').innerHTML=phases.length?phases.map((p,i)=>`<div class="debug-phase"><div class="phase-index">${i+1}</div><div><div class="phase-title">${esc(p.label)}</div><div class="phase-meta">${esc(p.group||'')} · ${p.duration_seconds!=null?dur(p.duration_seconds):'running'}</div><div class="phase-metrics">${metricPills(p.metrics)}</div>${p.error?`<div class="text-danger small mt-2">${esc(p.error)}</div>`:''}</div><div class="debug-phase-status text-end">${badge(p.status)}</div></div>`).join(''):'<div class="muted-line">No phase yet.</div>';
+  const history=s.history||[];
+  document.getElementById('historyBody').innerHTML=history.length?history.map(h=>`<tr><td><code>${esc(h.run_id)}</code></td><td>${badge(h.status)}</td><td>${esc(h.started_at||'-')}</td><td>${dur(h.duration_seconds)}</td><td>${num((h.metrics||{}).source_ids)}</td><td>${num((h.metrics||{}).affiliation_candidates)}</td><td>${Number((h.bulk||{}).calls_per_minute||0).toFixed(1)}</td><td>${Number((h.bulk||{}).p95_total_ms||0).toFixed(0)} ms</td></tr>`).join(''):'<tr><td colspan="8" class="muted-line">No history.</td></tr>';
+}
+async function refreshStatus(){try{const r=await fetch('/admin/debug/api/status',{cache:'no-store'}); if(r.ok)render(await r.json());}catch(e){}}
+async function refreshLog(){try{const r=await fetch('/admin/debug/api/log?lines=700',{cache:'no-store'}); if(r.ok){const t=await r.text(); const el=document.getElementById('logViewer'); const atBottom=(el.scrollTop+el.clientHeight+50>=el.scrollHeight); el.textContent=t||'No log yet.'; if(atBottom)el.scrollTop=el.scrollHeight;}}catch(e){}}
+document.getElementById('refreshLog').addEventListener('click',refreshLog);
+render(state); refreshLog();
+setInterval(refreshStatus,2000); setInterval(refreshLog,3000);
+</script>
+{% endblock %}

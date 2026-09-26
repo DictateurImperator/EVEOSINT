@@ -1,0 +1,269 @@
+{% set faq_path = request.url.path %}
+{% set faq_is_admin = faq_path.startswith('/admin') %}
+{% set faq_is_account = faq_path == '/account' %}
+
+{% if show_app_layout and not faq_is_admin and not faq_is_account %}
+<section class="public-faq" aria-labelledby="publicFaqTitle">
+  <div class="public-faq-heading">
+    <div>
+      <h2 id="publicFaqTitle" class="h5 mb-1">FAQ &amp; data notes</h2>
+      <div class="muted-line small">How to read this page and what the underlying data can — and cannot — prove.</div>
+    </div>
+  </div>
+
+  {% if faq_path == '/home' %}
+    <details class="public-faq-item">
+      <summary>What is EVEOSINT?</summary>
+      <div>EVEOSINT is an analytical interface built from public EVE Online data sources. It combines static game data, public entity information, killmail history and Monthly Economic Report data to make historical and behavioural analysis easier.</div>
+    </details>
+    <details class="public-faq-item">
+      <summary>Is EVEOSINT a live view of the game?</summary>
+      <div>No. Data is imported and processed in scheduled batches. During an update, the banner at the top of the site warns that some results may temporarily be behind the newest available source data.</div>
+    </details>
+    <details class="public-faq-item">
+      <summary>Does a missing result mean that something never existed?</summary>
+      <div>No. EVEOSINT can only analyse evidence present in its source datasets. Missing public evidence must not be interpreted as proof that an activity, character, ship or relationship never existed.</div>
+    </details>
+
+  {% elif faq_path == '/profiles' %}
+    <details class="public-faq-item">
+      <summary>What can I search here?</summary>
+      <div>The Profiles page searches known characters, corporations and alliances and opens their EVEOSINT profile pages.</div>
+    </details>
+    <details class="public-faq-item">
+      <summary>Why can a valid EVE entity be missing?</summary>
+      <div>The search operates on entities known to the local EVEOSINT dataset. An entity can be absent or temporarily outdated if it has not yet been discovered, imported or refreshed from the available public sources.</div>
+    </details>
+
+  {% elif faq_path == '/killboard' %}
+    <details class="public-faq-item">
+      <summary>What does the global Killboard show?</summary>
+      <div>It searches the normalized killmail history stored by EVEOSINT. With no active filter it shows recent killmails; historical filtered searches scan the available history progressively instead of running one very large query.</div>
+    </details>
+    <details class="public-faq-item">
+      <summary>How do the + and − filters work?</summary>
+      <div>A <strong>+</strong> term includes matching ships, locations or entities. A <strong>−</strong> term excludes them. If a filter family has no + term, that family starts from ALL and only the − terms are removed.</div>
+    </details>
+    <details class="public-faq-item">
+      <summary>What locations can be filtered?</summary>
+      <div>You can search systems, constellations and regions, or use the Highsec, Lowsec, Nullsec, Pochven and Wormhole presets.</div>
+    </details>
+    <details class="public-faq-item">
+      <summary>Why can a filtered search take longer?</summary>
+      <div>Large historical searches are processed month by month and stop once enough matching results have been found. This avoids forcing the database to scan the entire history in one request.</div>
+    </details>
+
+  {% elif faq_path.startswith('/kill/mer/') %}
+    <details class="public-faq-item">
+      <summary>What is this MER kill record?</summary>
+      <div>This page comes from CCP Monthly Economic Report kill data rather than a normal uniquely identified API killmail.</div>
+    </details>
+    <details class="public-faq-item">
+      <summary>What does “hidden” mean?</summary>
+      <div>A hidden MER record is a MER kill for which EVEOSINT currently has no matched normalized killmail. It is evidence from the MER dataset, but it does not provide the same detail as an API killmail.</div>
+    </details>
+    <details class="public-faq-item">
+      <summary>What does “ambiguous” mean?</summary>
+      <div>The MER row matched more than one possible normalized killmail, so EVEOSINT does not silently choose one. Candidate killmails are shown when available.</div>
+    </details>
+
+  {% elif faq_path.startswith('/kill/') %}
+    <details class="public-faq-item">
+      <summary>Where does this killmail come from?</summary>
+      <div>The detailed killmail page is built from EVEOSINT's normalized killmail dataset and enriched with locally imported EVE static data and known entity information.</div>
+    </details>
+    <details class="public-faq-item">
+      <summary>What does “Copy EFT” do?</summary>
+      <div>It converts the available victim fitting and cargo information into an EFT-style text representation. The result can only include items present in the source killmail.</div>
+    </details>
+    <details class="public-faq-item">
+      <summary>Why can some attacker or fitting information be missing?</summary>
+      <div>EVEOSINT displays the evidence contained in the source killmail. If a source field is absent, there may be nothing reliable to display or infer.</div>
+    </details>
+
+  {% elif faq_path == '/map' or faq_path.startswith('/map/') %}
+    <details class="public-faq-item">
+      <summary>What does the map represent?</summary>
+      <div>The map is built from imported EVE Static Data Export topology and celestial data. It provides navigation and geographic context for New Eden rather than live player positions.</div>
+    </details>
+    <details class="public-faq-item">
+      <summary>What do HS, LS and 0.0 mean?</summary>
+      <div>They filter the displayed systems by high-security, low-security and null-security space. Pochven and wormhole-space data are handled separately where relevant in search and killboard filters.</div>
+    </details>
+    <details class="public-faq-item">
+      <summary>Can I open the kill history of a location?</summary>
+      <div>Yes. Region, constellation and system profiles link the map and the killboard so the same location can be explored geographically and historically.</div>
+    </details>
+
+  {% elif faq_path == '/ship-analysis' %}
+    <details class="public-faq-item">
+      <summary>What does Ship Analysis measure?</summary>
+      <div>It builds time series from killmail evidence. A series can measure unique observed pilots or uses, optionally as a percentage, and can be restricted by ship, side of the killmail, alliance, corporation and location.</div>
+    </details>
+    <details class="public-faq-item">
+      <summary>What is the activity window?</summary>
+      <div>For unique-pilot metrics, the activity window controls how long an observed pilot remains active in the series after an event. “Infinite” keeps the pilot active for the rest of the selected graph period.</div>
+    </details>
+    <details class="public-faq-item">
+      <summary>Can several populations be compared?</summary>
+      <div>Yes. The page supports multiple independent series, each with its own filters and metric, so different ships, groups or areas can be compared over the same period.</div>
+    </details>
+    <details class="public-faq-item">
+      <summary>Why can a long analysis take time?</summary>
+      <div>Historical analysis may scan many monthly killmail partitions. EVEOSINT uses bounded queries and progressive processing to reduce the risk of one large request blocking the application.</div>
+    </details>
+
+  {% elif faq_path.startswith('/corporation/') and '/pilotable-ships/' in faq_path or faq_path.startswith('/alliance/') and '/pilotable-ships/' in faq_path %}
+    <details class="public-faq-item">
+      <summary>What does “pilotable” mean here?</summary>
+      <div>It is an <strong>inference</strong> from public killmail evidence, not the character's private ESI skill sheet. EVEOSINT infers minimum observed skills from ships, weapons and fitted items and checks which ships those inferred skills satisfy.</div>
+    </details>
+    <details class="public-faq-item">
+      <summary>Does this prove that every listed pilot can currently fly the ship?</summary>
+      <div>No. It shows that the available evidence supports the required minimum skill set. Public evidence can be incomplete, historical or absent.</div>
+    </details>
+    <details class="public-faq-item">
+      <summary>Can a capable pilot be missing?</summary>
+      <div>Yes. If the killmail history never exposes enough relevant evidence for that character, EVEOSINT cannot safely infer skills it has not observed.</div>
+    </details>
+
+  {% elif faq_path == '/ship-category' or faq_path.startswith('/ship/') %}
+    <details class="public-faq-item">
+      <summary>What is shown on a ship page?</summary>
+      <div>Ship pages combine Static Data Export information with EVEOSINT analysis tools such as ranking, killboard filtering and historical activity analysis.</div>
+    </details>
+    <details class="public-faq-item">
+      <summary>Where do ship attributes and bonuses come from?</summary>
+      <div>Static ship metadata, groups, traits and dogma attributes come from the locally imported EVE Static Data Export.</div>
+    </details>
+    <details class="public-faq-item">
+      <summary>Are rankings an official EVE statistic?</summary>
+      <div>No. They are EVEOSINT calculations over the data available in this installation and should be interpreted as analytical output, not an official CCP leaderboard.</div>
+    </details>
+
+  {% elif faq_path.startswith('/weapon/') or faq_path.startswith('/skill/') or faq_path.startswith('/commodity/') %}
+    <details class="public-faq-item">
+      <summary>Where does this item information come from?</summary>
+      <div>The profile is based primarily on the locally imported EVE Static Data Export. Where EVEOSINT has relevant killmail evidence, the item can also be linked into analysis and killmail views.</div>
+    </details>
+    <details class="public-faq-item">
+      <summary>Why are some SDE fields empty?</summary>
+      <div>Not every EVE type exposes the same attributes, traits or relationships. EVEOSINT does not invent values when a field is not present in the imported static data.</div>
+    </details>
+
+  {% elif faq_path.startswith('/character/') or faq_path.startswith('/corporation/') or faq_path.startswith('/alliance/') or faq_path.startswith('/system/') or faq_path.startswith('/constellation/') or faq_path.startswith('/region/') %}
+    <details class="public-faq-item">
+      <summary>What is an entity profile?</summary>
+      <div>It is EVEOSINT's consolidated view of one known character, corporation, alliance or location, with links to the related public history and killmail evidence available locally.</div>
+    </details>
+    <details class="public-faq-item">
+      <summary>Are affiliations guaranteed to be current?</summary>
+      <div>No. Character and corporation affiliations are refreshed from public ESI information and historical records, but there can be a delay between an in-game change, its source availability and the next EVEOSINT refresh.</div>
+    </details>
+    <details class="public-faq-item">
+      <summary>What are “API”, “TOTAL” and “Only hidden” on entity killboards?</summary>
+      <div><strong>API</strong> uses normalized public killmails. <strong>TOTAL</strong> uses the broader MER kill dataset where supported. <strong>Only hidden</strong> shows MER records that are not currently matched to a normalized killmail.</div>
+    </details>
+    <details class="public-faq-item">
+      <summary>Why do MER and API views not support exactly the same filters?</summary>
+      <div>The MER dataset does not contain every field available in a detailed killmail. EVEOSINT only applies filters that can be supported by the selected source rather than fabricating missing detail.</div>
+    </details>
+
+  {% elif faq_path.startswith('/entities/') %}
+    <details class="public-faq-item">
+      <summary>What is EntitiesINTEL?</summary>
+      <div>EntitiesINTEL is the catalogue and profile layer for characters, corporations, alliances, ships, skills, commodities and EVE geography known to EVEOSINT.</div>
+    </details>
+    <details class="public-faq-item">
+      <summary>Why do some pages show recently involved entities while others show a catalogue?</summary>
+      <div>Character, corporation and alliance pages are oriented toward entities observed in activity, while static game objects such as ships, skills and commodities are primarily sourced from the imported SDE catalogue.</div>
+    </details>
+    <details class="public-faq-item">
+      <summary>Can I search across modules?</summary>
+      <div>Yes. The global search in the top bar can open supported entity and location pages directly.</div>
+    </details>
+
+  {% elif faq_path == '/superintel' %}
+    <details class="public-faq-item">
+      <summary>What is SuperINTEL?</summary>
+      <div>SuperINTEL reconstructs observable Titan and Supercarrier ownership signals from public killmail evidence. It builds ship sessions per pilot and aggregates the ships considered alive at each report date.</div>
+    </details>
+    <details class="public-faq-item">
+      <summary>How is the score calculated?</summary>
+      <div>The current score is <strong>3 points per Titan + 1 point per Supercarrier</strong>. Rankings can be viewed by alliance, corporation or player.</div>
+    </details>
+    <details class="public-faq-item">
+      <summary>Does SuperINTEL show exact in-game assets?</summary>
+      <div>No. It is an OSINT inference from observable public evidence. A ship that has never appeared in the available evidence cannot be discovered, and historical evidence can produce uncertainty until later events clarify it.</div>
+    </details>
+    <details class="public-faq-item">
+      <summary>What are the 7-day and monthly gains/losses?</summary>
+      <div>They compare daily SuperINTEL snapshots and show changes in the inferred Titan/Supercarrier stock and score between the selected dates.</div>
+    </details>
+
+  {% elif faq_path == '/superintel/detailed' %}
+    <details class="public-faq-item">
+      <summary>What does the Detailed dashboard add?</summary>
+      <div>It breaks the inferred stock down hull by hull and adds movement analysis over 7-day or 1-month windows.</div>
+    </details>
+    <details class="public-faq-item">
+      <summary>What do the movement statuses mean?</summary>
+      <div><strong>ALLIANCE ENTRANCE</strong>, <strong>ALLIANCE LEAVE</strong> and <strong>NEW SUPER PILOT</strong> describe affiliation or population movement between the compared snapshots. <strong>NO CHANGE</strong> means no classified movement was found.</div>
+    </details>
+    <details class="public-faq-item">
+      <summary>What do CREATED, KILLED, UNKNOWN and DELETED mean?</summary>
+      <div>They are EVEOSINT explanations for an observed hull-count change. CREATED and KILLED require supporting public event evidence; UNKNOWN is used when the change cannot be confidently explained from available evidence, and DELETED covers a disappearance classified as deletion rather than a confirmed kill.</div>
+    </details>
+    <details class="public-faq-item">
+      <summary>Why can an explanation remain UNKNOWN?</summary>
+      <div>EVEOSINT deliberately avoids turning an unsupported correlation into a fact. If the public evidence cannot explain a change reliably, the result remains uncertain.</div>
+    </details>
+
+  {% elif faq_path == '/superintel/evolution' %}
+    <details class="public-faq-item">
+      <summary>What does the Evolution page graph?</summary>
+      <div>It graphs SuperINTEL daily snapshots over time for selected Titan/Supercarrier hulls and selected populations.</div>
+    </details>
+    <details class="public-faq-item">
+      <summary>What are UNIVERSE and NO_ALLIANCE?</summary>
+      <div>UNIVERSE represents the complete observable SuperINTEL population for the selected hulls. NO_ALLIANCE isolates pilots that are not associated with an alliance in the corresponding snapshot.</div>
+    </details>
+    <details class="public-faq-item">
+      <summary>What do + and − terms do in a group?</summary>
+      <div>They build arithmetic groups. For example, a series can start with UNIVERSE and subtract one or more alliances to show the remainder of the observable population.</div>
+    </details>
+    <details class="public-faq-item">
+      <summary>Can the graph data be exported?</summary>
+      <div>Yes. The same generated series can be viewed as a CSV table and downloaded as CSV.</div>
+    </details>
+
+  {% elif faq_path == '/superintel/monthly-analysis' %}
+    <details class="public-faq-item">
+      <summary>What does Monthly Analysis compare?</summary>
+      <div>It compares a selected SuperINTEL daily snapshot with the corresponding day of the previous month and reports the resulting changes by pilot, corporation, alliance or explanation view.</div>
+    </details>
+    <details class="public-faq-item">
+      <summary>Can the analysis be filtered and sorted?</summary>
+      <div>Yes. The table supports search, per-column filters, sorting, pagination and reason filters where the Explain view is used.</div>
+    </details>
+    <details class="public-faq-item">
+      <summary>Can I export the result?</summary>
+      <div>Yes. The selected monthly period can be downloaded as an Excel workbook.</div>
+    </details>
+
+  {% else %}
+    <details class="public-faq-item">
+      <summary>Where does EVEOSINT data come from?</summary>
+      <div>EVEOSINT combines locally imported public EVE data such as the Static Data Export, public ESI information, killmail history and Monthly Economic Report datasets.</div>
+    </details>
+    <details class="public-faq-item">
+      <summary>Can every displayed value be treated as an in-game fact?</summary>
+      <div>No. Some pages display direct source fields while others display calculations or OSINT inferences. Where evidence is incomplete, EVEOSINT is designed to preserve that uncertainty rather than invent a value.</div>
+    </details>
+  {% endif %}
+
+  <div class="public-faq-source-note">
+    EVEOSINT works from observable public data. Source coverage, update delay and inference rules can affect results; absence of public evidence is not proof of absence in game.
+  </div>
+</section>
+{% endif %}

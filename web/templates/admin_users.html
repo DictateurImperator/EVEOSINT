@@ -1,0 +1,139 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-start mb-4">
+  <div>
+    <h1 class="h3 fw-bold mb-1">Users</h1>
+    <div class="muted-line">Gestion des comptes.</div>
+  </div>
+</div>
+
+{% if error %}
+  <div class="alert alert-danger py-2">
+    {% if error == "username_empty" %}
+      Username vide.
+    {% elif error == "password_too_short" %}
+      Mot de passe trop court : minimum 12 caractères.
+    {% elif error == "password_too_long" %}
+      Mot de passe trop long : maximum 72 bytes.
+    {% elif error == "cannot_delete_self" %}
+      Tu ne peux pas supprimer ton propre compte.
+    {% elif error == "cannot_delete_last_admin" %}
+      Impossible de supprimer le dernier admin actif.
+    {% elif error == "user_not_found" %}
+      Utilisateur introuvable.
+    {% else %}
+      Action impossible.
+    {% endif %}
+  </div>
+{% endif %}
+
+{% if success %}
+  <div class="alert alert-success py-2">
+    {% if success == "user_saved" %}
+      Utilisateur enregistré.
+    {% elif success == "user_deleted" %}
+      Utilisateur supprimé.
+    {% else %}
+      Action effectuée.
+    {% endif %}
+  </div>
+{% endif %}
+
+<div class="row g-4">
+  <div class="col-12 col-xl-8">
+    <section class="content-card p-3 p-md-4">
+      <h2 class="h5 mb-3">Comptes</h2>
+
+      <div class="table-responsive">
+        <table class="table table-dark table-hover align-middle mb-0">
+          <thead>
+            <tr>
+              <th>Username</th>
+              <th>Rôles</th>
+              <th>Statut</th>
+              <th>Créé</th>
+              <th>Dernier login</th>
+              {% if can_delete_users %}
+                <th class="text-end">Action</th>
+              {% endif %}
+            </tr>
+          </thead>
+          <tbody>
+            {% for account in users %}
+              <tr>
+                <td>
+                  <a class="text-decoration-none fw-semibold" href="/admin/users/{{ account.id }}">
+                    {{ account.username }}
+                  </a>
+                </td>
+                <td>{{ account.roles or "-" }}</td>
+                <td>
+                  {% if account.is_active %}
+                    <span class="badge text-bg-success">active</span>
+                  {% else %}
+                    <span class="badge text-bg-secondary">inactive</span>
+                  {% endif %}
+                </td>
+                <td>{{ account.created_at.strftime("%Y-%m-%d %H:%M") if account.created_at else "-" }}</td>
+                <td>{{ account.last_login_at.strftime("%Y-%m-%d %H:%M") if account.last_login_at else "-" }}</td>
+
+                {% if can_delete_users %}
+                  <td class="text-end">
+                    {% if account.id != user.id %}
+                      <form method="post" action="/admin/users/delete" class="d-inline">
+                        <input type="hidden" name="user_id" value="{{ account.id }}">
+                        <button type="submit" class="btn btn-sm btn-outline-danger">
+                          Supprimer
+                        </button>
+                      </form>
+                    {% else %}
+                      <span class="muted-line small">toi</span>
+                    {% endif %}
+                  </td>
+                {% endif %}
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  </div>
+
+  <div class="col-12 col-xl-4">
+    <section class="content-card p-3 p-md-4">
+      <h2 class="h5 mb-3">Créer compte</h2>
+
+      {% if can_create_users %}
+        <form method="post" action="/admin/users/create">
+          <div class="mb-3">
+            <label for="username" class="form-label">Username</label>
+            <input type="text" class="form-control" id="username" name="username" required>
+          </div>
+
+          <div class="mb-3">
+            <label for="role_key" class="form-label">Rôle</label>
+            <select class="form-select" id="role_key" name="role_key" required>
+              {% for role in roles %}
+                <option value="{{ role.role_key }}">{{ role.label }}</option>
+              {% endfor %}
+            </select>
+          </div>
+
+          <div class="mb-4">
+            <label for="password" class="form-label">Mot de passe initial</label>
+            <input type="text" class="form-control" id="password" name="password" minlength="12" required>
+            <div class="form-text">Minimum 12 caractères.</div>
+          </div>
+
+          <button type="submit" class="btn btn-primary w-100">
+            Créer
+          </button>
+        </form>
+      {% else %}
+        <div class="muted-line">Droit insuffisant.</div>
+      {% endif %}
+    </section>
+  </div>
+</div>
+{% endblock %}

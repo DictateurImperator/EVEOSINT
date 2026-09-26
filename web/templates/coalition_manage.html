@@ -1,0 +1,366 @@
+{% extends "base.html" %}
+
+{% macro member_url(membership) -%}
+{% if membership.member_type == 'coalition' %}/coalition/{{ membership.member_id }}{% elif membership.member_type == 'alliance' %}/alliance/{{ membership.member_id }}{% elif membership.member_type == 'corporation' %}/corporation/{{ membership.member_id }}{% else %}#{% endif %}
+{%- endmacro %}
+
+{% block content %}
+<style>
+  .coalition-member-entity { display:flex; align-items:center; gap:.65rem; min-width:260px; }
+  .coalition-member-logo { width:32px; height:32px; flex:0 0 32px; border-radius:.28rem; object-fit:cover; background:rgba(255,255,255,.05); }
+  .coalition-member-logo-placeholder { width:32px; height:32px; flex:0 0 32px; border-radius:.28rem; display:inline-flex; align-items:center; justify-content:center; background:rgba(71,85,105,.45); color:#bae6fd; font-weight:800; font-size:.78rem; }
+  .coalition-search-logo-placeholder { width:36px; height:36px; flex:0 0 36px; border-radius:.35rem; display:inline-flex; align-items:center; justify-content:center; background:rgba(71,85,105,.45); color:#bae6fd; font-weight:800; font-size:.82rem; }
+  .coalition-search-logo { width:36px; height:36px; flex:0 0 36px; border-radius:.35rem; object-fit:cover; background:rgba(255,255,255,.05); }
+  .coalition-entity-search-results { z-index:40; display:none; max-height:360px; overflow-y:auto; border:1px solid rgba(148,163,184,.28); border-radius:.45rem; background:#0f172a; }
+  .coalition-search-section { padding:.34rem .7rem; color:#7dd3fc; background:#111827; border-top:1px solid rgba(148,163,184,.18); border-bottom:1px solid rgba(148,163,184,.18); font-size:.72rem; font-weight:800; letter-spacing:.07em; text-transform:uppercase; }
+  .coalition-search-section:first-child { border-top:0; }
+  .coalition-search-result { width:100%; border:0; border-bottom:1px solid rgba(148,163,184,.14); background:#0f172a; color:#f8fafc; text-align:left; padding:.55rem .7rem; display:flex; align-items:center; gap:.7rem; }
+  .coalition-search-result:hover, .coalition-search-result:focus { background:#172033; outline:none; }
+  .coalition-search-result:last-child { border-bottom:0; }
+  .coalition-search-primary { font-weight:700; line-height:1.15; }
+  .coalition-search-secondary { color:#94a3b8; font-size:.77rem; margin-top:.16rem; }
+  .coalition-replacement-panel { border:1px solid rgba(125,211,252,.22); border-radius:.5rem; background:rgba(15,23,42,.48); padding:.75rem; }
+  .coalition-current-entity { display:flex; align-items:center; gap:.6rem; }
+  .coalition-logo-editor { display:flex; align-items:center; gap:.9rem; flex-wrap:wrap; padding:.75rem; border:1px solid rgba(148,163,184,.18); border-radius:.55rem; background:rgba(15,23,42,.35); }
+  .coalition-logo-preview { width:72px; height:72px; flex:0 0 72px; border-radius:.6rem; object-fit:cover; background:rgba(255,255,255,.05); border:1px solid rgba(148,163,184,.22); }
+  .coalition-logo-preview-placeholder { width:72px; height:72px; flex:0 0 72px; border-radius:.6rem; display:inline-flex; align-items:center; justify-content:center; background:rgba(71,85,105,.45); color:#bae6fd; font-weight:900; font-size:1.25rem; border:1px solid rgba(148,163,184,.22); }
+</style>
+<div class="d-flex justify-content-between align-items-start mb-3 gap-3">
+  <div>
+    <div class="muted-line mb-1">Coalition administration</div>
+    <div class="d-flex align-items-center gap-2 flex-wrap">
+      <h1 class="h3 fw-bold mb-0">{{ coalition.name }}</h1>
+      {% if coalition.short_name %}<span class="badge text-bg-secondary">{{ coalition.short_name }}</span>{% endif %}
+      {% if coalition.is_active %}<span class="badge text-bg-success">active</span>{% else %}<span class="badge text-bg-secondary">inactive</span>{% endif %}
+    </div>
+    <div class="muted-line mt-1">EVEOSINT internal ID {{ coalition.coalition_id }}</div>
+  </div>
+  <a href="/entities/coalition/manage" class="btn btn-outline-light">Back to manage</a>
+</div>
+
+<ul class="nav nav-tabs mb-4">
+  <li class="nav-item"><a class="nav-link" href="/coalition/{{ coalition.coalition_id }}">Overview</a></li>
+  <li class="nav-item"><a class="nav-link active" aria-current="page" href="/coalition/{{ coalition.coalition_id }}/manage">Manage</a></li>
+</ul>
+
+{% if error %}
+  <div class="alert alert-danger py-2">
+    {% if error == "name_required" %}Coalition name is required.
+    {% elif error == "member_not_found" %}Selected entity no longer exists.
+    {% elif error == "invalid_date" %}Invalid date.
+    {% elif error == "invalid_date_range" %}End date must be greater than or equal to start date.
+    {% elif error == "coalition_cycle" %}Rule rejected: it would create a recursive coalition cycle during an overlapping date range.
+    {% elif error == "duplicate_rule" %}The exact same rule already exists for this date range.
+    {% elif error == "membership_not_found" %}Membership rule not found.
+    {% elif error == "logo_required" %}Select a logo file first.
+    {% elif error == "logo_too_large" %}Coalition logo is too large (5 MB maximum).
+    {% elif error == "invalid_logo_type" %}Unsupported logo format. Use PNG, JPG/JPEG or WebP.
+    {% elif error == "invalid_logo_file" %}The selected file is not a valid PNG, JPG/JPEG or WebP image.
+    {% else %}Action failed.{% endif %}
+  </div>
+{% endif %}
+
+{% if success %}
+  <div class="alert alert-success py-2">
+    {% if success == "coalition_created" %}Coalition created.
+    {% elif success == "coalition_updated" %}Coalition updated.
+    {% elif success == "membership_added" %}Membership rule added.
+    {% elif success == "membership_updated" %}Membership rule updated.
+    {% elif success == "membership_deleted" %}Membership rule removed.
+    {% elif success == "coalition_logo_updated" %}Coalition logo updated.
+    {% elif success == "coalition_logo_removed" %}Coalition logo removed.
+    {% else %}Action completed.{% endif %}
+  </div>
+{% endif %}
+
+<div class="row g-4 mb-4">
+  <div class="col-12 col-xl-5">
+    <section class="content-card p-3 p-md-4 h-100">
+      <h2 class="h5 mb-3">Coalition</h2>
+      <div class="mb-4">
+        <label class="form-label">Logo</label>
+        <div class="coalition-logo-editor">
+          {% if coalition.logo_url %}
+            <img class="coalition-logo-preview" src="{{ coalition.logo_url }}" alt="{{ coalition.name }} logo">
+          {% else %}
+            <span class="coalition-logo-preview-placeholder" aria-hidden="true">C</span>
+          {% endif %}
+          <div class="flex-grow-1" style="min-width:220px;">
+            <form method="post" action="/admin/coalitions/{{ coalition.coalition_id }}/logo" enctype="multipart/form-data">
+              <input class="form-control form-control-sm mb-2" type="file" name="logo_file" accept="image/png,image/jpeg,image/webp,.png,.jpg,.jpeg,.webp" required>
+              <button class="btn btn-sm btn-outline-info" type="submit">{% if coalition.logo_url %}Replace logo{% else %}Upload logo{% endif %}</button>
+              <div class="muted-line small mt-2">PNG, JPG/JPEG or WebP · 5 MB max.</div>
+            </form>
+            {% if coalition.logo_url %}
+              <form method="post" action="/admin/coalitions/{{ coalition.coalition_id }}/logo/remove" class="mt-2" onsubmit="return confirm('Remove this coalition logo?');">
+                <button class="btn btn-sm btn-outline-danger" type="submit">Remove logo</button>
+              </form>
+            {% endif %}
+          </div>
+        </div>
+      </div>
+      <form method="post" action="/admin/coalitions/{{ coalition.coalition_id }}/update">
+        <div class="mb-3"><label class="form-label" for="name">Name</label><input class="form-control" id="name" name="name" value="{{ coalition.name }}" required></div>
+        <div class="mb-3"><label class="form-label" for="short_name">Short name</label><input class="form-control" id="short_name" name="short_name" maxlength="64" value="{{ coalition.short_name or '' }}"></div>
+        <div class="mb-3"><label class="form-label" for="description">Description</label><textarea class="form-control" id="description" name="description" rows="4">{{ coalition.description or '' }}</textarea></div>
+        <div class="form-check form-switch mb-4"><input class="form-check-input" type="checkbox" role="switch" id="is_active" name="is_active" {% if coalition.is_active %}checked{% endif %}><label class="form-check-label" for="is_active">Active coalition</label></div>
+        <button class="btn btn-primary" type="submit">Save coalition</button>
+      </form>
+    </section>
+  </div>
+
+  <div class="col-12 col-xl-7">
+    <section class="content-card p-3 p-md-4 h-100">
+      <h2 class="h5 mb-1">Add membership rule</h2>
+      <div class="muted-line small mb-3">Include or exclude a coalition, alliance or corporation. Dates are inclusive and optional.</div>
+      <form method="post" action="/admin/coalitions/{{ coalition.coalition_id }}/memberships/add" id="membership-add-form">
+        <div class="row g-3">
+          <div class="col-12 col-md-3"><label class="form-label" for="operation">Operation</label><select class="form-select" id="operation" name="operation" required><option value="include">+ Include</option><option value="exclude">− Exclude</option></select></div>
+          <div class="col-12 col-md-9 position-relative">
+            <label class="form-label" for="member-search">Entity</label>
+            <input class="form-control" id="member-search" type="search" autocomplete="off" placeholder="Search coalition, alliance, corporation, ticker or ID" required>
+            <input type="hidden" id="member_type" name="member_type"><input type="hidden" id="member_id" name="member_id">
+            <div id="member-selected" class="small text-info mt-1"></div>
+            <div id="member-search-results" class="coalition-entity-search-results position-absolute w-100 shadow"></div>
+          </div>
+          <div class="col-12 col-md-3"><label class="form-label" for="valid_from">From</label><input class="form-control" id="valid_from" name="valid_from" type="date"></div>
+          <div class="col-12 col-md-3"><label class="form-label" for="valid_to">To</label><input class="form-control" id="valid_to" name="valid_to" type="date"></div>
+          <div class="col-12 col-md-6"><label class="form-label" for="source">Source</label><input class="form-control" id="source" name="source" placeholder="URL, document, manual observation…"></div>
+          <div class="col-12"><label class="form-label" for="notes">Notes</label><textarea class="form-control" id="notes" name="notes" rows="2"></textarea></div>
+          <div class="col-12"><button class="btn btn-primary" type="submit">Add rule</button></div>
+        </div>
+      </form>
+    </section>
+  </div>
+</div>
+
+<section class="content-card p-3 p-md-4">
+  <div class="d-flex justify-content-between align-items-start mb-3">
+    <div><h2 class="h5 mb-1">Membership rules</h2><div class="muted-line small">Current, future and historical + / − rules.</div></div>
+    <div class="muted-line small">{{ memberships|length }} rule(s)</div>
+  </div>
+  <div class="table-responsive">
+    <table class="table table-dark align-middle mb-0">
+      <thead><tr><th style="width:70px;">Rule</th><th>Entity</th><th>Type</th><th>From</th><th>To</th><th>Status</th><th>Source</th><th style="width:110px;"></th></tr></thead>
+      <tbody>
+        {% for membership in memberships %}
+          <tr>
+            <td>{% if membership.operation == "include" %}<span class="badge text-bg-success fs-6">+</span>{% else %}<span class="badge text-bg-danger fs-6">−</span>{% endif %}</td>
+            <td>
+              <div class="coalition-member-entity">
+                {% if membership.logo_url %}
+                  <img class="coalition-member-logo" src="{{ membership.logo_url }}" alt="" loading="lazy">
+                {% else %}
+                  <span class="coalition-member-logo-placeholder" aria-hidden="true">C</span>
+                {% endif %}
+                <div class="min-w-0">
+                  <a class="text-decoration-none fw-semibold" href="{{ member_url(membership) }}">{{ membership.member_name }}</a>
+                  <div class="muted-line small">{% if membership.member_ticker %}[{{ membership.member_ticker }}] · {% endif %}ID {{ membership.member_id }}</div>
+                  {% if membership.notes %}<div class="small mt-1">{{ membership.notes }}</div>{% endif %}
+                </div>
+              </div>
+            </td>
+            <td><span class="badge text-bg-secondary">{{ membership.member_type }}</span></td>
+            <td>{{ membership.valid_from or "—" }}</td><td>{{ membership.valid_to or "—" }}</td>
+            <td>{% if membership.status == "current" %}<span class="badge text-bg-success">current</span>{% elif membership.status == "future" %}<span class="badge text-bg-info">future</span>{% else %}<span class="badge text-bg-secondary">ended</span>{% endif %}</td>
+            <td>{% if membership.source %}{% if membership.source.startswith('http://') or membership.source.startswith('https://') %}<a href="{{ membership.source }}" target="_blank" rel="noopener noreferrer">source</a>{% else %}{{ membership.source }}{% endif %}{% else %}<span class="muted-line">—</span>{% endif %}</td>
+            <td class="text-end"><button class="btn btn-sm btn-outline-light coalition-rule-edit-toggle" type="button" data-edit-target="edit-rule-{{ membership.id }}" aria-expanded="false">Edit</button></td>
+          </tr>
+          <tr id="edit-rule-{{ membership.id }}" style="display:none;"><td colspan="8" class="bg-black bg-opacity-25"><div class="p-2">
+            <form method="post" action="/admin/coalitions/{{ coalition.coalition_id }}/memberships/{{ membership.id }}/update" class="coalition-rule-edit-form">
+              <input type="hidden" name="replacement_member_type" class="replacement-member-type">
+              <input type="hidden" name="replacement_member_id" class="replacement-member-id">
+              <div class="row g-3 align-items-end">
+                <div class="col-12">
+                  <div class="d-flex justify-content-between align-items-center gap-3 flex-wrap">
+                    <div>
+                      <div class="muted-line small mb-1">Current entity</div>
+                      <div class="coalition-current-entity">
+                        {% if membership.logo_url %}
+                          <img class="coalition-member-logo" src="{{ membership.logo_url }}" alt="" loading="lazy">
+                        {% else %}
+                          <span class="coalition-member-logo-placeholder" aria-hidden="true">C</span>
+                        {% endif %}
+                        <div><strong>{{ membership.member_name }}</strong>{% if membership.member_ticker %} <span class="muted-line">[{{ membership.member_ticker }}]</span>{% endif %}<div class="muted-line small">{{ membership.member_type }} · ID {{ membership.member_id }}</div></div>
+                      </div>
+                    </div>
+                    <button class="btn btn-sm btn-outline-info coalition-replace-toggle" type="button">Replace entity</button>
+                  </div>
+                  <div class="coalition-replacement-panel mt-3" hidden>
+                    <div class="position-relative">
+                      <label class="form-label">Replacement entity</label>
+                      <input class="form-control coalition-replacement-search" type="search" autocomplete="off" placeholder="Search coalition, alliance, corporation, ticker or ID">
+                      <div class="coalition-replacement-selected small text-info mt-1"></div>
+                      <div class="coalition-entity-search-results coalition-replacement-results position-absolute w-100 shadow"></div>
+                    </div>
+                    <button class="btn btn-sm btn-outline-secondary mt-2 coalition-replacement-clear" type="button">Clear replacement</button>
+                  </div>
+                </div>
+                <div class="col-12 col-md-2"><label class="form-label">Operation</label><select class="form-select" name="operation" required><option value="include" {% if membership.operation == "include" %}selected{% endif %}>+ Include</option><option value="exclude" {% if membership.operation == "exclude" %}selected{% endif %}>− Exclude</option></select></div>
+                <div class="col-12 col-md-2"><label class="form-label">From</label><input class="form-control" name="valid_from" type="date" value="{{ membership.valid_from or '' }}"></div>
+                <div class="col-12 col-md-2"><label class="form-label">To</label><input class="form-control" name="valid_to" type="date" value="{{ membership.valid_to or '' }}"></div>
+                <div class="col-12 col-md-3"><label class="form-label">Source</label><input class="form-control" name="source" value="{{ membership.source or '' }}"></div>
+                <div class="col-12 col-md-3"><label class="form-label">Notes</label><input class="form-control" name="notes" value="{{ membership.notes or '' }}"></div>
+                <div class="col-12"><button class="btn btn-primary" type="submit">Save rule</button></div>
+              </div>
+            </form>
+            <form method="post" action="/admin/coalitions/{{ coalition.coalition_id }}/memberships/{{ membership.id }}/delete" class="mt-2" onsubmit="return confirm('Remove this membership rule?');"><button class="btn btn-outline-danger" type="submit">Remove rule</button></form>
+          </div></td></tr>
+        {% else %}
+          <tr><td colspan="8" class="muted-line text-center py-4">No membership rules yet.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<script>
+(() => {
+  const coalitionId={{ coalition.coalition_id }};
+  const sectionLabels={coalition:'COALITIONS',alliance:'ALLIANCES',corporation:'CORPORATIONS'};
+  const sectionOrder=['coalition','alliance','corporation'];
+
+  function entityLogo(item){
+    if(item.logo_url)return item.logo_url;
+    if(item.entity_type==='alliance')return `https://images.evetech.net/alliances/${item.entity_id}/logo?size=64`;
+    if(item.entity_type==='corporation')return `https://images.evetech.net/corporations/${item.entity_id}/logo?size=64`;
+    return '';
+  }
+
+  function appendEntityIcon(parent,item){
+    const src=entityLogo(item);
+    if(src){
+      const img=document.createElement('img');
+      img.className='coalition-search-logo';
+      img.alt='';
+      img.loading='lazy';
+      img.src=src;
+      parent.appendChild(img);
+      return;
+    }
+    const placeholder=document.createElement('span');
+    placeholder.className='coalition-search-logo-placeholder';
+    placeholder.textContent='C';
+    parent.appendChild(placeholder);
+  }
+
+  function renderSearchResults(box,items,onSelect){
+    box.innerHTML='';
+    const byType={coalition:[],alliance:[],corporation:[]};
+    for(const item of items||[]){if(byType[item.entity_type])byType[item.entity_type].push(item);}
+    for(const type of sectionOrder){
+      if(!byType[type].length)continue;
+      const header=document.createElement('div');
+      header.className='coalition-search-section';
+      header.textContent=sectionLabels[type];
+      box.appendChild(header);
+      for(const item of byType[type]){
+        const button=document.createElement('button');
+        button.type='button';
+        button.className='coalition-search-result';
+        appendEntityIcon(button,item);
+        const text=document.createElement('div');
+        text.className='min-w-0';
+        const primary=document.createElement('div');
+        primary.className='coalition-search-primary text-truncate';
+        primary.textContent=item.name+(item.ticker?` [${item.ticker}]`:'');
+        const secondary=document.createElement('div');
+        secondary.className='coalition-search-secondary';
+        secondary.textContent=`${item.entity_type.charAt(0).toUpperCase()+item.entity_type.slice(1)} · ID ${item.entity_id}`;
+        text.append(primary,secondary);
+        button.appendChild(text);
+        button.addEventListener('click',()=>onSelect(item));
+        box.appendChild(button);
+      }
+    }
+    box.style.display=(items||[]).length?'block':'none';
+  }
+
+  function attachEntitySearch(input,box,onSelect,onInput){
+    let timer=null;
+    const hide=()=>{box.style.display='none';box.innerHTML='';};
+    input.addEventListener('input',()=>{
+      if(onInput)onInput();
+      clearTimeout(timer);
+      const q=input.value.trim();
+      if(!q){hide();return;}
+      timer=setTimeout(async()=>{
+        try{
+          const response=await fetch(`/admin/coalitions/member-search?q=${encodeURIComponent(q)}&coalition_id=${coalitionId}`);
+          if(!response.ok){hide();return;}
+          const data=await response.json();
+          renderSearchResults(box,data.results||[],item=>{onSelect(item);hide();});
+        }catch(_){hide();}
+      },180);
+    });
+    document.addEventListener('click',event=>{if(!box.contains(event.target)&&event.target!==input)hide();});
+    return hide;
+  }
+
+  const addInput=document.getElementById('member-search');
+  const addType=document.getElementById('member_type');
+  const addId=document.getElementById('member_id');
+  const addResults=document.getElementById('member-search-results');
+  const addSelected=document.getElementById('member-selected');
+  const addForm=document.getElementById('membership-add-form');
+  function clearAddSelection(){addType.value='';addId.value='';addSelected.textContent='';addSelected.classList.remove('text-danger');addSelected.classList.add('text-info');}
+  attachEntitySearch(addInput,addResults,item=>{
+    addInput.value=item.name+(item.ticker?` [${item.ticker}]`:'');
+    addType.value=item.entity_type;
+    addId.value=item.entity_id;
+    addSelected.textContent=`Selected: ${item.entity_type} · ID ${item.entity_id}`;
+  },clearAddSelection);
+  addForm.addEventListener('submit',event=>{
+    if(!addType.value||!addId.value){
+      event.preventDefault();
+      addInput.focus();
+      addSelected.textContent='Select an entity from the search results.';
+      addSelected.classList.remove('text-info');
+      addSelected.classList.add('text-danger');
+    }
+  });
+
+  document.querySelectorAll('.coalition-rule-edit-toggle').forEach(button=>{
+    button.addEventListener('click',()=>{
+      const row=document.getElementById(button.dataset.editTarget);
+      if(!row)return;
+      const opening=row.style.display==='none'||!row.style.display;
+      row.style.display=opening?'table-row':'none';
+      button.setAttribute('aria-expanded',opening?'true':'false');
+      button.textContent=opening?'Close':'Edit';
+    });
+  });
+
+  document.querySelectorAll('.coalition-rule-edit-form').forEach(form=>{
+    const toggle=form.querySelector('.coalition-replace-toggle');
+    const panel=form.querySelector('.coalition-replacement-panel');
+    const input=form.querySelector('.coalition-replacement-search');
+    const results=form.querySelector('.coalition-replacement-results');
+    const selected=form.querySelector('.coalition-replacement-selected');
+    const typeInput=form.querySelector('.replacement-member-type');
+    const idInput=form.querySelector('.replacement-member-id');
+    const clearButton=form.querySelector('.coalition-replacement-clear');
+
+    function clearReplacement(clearText=true){
+      typeInput.value='';
+      idInput.value='';
+      selected.textContent='';
+      if(clearText)input.value='';
+    }
+
+    toggle.addEventListener('click',()=>{
+      panel.hidden=!panel.hidden;
+      toggle.textContent=panel.hidden?'Replace entity':'Close replacement';
+      if(!panel.hidden)input.focus();
+    });
+    clearButton.addEventListener('click',()=>clearReplacement(true));
+    attachEntitySearch(input,results,item=>{
+      input.value=item.name+(item.ticker?` [${item.ticker}]`:'');
+      typeInput.value=item.entity_type;
+      idInput.value=item.entity_id;
+      selected.textContent=`Replacement selected: ${item.entity_type} · ID ${item.entity_id}`;
+    },()=>clearReplacement(false));
+  });
+})();
+</script>
+{% endblock %}

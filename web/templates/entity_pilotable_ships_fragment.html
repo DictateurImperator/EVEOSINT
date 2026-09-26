@@ -1,0 +1,38 @@
+{% if error %}
+  <div class="alert alert-danger py-2">
+    {% if error == "character_pilotable_ships_missing" %}
+      Pilotable ships table missing. Run build_pilotable_ships.py first.
+    {% elif error == "pilotable_ship_index_missing" %}
+      Pilotable ship index missing. Run build_pilotable_ships.py first.
+    {% elif error == "sde_work.ship_entities_missing" %}
+      SDE ship entities table missing.
+    {% else %}
+      {{ error }}
+    {% endif %}
+  </div>
+{% elif pilotable_page %}
+  {% if pilotable_page.entity_type in ["corporation", "alliance", "coalition"] and not pilotable_page.ready %}
+    <div class="alert alert-info py-2" data-pilotable-refresh="1">
+      Calcul en cours… {{ pilotable_page.processed_pilots }} / {{ pilotable_page.total_pilots }} pilots analysed{% if pilotable_page.progress_percent is not none %} — {{ pilotable_page.progress_percent }}%{% endif %}.
+      Refresh automatique toutes les 10 secondes.
+    </div>
+  {% endif %}
+
+  {% if pilotable_page.entity_type in ["corporation", "alliance", "coalition"] and pilotable_page.ready %}
+    <div class="muted-line mb-3">
+      Calcul terminé : {{ pilotable_page.processed_pilots }} / {{ pilotable_page.total_pilots }} pilots analysed.
+    </div>
+  {% endif %}
+
+  {% if recent_entities %}
+    {% include "entity_recent_fragment.html" %}
+  {% elif pilotable_page.entity_type == "character" and pilotable_page.ready %}
+    <div class="muted-line">No pilotable ship found for this character yet.</div>
+  {% elif pilotable_page.entity_type in ["corporation", "alliance", "coalition"] and not pilotable_page.ready %}
+    <div class="muted-line">Aucun ship calculé pour l’instant.</div>
+  {% else %}
+    <div class="muted-line">No pilotable ship found.</div>
+  {% endif %}
+{% else %}
+  <div class="muted-line">Pilotable ships are not ready yet.</div>
+{% endif %}

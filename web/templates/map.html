@@ -1,0 +1,1531 @@
+{% extends "base.html" %}
+
+{% block content %}
+<style>
+  .eve-map-page {
+    min-width: 0;
+  }
+
+  .eve-map-head {
+    display: grid;
+    grid-template-columns: minmax(0,1fr) auto minmax(0,1fr);
+    align-items: flex-start;
+    gap: 18px;
+    margin-bottom: 16px;
+  }
+
+  .eve-map-breadcrumbs {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 7px;
+    margin-bottom: 6px;
+    color: #94a3b8;
+    font-size: .86rem;
+  }
+
+  .eve-map-breadcrumbs a {
+    color: #93c5fd;
+    text-decoration: none;
+  }
+
+  .eve-map-breadcrumbs a:hover {
+    color: #dbeafe;
+  }
+
+  .eve-map-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    flex-wrap: wrap;
+    justify-self: end;
+  }
+
+  .location-view-switch { display:inline-flex; align-items:center; gap:4px; justify-self:center; padding:4px; border:1px solid #334155; border-radius:13px; background:rgba(10,16,27,.96); box-shadow:0 8px 26px rgba(0,0,0,.28); }
+  .location-view-switch a, .location-view-switch span { min-width:118px; padding:9px 16px; border-radius:9px; text-align:center; text-decoration:none; font-size:.86rem; font-weight:900; letter-spacing:.045em; text-transform:uppercase; }
+  .location-view-switch a { color:#93c5fd; border:1px solid transparent; }
+  .location-view-switch a:hover { color:#fff; background:rgba(37,99,235,.18); border-color:rgba(96,165,250,.45); }
+  .location-view-switch .active { color:#fff; background:#0d6efd; border:1px solid #60a5fa; box-shadow:0 0 18px rgba(13,110,253,.24); }
+
+  .eve-map-filters {
+    display: flex;
+    align-items: center;
+    gap: 10px 16px;
+    flex-wrap: wrap;
+    margin: -4px 0 14px;
+    padding: 10px 12px;
+    border: 1px solid #263449;
+    border-radius: 12px;
+    background: rgba(10, 16, 27, .72);
+  }
+
+  .eve-map-filter-group {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+  }
+
+  .eve-map-filter-label {
+    color: #94a3b8;
+    font-size: .78rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: .04em;
+    margin-right: 3px;
+  }
+
+  .eve-map-filter-btn {
+    border: 1px solid #3a4a60;
+    border-radius: 8px;
+    padding: 5px 10px;
+    background: #0d1625;
+    color: #cbd5e1;
+    font-size: .78rem;
+    font-weight: 700;
+    cursor: pointer;
+  }
+
+  .eve-map-filter-btn:hover {
+    border-color: #718096;
+    color: #fff;
+  }
+
+  .eve-map-filter-btn.active {
+    border-color: #93c5fd;
+    background: rgba(59, 130, 246, .17);
+    color: #dbeafe;
+    box-shadow: inset 0 0 0 1px rgba(147, 197, 253, .12);
+  }
+
+  .eve-map-faction-legend {
+    display: flex;
+    align-items: center;
+    gap: 5px 9px;
+    flex-wrap: wrap;
+    min-width: 0;
+  }
+
+  .eve-map-faction-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    color: #aebbcf;
+    font-size: .72rem;
+    white-space: nowrap;
+  }
+
+  .eve-map-faction-swatch {
+    width: 10px;
+    height: 10px;
+    border-radius: 2px;
+    border: 1px solid rgba(255,255,255,.36);
+    flex: 0 0 auto;
+  }
+
+  .eve-map-grid {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 250px;
+    gap: 14px;
+    min-height: 690px;
+  }
+
+  .eve-map-canvas {
+    position: relative;
+    min-width: 0;
+    height: min(76vh, 860px);
+    min-height: 620px;
+    overflow: hidden;
+    border: 1px solid #263449;
+    border-radius: 18px;
+    background:
+      radial-gradient(circle at 50% 35%, rgba(30, 41, 59, .58), rgba(7, 12, 21, .96) 68%),
+      #070c15;
+    user-select: none;
+  }
+
+  .eve-map-canvas svg {
+    width: 100%;
+    height: 100%;
+    display: block;
+    cursor: grab;
+    touch-action: none;
+  }
+
+  .eve-map-canvas svg.dragging {
+    cursor: grabbing;
+  }
+
+  .map-grid-line {
+    stroke: rgba(148, 163, 184, .055);
+    stroke-width: 1;
+  }
+
+  .map-edge {
+    stroke: #475569;
+    stroke-width: 2;
+    opacity: .66;
+    vector-effect: non-scaling-stroke;
+  }
+
+  .map-edge.region-edge {
+    stroke: #64748b;
+    stroke-width: 2.5;
+    opacity: .72;
+  }
+
+  /* Regional maps: make topology changes obvious without changing layout. */
+  .map-edge.constellation-edge {
+    stroke: #38bdf8;
+    stroke-width: 2.4;
+    opacity: .92;
+  }
+
+  .map-exit-edge {
+    stroke: #f59e0b;
+    stroke-width: 2;
+    stroke-dasharray: 7 5;
+    opacity: .82;
+    vector-effect: non-scaling-stroke;
+  }
+
+  .map-exit-node {
+    cursor: pointer;
+  }
+
+  .map-exit-node rect {
+    fill: rgba(38, 25, 8, .94);
+    stroke: #f59e0b;
+    stroke-width: 1.6;
+    rx: 7;
+    ry: 7;
+    vector-effect: non-scaling-stroke;
+  }
+
+  .map-exit-node:hover rect {
+    stroke: #fde68a;
+    stroke-width: 2.2;
+    filter: drop-shadow(0 0 7px rgba(245, 158, 11, .38));
+  }
+
+  .map-exit-region {
+    fill: #fbbf24;
+    font-size: 10px;
+    font-weight: 800;
+    text-anchor: middle;
+    pointer-events: none;
+  }
+
+  .map-exit-system {
+    fill: #f8fafc;
+    font-size: 11px;
+    font-weight: 700;
+    text-anchor: middle;
+    pointer-events: none;
+  }
+
+  .map-constellation-boundary {
+    fill: rgba(59, 130, 246, .025);
+    stroke: rgba(96, 165, 250, .16);
+    stroke-width: 1.2;
+    stroke-dasharray: 7 7;
+    rx: 18;
+    ry: 18;
+    vector-effect: non-scaling-stroke;
+    pointer-events: none;
+  }
+
+  .map-node {
+    cursor: pointer;
+  }
+
+  .map-node rect {
+    fill: #111827;
+    stroke: #64748b;
+    stroke-width: 1.5;
+    rx: 7;
+    ry: 7;
+    vector-effect: non-scaling-stroke;
+  }
+
+  .map-node:hover rect,
+  .map-node.is-match rect {
+    stroke: #f8fafc;
+    stroke-width: 2.2;
+    filter: drop-shadow(0 0 7px rgba(147, 197, 253, .4));
+  }
+
+  .map-node text {
+    fill: #e5edf8;
+    font-size: 12px;
+    font-weight: 700;
+    text-anchor: middle;
+    dominant-baseline: middle;
+    pointer-events: none;
+  }
+
+  .map-node.region-node rect {
+    fill: #172033;
+    stroke: #7c8ba1;
+  }
+
+  .map-node.region-node text {
+    font-size: 13px;
+  }
+
+  .map-node.sec-high rect { stroke: #4ade80; }
+  .map-node.sec-low rect { stroke: #facc15; }
+  .map-node.sec-null rect { stroke: #f87171; }
+
+  .map-exit-count {
+    fill: #f59e0b !important;
+    font-size: 9px !important;
+    font-weight: 800 !important;
+  }
+
+  .map-npc-percent {
+    fill: #f8fafc !important;
+    font-size: 8px !important;
+    font-weight: 800 !important;
+    text-anchor: end !important;
+    paint-order: stroke;
+    stroke: rgba(5, 10, 18, .85);
+    stroke-width: 2.5px;
+  }
+
+  .map-group-label {
+    fill: rgba(147, 197, 253, .78);
+    font-size: 14px;
+    font-weight: 800;
+    text-anchor: middle;
+    paint-order: stroke;
+    stroke: #07101e;
+    stroke-width: 5px;
+    stroke-linejoin: round;
+    cursor: pointer;
+  }
+
+  .map-group-label:hover {
+    fill: #dbeafe;
+  }
+
+  .eve-map-side {
+    min-width: 0;
+    height: min(76vh, 860px);
+    min-height: 620px;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    border: 1px solid #263449;
+    border-radius: 18px;
+    background: rgba(10, 16, 27, .88);
+  }
+
+  .eve-map-side-head {
+    padding: 14px;
+    border-bottom: 1px solid #263449;
+  }
+
+  .eve-map-side-list {
+    overflow: auto;
+    padding: 8px;
+  }
+
+  .eve-map-side-item {
+    display: block;
+    padding: 9px 10px;
+    margin-bottom: 3px;
+    border-radius: 9px;
+    color: #dbe4f0;
+    text-decoration: none;
+  }
+
+  .eve-map-side-item:hover {
+    background: rgba(148, 163, 184, .1);
+    color: #fff;
+  }
+
+  .eve-map-side-meta {
+    display: block;
+    margin-top: 2px;
+    color: #718096;
+    font-size: .76rem;
+  }
+
+  .eve-map-tooltip {
+    position: absolute;
+    z-index: 5;
+    max-width: 290px;
+    padding: 9px 11px;
+    border: 1px solid #475569;
+    border-radius: 9px;
+    background: rgba(5, 10, 18, .96);
+    color: #dce6f2;
+    font-size: .78rem;
+    line-height: 1.4;
+    pointer-events: none;
+    box-shadow: 0 12px 30px rgba(0, 0, 0, .4);
+    display: none;
+  }
+
+  .eve-map-help {
+    position: absolute;
+    left: 12px;
+    bottom: 10px;
+    z-index: 3;
+    padding: 5px 8px;
+    border-radius: 7px;
+    background: rgba(3, 7, 18, .74);
+    color: #718096;
+    font-size: .72rem;
+    pointer-events: none;
+  }
+
+  @media (max-width: 1050px) {
+    .eve-map-grid {
+      grid-template-columns: 1fr;
+    }
+
+    .eve-map-side {
+      height: 260px;
+      min-height: 260px;
+    }
+  }
+</style>
+
+<div class="eve-map-page">
+  <div class="eve-map-head">
+    <div>
+      <div class="eve-map-breadcrumbs">
+        {% for crumb in map_payload.breadcrumbs %}
+          {% if not loop.last %}
+            <a href="{{ crumb.url }}">{{ crumb.label }}</a><span>›</span>
+          {% else %}
+            <span>{{ crumb.label }}</span>
+          {% endif %}
+        {% endfor %}
+      </div>
+      <h1 class="h3 fw-bold mb-1">MAP — {{ map_payload.title }}</h1>
+      <div class="muted-line">{{ map_payload.subtitle }}</div>
+    </div>
+
+    {% if map_payload.scope in ['region', 'constellation'] %}
+    <div class="location-view-switch" aria-label="Location view">
+      <span class="active">MAP</span>
+      {% if map_payload.scope == 'region' %}
+        <a href="/region/{{ map_payload.region_id }}">KILLBOARD</a>
+      {% else %}
+        <a href="/constellation/{{ map_payload.constellation_id }}">KILLBOARD</a>
+      {% endif %}
+    </div>
+    {% else %}
+    <div></div>
+    {% endif %}
+
+    <div class="eve-map-toolbar">
+      <button class="btn btn-sm btn-outline-secondary" type="button" id="mapZoomOut">−</button>
+      <button class="btn btn-sm btn-outline-secondary" type="button" id="mapFit">Fit</button>
+      <button class="btn btn-sm btn-outline-secondary" type="button" id="mapZoomIn">+</button>
+      {% if map_payload.scope != 'universe' %}
+        <a class="btn btn-sm btn-outline-primary" href="/map">New Eden</a>
+      {% endif %}
+    </div>
+  </div>
+
+  {% if map_payload.scope == 'universe' %}
+  <div class="eve-map-filters">
+    <div class="eve-map-filter-group" aria-label="Security filter">
+      <span class="eve-map-filter-label">Security</span>
+      <button class="eve-map-filter-btn active" type="button" data-security-filter="all">ALL</button>
+      <button class="eve-map-filter-btn" type="button" data-security-filter="hs">HS</button>
+      <button class="eve-map-filter-btn" type="button" data-security-filter="ls">LS</button>
+      <button class="eve-map-filter-btn" type="button" data-security-filter="null">0.0</button>
+    </div>
+    <div class="eve-map-faction-legend" id="mapFactionLegend"></div>
+  </div>
+  {% endif %}
+
+  <section class="content-card p-3">
+    <div class="eve-map-grid">
+      <div class="eve-map-canvas" id="eveMapCanvas">
+        <svg id="eveMapSvg" viewBox="0 0 1400 850" role="img" aria-label="EVE universe map">
+          <g id="mapViewport">
+            <g id="mapGridLayer"></g>
+            <g id="mapEdgeLayer"></g>
+            <g id="mapGroupLayer"></g>
+            <g id="mapExitLayer"></g>
+            <g id="mapNodeLayer"></g>
+          </g>
+        </svg>
+        <div class="eve-map-tooltip" id="mapTooltip"></div>
+        <div class="eve-map-help">Drag to pan · wheel to zoom · click nodes to open</div>
+      </div>
+
+      <aside class="eve-map-side">
+        <div class="eve-map-side-head">
+          <div class="fw-semibold mb-2">{{ map_payload.side_title }}</div>
+          <input id="mapSearch" class="form-control form-control-sm" type="search" placeholder="Search..." autocomplete="off">
+        </div>
+        <div class="eve-map-side-list" id="mapSideList">
+          {% for item in map_payload.side_items %}
+            <a class="eve-map-side-item" href="{{ item.url }}" data-map-side-name="{{ item.name | lower }}" data-map-side-id="{{ item.id }}" data-map-side-bands="{% if item.security_bands %}{{ item.security_bands | join(',') }}{% endif %}">
+              {{ item.name }}
+              {% if item.meta %}<span class="eve-map-side-meta">{{ item.meta }}</span>{% endif %}
+            </a>
+          {% endfor %}
+        </div>
+      </aside>
+    </div>
+  </section>
+</div>
+
+<script id="eveMapData" type="application/json">{{ map_data_json | safe }}</script>
+<script>
+(() => {
+  const dataEl = document.getElementById("eveMapData");
+  const svg = document.getElementById("eveMapSvg");
+  const viewport = document.getElementById("mapViewport");
+  const edgeLayer = document.getElementById("mapEdgeLayer");
+  const groupLayer = document.getElementById("mapGroupLayer");
+  const exitLayer = document.getElementById("mapExitLayer");
+  const nodeLayer = document.getElementById("mapNodeLayer");
+  const gridLayer = document.getElementById("mapGridLayer");
+  const canvas = document.getElementById("eveMapCanvas");
+  const tooltip = document.getElementById("mapTooltip");
+  const search = document.getElementById("mapSearch");
+  const sideList = document.getElementById("mapSideList");
+  const factionLegend = document.getElementById("mapFactionLegend");
+  const securityButtons = Array.from(document.querySelectorAll("[data-security-filter]"));
+
+  if (!dataEl || !svg || !viewport) return;
+
+  const mapData = JSON.parse(dataEl.textContent || "{}");
+  const nodes = Array.isArray(mapData.nodes) ? mapData.nodes : [];
+  const edges = Array.isArray(mapData.edges) ? mapData.edges : [];
+  const groups = Array.isArray(mapData.groups) ? mapData.groups : [];
+  const exits = Array.isArray(mapData.exits) ? mapData.exits : [];
+  const width = 1400;
+  const height = 850;
+  const padding = mapData.scope === "universe" ? 115 : 75;
+  const NS = "http://www.w3.org/2000/svg";
+
+  const nodeById = new Map(nodes.map((node) => [String(node.id), node]));
+  let dotlanRegionScale = null;
+  let dotlanRegionNodeWidth = null;
+  let dotlanRegionNodeHeight = null;
+
+  const FACTION_COLORS = {
+    500001: "#4f84c4", // Caldari State
+    500002: "#c96b3b", // Minmatar Republic
+    500003: "#d6b85d", // Amarr Empire
+    500004: "#4fa778", // Gallente Federation
+    500006: "#8fa3b8", // CONCORD / special empire space
+    500010: "#6e9e45", // Guristas Pirates
+    500011: "#9b6a4a", // Angel Cartel
+    500012: "#a33a4d", // Blood Raider Covenant
+    500014: "#8d78b8", // Outer Ring Excavations
+    500015: "#b77747", // Thukker Tribe
+    500016: "#64a9a5", // Sisters of EVE
+    500017: "#6f8fb8", // Society of Conscious Thought
+    500018: "#547d9d", // Mordu's Legion
+    500019: "#8a5db2", // Sansha's Nation
+    500020: "#438c79", // Serpentis
+    500026: "#a33a9f", // Triglavian Collective
+    500029: "#8f586f", // special/new NPC faction
+  };
+
+  function factionColor(factionId) {
+    return FACTION_COLORS[Number(factionId)] || "#64748b";
+  }
+
+  function rgba(hex, alpha) {
+    const clean = String(hex || "#64748b").replace("#", "");
+    const n = Number.parseInt(clean.length === 3 ? clean.split("").map((c) => c + c).join("") : clean, 16);
+    const r = (n >> 16) & 255;
+    const g = (n >> 8) & 255;
+    const b = n & 255;
+    return `rgba(${r},${g},${b},${Math.max(0, Math.min(1, alpha))})`;
+  }
+
+  function isNullRegion(node) {
+    const bands = Array.isArray(node.security_bands) ? node.security_bands : [];
+    return bands.length === 1 && bands[0] === "null";
+  }
+
+  function regionStyle(node) {
+    const factionId = node.dominant_faction_id;
+    if (!factionId) return {fill: "#172033", stroke: "#7c8ba1"};
+    const color = factionColor(factionId);
+    const isPochven = String(node.name || "").toLowerCase() === "pochven" || Number(factionId) === 500026;
+    let alpha = .48;
+    if (isPochven) {
+      alpha = .72;
+    } else if (isNullRegion(node)) {
+      const influence = Math.max(0, Math.min(100, Number(node.npc_control_percent || 0))) / 100;
+      // Partial NPC pockets stay subtle; fully NPC nullsec becomes strongly coloured.
+      alpha = .10 + (.66 * influence);
+    }
+    return {fill: rgba(color, alpha), stroke: color};
+  }
+
+  function drawFactionLegend() {
+    if (mapData.scope !== "universe" || !factionLegend) return;
+    const factions = new Map();
+    nodes.forEach((node) => {
+      if (!node.dominant_faction_id || !node.dominant_faction_name) return;
+      factions.set(String(node.dominant_faction_id), {
+        id: node.dominant_faction_id,
+        name: node.dominant_faction_name,
+      });
+    });
+    if (!factions.size) return;
+    const label = document.createElement("span");
+    label.className = "eve-map-filter-label";
+    label.textContent = "NPC";
+    factionLegend.appendChild(label);
+    Array.from(factions.values()).sort((a, b) => a.name.localeCompare(b.name)).forEach((faction) => {
+      const chip = document.createElement("span");
+      chip.className = "eve-map-faction-chip";
+      const swatch = document.createElement("span");
+      swatch.className = "eve-map-faction-swatch";
+      swatch.style.background = factionColor(faction.id);
+      const text = document.createElement("span");
+      text.textContent = faction.name;
+      chip.appendChild(swatch);
+      chip.appendChild(text);
+      factionLegend.appendChild(chip);
+    });
+  }
+
+  function svgEl(tag, attrs) {
+    const el = document.createElementNS(NS, tag);
+    Object.entries(attrs || {}).forEach(([key, value]) => el.setAttribute(key, value));
+    return el;
+  }
+
+  function chooseAxes() {
+    const axes = ["x", "y", "z"];
+    const variances = axes.map((axis) => {
+      if (!nodes.length) return [axis, 0];
+      const values = nodes.map((node) => Number((node.position || {})[axis] || 0));
+      const mean = values.reduce((sum, value) => sum + value, 0) / values.length;
+      const variance = values.reduce((sum, value) => sum + Math.pow(value - mean, 2), 0) / values.length;
+      return [axis, variance];
+    }).sort((a, b) => b[1] - a[1]);
+    return [variances[0][0], variances[1][0]];
+  }
+
+  // Stable universe anchors based on the canonical DOTLAN New Eden region layout.
+  // Values are normalized from DOTLAN's universe region map; they are intentionally
+  // fixed so the universe does not rotate/rearrange between loads.
+  const DOTLAN_UNIVERSE_POSITIONS = {
+    "Outer Ring": [84, 160],
+    "Fountain": [36, 271],
+    "Cloud Ring": [180, 138],
+    "Syndicate": [130, 224],
+    "Placid": [217, 178],
+    "Verge Vendor": [170, 276],
+    "Solitude": [122, 317],
+    "Aridia": [101, 398],
+    "Delve": [78, 500],
+    "Period Basis": [104, 580],
+    "Querious": [198, 521],
+    "Paragon Soul": [227, 611],
+    "Esoteria": [294, 589],
+    "Stain": [318, 551],
+    "Catch": [391, 523],
+    "Impass": [414, 568],
+    "Feythabolis": [406, 617],
+    "Omist": [475, 597],
+    "Tenerifis": [489, 547],
+    "Immensea": [472, 500],
+    "Detorid": [610, 509],
+    "Wicked Creek": [562, 467],
+    "Insmother": [653, 433],
+    "Scalding Pass": [584, 391],
+    "Great Wildlands": [570, 371],
+    "Cache": [683, 335],
+    "The Spire": [652, 253],
+    "Outer Passage": [690, 197],
+    "Cobalt Edge": [687, 110],
+    "Oasa": [654, 146],
+    "Perrigen Falls": [592, 158],
+    "Malpais": [594, 220],
+    "Etherium Reach": [537, 251],
+    "The Kalevala Expanse": [532, 188],
+    "Geminate": [481, 214],
+    "Vale of the Silent": [440, 172],
+    "The Forge": [431, 251],
+    "The Citadel": [361, 252],
+    "Lonetrek": [374, 192],
+    "Black Rise": [320, 211],
+    "Pure Blind": [306, 147],
+    "Tribute": [377, 139],
+    "Venal": [389, 102],
+    "Branch": [350, 52],
+    "Tenal": [424, 55],
+    "Deklein": [291, 72],
+    "Fade": [283, 109],
+    "Essence": [227, 244],
+    "Everyshore": [224, 303],
+    "Sinq Laison": [292, 304],
+    "Genesis": [171, 369],
+    "Kador": [227, 391],
+    "Kor-Azor": [180, 423],
+    "Domain": [286, 409],
+    "Tash-Murkon": [257, 457],
+    "Khanid": [158, 465],
+    "The Bleak Lands": [357, 379],
+    "Devoid": [355, 422],
+    "Providence": [356, 477],
+    "Derelik": [450, 408],
+    "Curse": [481, 458],
+    "Metropolis": [475, 302],
+    "Heimatar": [446, 347],
+    "Molden Heath": [505, 356],
+    "UUA-F4": [568, 110],
+    // Regions added/changed after the reference DOTLAN universe layout.
+    // Keep them fixed as well so they never perturb the canonical map.
+    "Pochven": [410, 290],
+    "Yasna Zakh": [535, 410],
+    "Exordium": [335, 335]
+  };
+
+  function applyDotlanUniverseLayout() {
+    if (mapData.scope !== "universe") return false;
+    const sourceWidth = 728;
+    const sourceHeight = 650;
+    const left = 34;
+    const top = 45;
+    const usableWidth = width - 68;
+    const usableHeight = height - 80;
+
+    nodes.forEach((node) => {
+      const anchor = DOTLAN_UNIVERSE_POSITIONS[node.name];
+      if (anchor) {
+        node._x0 = left + (anchor[0] / sourceWidth) * usableWidth;
+        node._y0 = top + (anchor[1] / sourceHeight) * usableHeight;
+        node._dotlanAnchored = true;
+      } else {
+        node._dotlanAnchored = false;
+      }
+    });
+
+    const anchored = nodes.filter((node) => node._dotlanAnchored);
+    if (!anchored.length) return false;
+
+    // Unknown future regions get a deterministic fallback near their SDE projection,
+    // but known DOTLAN anchors never move.
+    const [axisA, axisB] = chooseAxes();
+    const valuesA = nodes.map((node) => Number((node.position || {})[axisA] || 0));
+    const valuesB = nodes.map((node) => Number((node.position || {})[axisB] || 0));
+    let minA = Math.min(...valuesA), maxA = Math.max(...valuesA);
+    let minB = Math.min(...valuesB), maxB = Math.max(...valuesB);
+    if (maxA === minA) maxA = minA + 1;
+    if (maxB === minB) maxB = minB + 1;
+
+    nodes.forEach((node) => {
+      if (!node._dotlanAnchored) {
+        const a = Number((node.position || {})[axisA] || 0);
+        const b = Number((node.position || {})[axisB] || 0);
+        node._x0 = padding + ((a - minA) / (maxA - minA)) * (width - padding * 2);
+        node._y0 = padding + ((maxB - b) / (maxB - minB)) * (height - padding * 2);
+      }
+      node._x = node._x0;
+      node._y = node._y0;
+    });
+    return true;
+  }
+
+  function applyDotlanRegionLayout() {
+    if (mapData.scope !== "region") return false;
+    const meta = mapData.dotlan_layout || {};
+    if (!meta.available || !meta.complete || !Array.isArray(meta.bounds) || meta.bounds.length !== 4) return false;
+    if (!nodes.length || nodes.some((node) => !node.dotlan_position)) return false;
+
+    const [sourceLeft, sourceTop, sourceRight, sourceBottom] = meta.bounds.map(Number);
+    const sourceWidth = Math.max(1, sourceRight - sourceLeft);
+    const sourceHeight = Math.max(1, sourceBottom - sourceTop);
+    const marginX = 74;
+    const marginY = 42;
+    const scaleX = (width - marginX * 2) / sourceWidth;
+    const scaleY = (height - marginY * 2) / sourceHeight;
+    const scaleFactor = Math.min(scaleX, scaleY);
+    const usedWidth = sourceWidth * scaleFactor;
+    const usedHeight = sourceHeight * scaleFactor;
+    const offsetX = (width - usedWidth) / 2;
+    const offsetY = (height - usedHeight) / 2;
+
+    dotlanRegionScale = scaleFactor;
+    dotlanRegionNodeWidth = Math.max(36, Math.min(68, Number(meta.node_width || 36.85) * scaleFactor * .95));
+    dotlanRegionNodeHeight = Math.max(14, Math.min(26, Number(meta.node_height || 12.76) * scaleFactor * .95));
+
+    const project = (point) => ({
+      x: offsetX + (Number(point.x) - sourceLeft) * scaleFactor,
+      y: offsetY + (Number(point.y) - sourceTop) * scaleFactor,
+    });
+
+    nodes.forEach((node) => {
+      const p = project(node.dotlan_position);
+      node._x0 = p.x;
+      node._y0 = p.y;
+      node._x = p.x;
+      node._y = p.y;
+      node._dotlanAnchored = true;
+    });
+
+    exits.forEach((exit) => {
+      if (!exit.dotlan_position) return;
+      const p = project(exit.dotlan_position);
+      exit._x = p.x;
+      exit._y = p.y;
+      exit._dotlanAnchored = true;
+    });
+
+    return true;
+  }
+
+  function nodeBoxSize(node) {
+    const isRegion = mapData.scope === "universe";
+    if (!isRegion && mapData.scope === "region" && dotlanRegionNodeWidth && dotlanRegionNodeHeight) {
+      return {width: dotlanRegionNodeWidth, height: dotlanRegionNodeHeight};
+    }
+    return {
+      width: Math.max(isRegion ? 108 : 72, Math.min(isRegion ? 190 : 132, String(node.name).length * (isRegion ? 8.1 : 7.1) + 24)),
+      height: isRegion ? 34 : 28,
+    };
+  }
+
+  // Keep DOTLAN anchors/orientation, but nudge only labels that physically overlap.
+  // No springs and no global rotation: every region stays close to its canonical anchor.
+  function deOverlapUniverseLayout() {
+    if (mapData.scope !== "universe" || nodes.length < 2) return;
+
+    const gap = 12;
+    const maxDisplacement = 80;
+    const iterations = 200;
+
+    for (let iteration = 0; iteration < iterations; iteration += 1) {
+      let moved = false;
+
+      for (let i = 0; i < nodes.length; i += 1) {
+        const a = nodes[i];
+        const aBox = nodeBoxSize(a);
+
+        for (let j = i + 1; j < nodes.length; j += 1) {
+          const b = nodes[j];
+          const bBox = nodeBoxSize(b);
+          const vx = b._x - a._x;
+          const vy = b._y - a._y;
+          const overlapX = (aBox.width + bBox.width) / 2 + gap - Math.abs(vx);
+          const overlapY = (aBox.height + bBox.height) / 2 + gap - Math.abs(vy);
+
+          if (overlapX <= 0 || overlapY <= 0) continue;
+          moved = true;
+
+          // Prefer the smallest local movement. Horizontal orientation is preserved;
+          // most crowded rows are separated vertically by only a few pixels.
+          if (overlapY <= overlapX * 1.25) {
+            const sign = vy >= 0 ? 1 : -1;
+            const push = overlapY / 2 + 0.75;
+            a._y = Math.max(a._y0 - maxDisplacement, Math.min(a._y0 + maxDisplacement, a._y - sign * push));
+            b._y = Math.max(b._y0 - maxDisplacement, Math.min(b._y0 + maxDisplacement, b._y + sign * push));
+          } else {
+            const sign = vx >= 0 ? 1 : -1;
+            const push = overlapX / 2 + 0.75;
+            a._x = Math.max(a._x0 - maxDisplacement, Math.min(a._x0 + maxDisplacement, a._x - sign * push));
+            b._x = Math.max(b._x0 - maxDisplacement, Math.min(b._x0 + maxDisplacement, b._x + sign * push));
+          }
+        }
+      }
+
+      if (!moved) break;
+    }
+  }
+
+  function initialLayout() {
+    if (!nodes.length) return;
+    if (applyDotlanUniverseLayout()) return;
+    const [axisA, axisB] = chooseAxes();
+    const valuesA = nodes.map((node) => Number((node.position || {})[axisA] || 0));
+    const valuesB = nodes.map((node) => Number((node.position || {})[axisB] || 0));
+    let minA = Math.min(...valuesA), maxA = Math.max(...valuesA);
+    let minB = Math.min(...valuesB), maxB = Math.max(...valuesB);
+    if (maxA === minA) maxA = minA + 1;
+    if (maxB === minB) maxB = minB + 1;
+
+    nodes.forEach((node) => {
+      const a = Number((node.position || {})[axisA] || 0);
+      const b = Number((node.position || {})[axisB] || 0);
+      node._x0 = padding + ((a - minA) / (maxA - minA)) * (width - padding * 2);
+      node._y0 = padding + ((maxB - b) / (maxB - minB)) * (height - padding * 2);
+      node._x = node._x0;
+      node._y = node._y0;
+    });
+  }
+
+  function relaxLayout() {
+    if (nodes.length < 2) return;
+    const edgePairs = edges.map((edge) => [nodeById.get(String(edge.source)), nodeById.get(String(edge.target))]).filter((pair) => pair[0] && pair[1]);
+    const iterations = mapData.scope === "universe" ? 95 : 125;
+    const minDistance = mapData.scope === "universe" ? 132 : 78;
+    const springTarget = mapData.scope === "universe" ? 205 : 102;
+
+    for (let iteration = 0; iteration < iterations; iteration += 1) {
+      const dx = new Array(nodes.length).fill(0);
+      const dy = new Array(nodes.length).fill(0);
+
+      for (let i = 0; i < nodes.length; i += 1) {
+        for (let j = i + 1; j < nodes.length; j += 1) {
+          let vx = nodes[j]._x - nodes[i]._x;
+          let vy = nodes[j]._y - nodes[i]._y;
+          let distance = Math.sqrt(vx * vx + vy * vy) || 0.1;
+          if (distance >= minDistance) continue;
+          const push = (minDistance - distance) * 0.045;
+          vx /= distance;
+          vy /= distance;
+          dx[i] -= vx * push;
+          dy[i] -= vy * push;
+          dx[j] += vx * push;
+          dy[j] += vy * push;
+        }
+      }
+
+      edgePairs.forEach(([a, b]) => {
+        let vx = b._x - a._x;
+        let vy = b._y - a._y;
+        const distance = Math.sqrt(vx * vx + vy * vy) || 0.1;
+        const pull = (distance - springTarget) * 0.012;
+        vx /= distance;
+        vy /= distance;
+        const ai = nodes.indexOf(a);
+        const bi = nodes.indexOf(b);
+        dx[ai] += vx * pull;
+        dy[ai] += vy * pull;
+        dx[bi] -= vx * pull;
+        dy[bi] -= vy * pull;
+      });
+
+      nodes.forEach((node, i) => {
+        dx[i] += (node._x0 - node._x) * 0.018;
+        dy[i] += (node._y0 - node._y) * 0.018;
+        node._x = Math.max(padding * .5, Math.min(width - padding * .5, node._x + dx[i]));
+        node._y = Math.max(padding * .5, Math.min(height - padding * .5, node._y + dy[i]));
+      });
+    }
+  }
+
+  function normalizeVector(x, y) {
+    const length = Math.sqrt(x * x + y * y) || 1;
+    return {x: x / length, y: y / length};
+  }
+
+  function neighbourDirection(exit) {
+    const sourceAnchor = DOTLAN_UNIVERSE_POSITIONS[String(mapData.title || "")];
+    const targetAnchor = DOTLAN_UNIVERSE_POSITIONS[String(exit.target_region_name || "")];
+    if (sourceAnchor && targetAnchor) {
+      return normalizeVector(targetAnchor[0] - sourceAnchor[0], targetAnchor[1] - sourceAnchor[1]);
+    }
+
+    const sourcePos = mapData.region_position || {};
+    const targetPos = exit.target_region_position || {};
+    let dx = Number(targetPos.x || 0) - Number(sourcePos.x || 0);
+    let dy = Number(targetPos.z || 0) - Number(sourcePos.z || 0);
+    if (Math.abs(dx) + Math.abs(dy) < .000001) {
+      const sourceNode = nodeById.get(String(exit.source_system_id));
+      if (sourceNode) {
+        const centerX = nodes.reduce((sum, node) => sum + node._x, 0) / Math.max(1, nodes.length);
+        const centerY = nodes.reduce((sum, node) => sum + node._y, 0) / Math.max(1, nodes.length);
+        dx = sourceNode._x - centerX;
+        dy = sourceNode._y - centerY;
+      }
+    }
+    return normalizeVector(dx || 1, dy || 0);
+  }
+
+  function relaxRegionLayout() {
+    if (mapData.scope !== "region" || nodes.length < 2) return;
+    const indexById = new Map(nodes.map((node, index) => [String(node.id), index]));
+    const edgePairs = edges.map((edge) => [indexById.get(String(edge.source)), indexById.get(String(edge.target))])
+      .filter((pair) => pair[0] !== undefined && pair[1] !== undefined);
+
+    const groupSeed = new Map();
+    groups.forEach((group) => {
+      const members = nodes.filter((node) => String(node.constellation_id) === String(group.id));
+      if (!members.length) return;
+      groupSeed.set(String(group.id), {
+        x: members.reduce((sum, node) => sum + node._x0, 0) / members.length,
+        y: members.reduce((sum, node) => sum + node._y0, 0) / members.length,
+      });
+    });
+
+    const iterations = 230;
+    const springTarget = nodes.length > 115 ? 82 : nodes.length > 80 ? 92 : 106;
+    const maxStep = 8;
+
+    for (let iteration = 0; iteration < iterations; iteration += 1) {
+      const dx = new Array(nodes.length).fill(0);
+      const dy = new Array(nodes.length).fill(0);
+
+      for (let i = 0; i < nodes.length; i += 1) {
+        const aBox = nodeBoxSize(nodes[i]);
+        for (let j = i + 1; j < nodes.length; j += 1) {
+          const bBox = nodeBoxSize(nodes[j]);
+          let vx = nodes[j]._x - nodes[i]._x;
+          let vy = nodes[j]._y - nodes[i]._y;
+          const distance = Math.sqrt(vx * vx + vy * vy) || .1;
+          const minDistance = Math.max(72, Math.min(118, (aBox.width + bBox.width) * .42 + 24));
+          if (distance >= minDistance) continue;
+          const push = (minDistance - distance) * .052;
+          vx /= distance;
+          vy /= distance;
+          dx[i] -= vx * push;
+          dy[i] -= vy * push;
+          dx[j] += vx * push;
+          dy[j] += vy * push;
+        }
+      }
+
+      edgePairs.forEach(([ai, bi]) => {
+        const a = nodes[ai];
+        const b = nodes[bi];
+        let vx = b._x - a._x;
+        let vy = b._y - a._y;
+        const distance = Math.sqrt(vx * vx + vy * vy) || .1;
+        const pull = (distance - springTarget) * .018;
+        vx /= distance;
+        vy /= distance;
+        dx[ai] += vx * pull;
+        dy[ai] += vy * pull;
+        dx[bi] -= vx * pull;
+        dy[bi] -= vy * pull;
+      });
+
+      nodes.forEach((node, i) => {
+        const seed = groupSeed.get(String(node.constellation_id));
+        if (seed) {
+          dx[i] += (seed.x - node._x) * .0065;
+          dy[i] += (seed.y - node._y) * .0065;
+        }
+        dx[i] += (node._x0 - node._x) * .009;
+        dy[i] += (node._y0 - node._y) * .009;
+        const stepX = Math.max(-maxStep, Math.min(maxStep, dx[i]));
+        const stepY = Math.max(-maxStep, Math.min(maxStep, dy[i]));
+        node._x += stepX;
+        node._y += stepY;
+      });
+    }
+  }
+
+  function regionTransformPoint(x, y, transform) {
+    switch (transform) {
+      case 1: return {x: -y, y: x};
+      case 2: return {x: -x, y: -y};
+      case 3: return {x: y, y: -x};
+      case 4: return {x: -x, y: y};
+      case 5: return {x: -y, y: -x};
+      case 6: return {x: x, y: -y};
+      case 7: return {x: y, y: x};
+      default: return {x, y};
+    }
+  }
+
+  function orientRegionLayoutToNeighbours() {
+    if (mapData.scope !== "region" || !exits.length || nodes.length < 2) return;
+    const centerX = nodes.reduce((sum, node) => sum + node._x, 0) / nodes.length;
+    const centerY = nodes.reduce((sum, node) => sum + node._y, 0) / nodes.length;
+    const observations = exits.map((exit) => {
+      const source = nodeById.get(String(exit.source_system_id));
+      if (!source) return null;
+      const current = normalizeVector(source._x - centerX, source._y - centerY);
+      const desired = neighbourDirection(exit);
+      return {current, desired};
+    }).filter(Boolean);
+    if (!observations.length) return;
+
+    let bestTransform = 0;
+    let bestScore = -Infinity;
+    for (let transform = 0; transform < 8; transform += 1) {
+      let score = 0;
+      observations.forEach(({current, desired}) => {
+        const transformedPoint = regionTransformPoint(current.x, current.y, transform);
+        const transformed = normalizeVector(transformedPoint.x, transformedPoint.y);
+        score += transformed.x * desired.x + transformed.y * desired.y;
+      });
+      if (score > bestScore) {
+        bestScore = score;
+        bestTransform = transform;
+      }
+    }
+
+    if (bestTransform !== 0) {
+      nodes.forEach((node) => {
+        const transformed = regionTransformPoint(node._x - centerX, node._y - centerY, bestTransform);
+        node._x = centerX + transformed.x;
+        node._y = centerY + transformed.y;
+      });
+    }
+  }
+
+  function fitRegionNodes() {
+    if (mapData.scope !== "region" || !nodes.length) return;
+    const insetX = 155;
+    const insetY = 100;
+    const minX = Math.min(...nodes.map((node) => node._x));
+    const maxX = Math.max(...nodes.map((node) => node._x));
+    const minY = Math.min(...nodes.map((node) => node._y));
+    const maxY = Math.max(...nodes.map((node) => node._y));
+    const spanX = Math.max(1, maxX - minX);
+    const spanY = Math.max(1, maxY - minY);
+    const scaleFactor = Math.min((width - insetX * 2) / spanX, (height - insetY * 2) / spanY);
+    const usedW = spanX * scaleFactor;
+    const usedH = spanY * scaleFactor;
+    const offsetX = (width - usedW) / 2;
+    const offsetY = (height - usedH) / 2;
+    nodes.forEach((node) => {
+      node._x = offsetX + (node._x - minX) * scaleFactor;
+      node._y = offsetY + (node._y - minY) * scaleFactor;
+    });
+  }
+
+  function deOverlapRegionLayout() {
+    if (mapData.scope !== "region" || nodes.length < 2) return;
+    const gap = 9;
+    for (let iteration = 0; iteration < 220; iteration += 1) {
+      let moved = false;
+      for (let i = 0; i < nodes.length; i += 1) {
+        const a = nodes[i];
+        const aBox = nodeBoxSize(a);
+        for (let j = i + 1; j < nodes.length; j += 1) {
+          const b = nodes[j];
+          const bBox = nodeBoxSize(b);
+          const vx = b._x - a._x;
+          const vy = b._y - a._y;
+          const overlapX = (aBox.width + bBox.width) / 2 + gap - Math.abs(vx);
+          const overlapY = (aBox.height + bBox.height) / 2 + gap - Math.abs(vy);
+          if (overlapX <= 0 || overlapY <= 0) continue;
+          moved = true;
+          if (overlapX < overlapY) {
+            const sign = vx >= 0 ? 1 : -1;
+            const push = overlapX / 2 + .5;
+            a._x -= sign * push;
+            b._x += sign * push;
+          } else {
+            const sign = vy >= 0 ? 1 : -1;
+            const push = overlapY / 2 + .5;
+            a._y -= sign * push;
+            b._y += sign * push;
+          }
+        }
+      }
+      if (!moved) break;
+    }
+    nodes.forEach((node) => {
+      node._x = Math.max(80, Math.min(width - 80, node._x));
+      node._y = Math.max(55, Math.min(height - 55, node._y));
+    });
+  }
+
+  function layoutRegionExits() {
+    if (mapData.scope !== "region" || !exits.length) return;
+    const pendingExits = exits.filter((exit) => !exit._dotlanAnchored);
+    if (!pendingExits.length) return;
+    const center = {x: width / 2, y: height / 2};
+    const byRegion = new Map();
+    pendingExits.forEach((exit) => {
+      const key = String(exit.target_region_id);
+      if (!byRegion.has(key)) byRegion.set(key, []);
+      byRegion.get(key).push(exit);
+    });
+
+    byRegion.forEach((regionExits) => {
+      const direction = neighbourDirection(regionExits[0]);
+      const boundX = width / 2 - 72;
+      const boundY = height / 2 - 54;
+      const tx = Math.abs(direction.x) < .0001 ? Infinity : boundX / Math.abs(direction.x);
+      const ty = Math.abs(direction.y) < .0001 ? Infinity : boundY / Math.abs(direction.y);
+      const t = Math.min(tx, ty);
+      const baseX = center.x + direction.x * t;
+      const baseY = center.y + direction.y * t;
+      const tangent = {x: -direction.y, y: direction.x};
+      const spacing = Math.max(48, Math.min(82, 360 / Math.max(1, regionExits.length)));
+      regionExits.sort((a, b) => String(a.target_system_name).localeCompare(String(b.target_system_name)));
+      regionExits.forEach((exit, index) => {
+        const offset = (index - (regionExits.length - 1) / 2) * spacing;
+        exit._x = Math.max(66, Math.min(width - 66, baseX + tangent.x * offset));
+        exit._y = Math.max(38, Math.min(height - 38, baseY + tangent.y * offset));
+      });
+    });
+  }
+
+  function drawGrid() {
+    for (let x = 0; x <= width; x += 100) {
+      gridLayer.appendChild(svgEl("line", {x1: x, y1: 0, x2: x, y2: height, class: "map-grid-line"}));
+    }
+    for (let y = 0; y <= height; y += 100) {
+      gridLayer.appendChild(svgEl("line", {x1: 0, y1: y, x2: width, y2: y, class: "map-grid-line"}));
+    }
+  }
+
+  function drawEdges() {
+    edges.forEach((edge) => {
+      const source = nodeById.get(String(edge.source));
+      const target = nodeById.get(String(edge.target));
+      if (!source || !target) return;
+      const crossesConstellation = mapData.scope === "region"
+        && String(source.constellation_id ?? "") !== String(target.constellation_id ?? "");
+      edgeLayer.appendChild(svgEl("line", {
+        x1: source._x,
+        y1: source._y,
+        x2: target._x,
+        y2: target._y,
+        class: "map-edge"
+          + (mapData.scope === "universe" ? " region-edge" : "")
+          + (crossesConstellation ? " constellation-edge" : ""),
+        "data-source-id": source.id,
+        "data-target-id": target.id,
+      }));
+    });
+  }
+
+  function drawExits() {
+    if (mapData.scope !== "region" || !exits.length) return;
+    exits.forEach((exit) => {
+      const source = nodeById.get(String(exit.source_system_id));
+      if (!source || exit._x === undefined || exit._y === undefined) return;
+
+      exitLayer.appendChild(svgEl("line", {
+        x1: source._x,
+        y1: source._y,
+        x2: exit._x,
+        y2: exit._y,
+        class: "map-exit-edge",
+      }));
+
+      const labelWidth = Math.max(112, Math.min(170, Math.max(
+        String(exit.target_region_name || "").length * 7.4 + 30,
+        String(exit.target_system_name || "").length * 6.8 + 26
+      )));
+      const g = svgEl("g", {
+        class: "map-exit-node",
+        transform: `translate(${exit._x} ${exit._y})`,
+        tabindex: "0",
+      });
+      g.appendChild(svgEl("rect", {x: -labelWidth / 2, y: -20, width: labelWidth, height: 40}));
+      const regionText = svgEl("text", {x: 0, y: -5, class: "map-exit-region"});
+      regionText.textContent = `→ ${exit.target_region_name}`;
+      const systemText = svgEl("text", {x: 0, y: 10, class: "map-exit-system"});
+      systemText.textContent = exit.target_system_name;
+      g.appendChild(regionText);
+      g.appendChild(systemText);
+
+      const showExitTooltip = (event) => {
+        tooltip.innerHTML = `<strong>${escapeHtml(exit.target_region_name)}</strong><br>Gate to ${escapeHtml(exit.target_system_name)}<br><span style="color:#fbbf24">Open neighbouring region</span>`;
+        tooltip.style.display = "block";
+        const box = canvas.getBoundingClientRect();
+        tooltip.style.left = Math.min(box.width - 305, Math.max(8, event.clientX - box.left + 14)) + "px";
+        tooltip.style.top = Math.min(box.height - 130, Math.max(8, event.clientY - box.top + 14)) + "px";
+      };
+      g.addEventListener("mouseenter", showExitTooltip);
+      g.addEventListener("mousemove", showExitTooltip);
+      g.addEventListener("mouseleave", hideTooltip);
+      g.addEventListener("click", (event) => {
+        event.stopPropagation();
+        if (exit.url) window.location.href = exit.url;
+      });
+      g.addEventListener("keydown", (event) => {
+        if ((event.key === "Enter" || event.key === " ") && exit.url) window.location.href = exit.url;
+      });
+      exitLayer.appendChild(g);
+    });
+  }
+
+  function securityClass(node) {
+    if (mapData.scope === "universe" || node.security === null || node.security === undefined) return "";
+    const sec = Number(node.security);
+    if (sec >= 0.45) return " sec-high";
+    if (sec > 0) return " sec-low";
+    return " sec-null";
+  }
+
+  function tooltipText(node) {
+    if (mapData.scope === "universe") {
+      const counts = node.security_counts || {};
+      const secParts = [];
+      if (counts.hs) secParts.push(`${counts.hs} HS`);
+      if (counts.ls) secParts.push(`${counts.ls} LS`);
+      if (counts.null) secParts.push(`${counts.null} 0.0`);
+      let html = `<strong>${escapeHtml(node.name)}</strong><br>${node.system_count || 0} systems · ${node.constellation_count || 0} constellations`;
+      if (secParts.length) html += `<br>Security: ${secParts.join(" · ")}`;
+      if (node.faction_breakdown && node.faction_breakdown.length) {
+        if (isNullRegion(node)) {
+          const breakdown = node.faction_breakdown.map((item) => `${escapeHtml(item.name)} ${Number(item.percent || 0).toFixed(1)}%`).join(" · ");
+          html += `<br>NPC control: ${breakdown}`;
+        } else if (node.dominant_faction_name) {
+          html += `<br>NPC faction: ${escapeHtml(node.dominant_faction_name)}`;
+        }
+      }
+      html += `<br>${node.neighbor_count || 0} neighbouring regions`;
+      return html;
+    }
+    let html = `<strong>${escapeHtml(node.name)}</strong>`;
+    if (node.constellation_name) html += `<br>${escapeHtml(node.constellation_name)}`;
+    if (node.security !== null && node.security !== undefined) html += `<br>Security: ${Number(node.security).toFixed(2)}`;
+    html += `<br>${node.gate_count || 0} gate connections`;
+    if (node.external_neighbors && node.external_neighbors.length) {
+      html += `<br><span style="color:#fbbf24">${node.external_neighbors.length} external gate${node.external_neighbors.length > 1 ? "s" : ""}</span>`;
+    }
+    return html;
+  }
+
+  function escapeHtml(value) {
+    const div = document.createElement("div");
+    div.textContent = String(value || "");
+    return div.innerHTML;
+  }
+
+  function showTooltip(event, node) {
+    tooltip.innerHTML = tooltipText(node);
+    tooltip.style.display = "block";
+    const box = canvas.getBoundingClientRect();
+    const x = Math.min(box.width - 305, Math.max(8, event.clientX - box.left + 14));
+    const y = Math.min(box.height - 130, Math.max(8, event.clientY - box.top + 14));
+    tooltip.style.left = x + "px";
+    tooltip.style.top = y + "px";
+  }
+
+  function hideTooltip() {
+    tooltip.style.display = "none";
+  }
+
+  function drawNodes() {
+    nodes.forEach((node) => {
+      const isRegion = mapData.scope === "universe";
+      const box = nodeBoxSize(node);
+      const boxWidth = box.width;
+      const boxHeight = box.height;
+      const g = svgEl("g", {
+        class: "map-node" + (isRegion ? " region-node" : "") + securityClass(node),
+        transform: `translate(${node._x} ${node._y})`,
+        "data-node-id": node.id,
+        "data-node-name": String(node.name || "").toLowerCase(),
+        "data-security-bands": Array.isArray(node.security_bands) ? node.security_bands.join(",") : "",
+        tabindex: "0",
+      });
+      const rect = svgEl("rect", {x: -boxWidth / 2, y: -boxHeight / 2, width: boxWidth, height: boxHeight});
+      if (isRegion) {
+        const style = regionStyle(node);
+        rect.style.fill = style.fill;
+        rect.style.stroke = style.stroke;
+      }
+      const text = svgEl("text", {x: 0, y: 1});
+      if (!isRegion && mapData.scope === "region" && dotlanRegionNodeWidth) {
+        const nameLength = Math.max(1, String(node.name || "").length);
+        const maxFont = Math.max(6.2, Math.min(10.5, boxHeight * .48));
+        const fittedFont = Math.max(5.2, Math.min(maxFont, (boxWidth - 7) / (nameLength * .54)));
+        text.style.fontSize = `${fittedFont}px`;
+      }
+      text.textContent = node.name;
+      g.appendChild(rect);
+      g.appendChild(text);
+
+      if (isRegion && isNullRegion(node) && Number(node.npc_control_percent || 0) > 0 && Number(node.npc_control_percent || 0) < 99.95) {
+        const npcPct = svgEl("text", {x: boxWidth / 2 - 5, y: -boxHeight / 2 + 8, class: "map-npc-percent"});
+        npcPct.textContent = `${Math.round(Number(node.npc_control_percent || 0))}%`;
+        g.appendChild(npcPct);
+      }
+
+      if (!isRegion && node.external_neighbors && node.external_neighbors.length) {
+        const exit = svgEl("text", {x: boxWidth / 2 - 7, y: -boxHeight / 2 + 7, class: "map-exit-count"});
+        exit.textContent = "↗" + node.external_neighbors.length;
+        g.appendChild(exit);
+      }
+
+      g.addEventListener("mouseenter", (event) => showTooltip(event, node));
+      g.addEventListener("mousemove", (event) => showTooltip(event, node));
+      g.addEventListener("mouseleave", hideTooltip);
+      g.addEventListener("click", (event) => {
+        event.stopPropagation();
+        if (node.url) window.location.href = node.url;
+      });
+      g.addEventListener("keydown", (event) => {
+        if ((event.key === "Enter" || event.key === " ") && node.url) window.location.href = node.url;
+      });
+      nodeLayer.appendChild(g);
+    });
+  }
+
+  function drawGroups() {
+    if (mapData.scope !== "region" || !groups.length) return;
+    groups.forEach((group) => {
+      const members = nodes.filter((node) => String(node.constellation_id) === String(group.id));
+      if (!members.length) return;
+
+      const minX = Math.min(...members.map((node) => node._x - nodeBoxSize(node).width / 2)) - 18;
+      const maxX = Math.max(...members.map((node) => node._x + nodeBoxSize(node).width / 2)) + 18;
+      const minY = Math.min(...members.map((node) => node._y - nodeBoxSize(node).height / 2)) - 20;
+      const maxY = Math.max(...members.map((node) => node._y + nodeBoxSize(node).height / 2)) + 18;
+      const boundary = svgEl("rect", {
+        x: minX,
+        y: minY,
+        width: Math.max(50, maxX - minX),
+        height: Math.max(46, maxY - minY),
+        class: "map-constellation-boundary",
+      });
+      groupLayer.appendChild(boundary);
+
+      const x = (minX + maxX) / 2;
+      const y = minY - 7;
+      const label = svgEl("text", {x: x, y: y, class: "map-group-label"});
+      label.textContent = group.name;
+      if (group.url) {
+        label.addEventListener("click", (event) => {
+          event.stopPropagation();
+          window.location.href = group.url;
+        });
+      }
+      groupLayer.appendChild(label);
+    });
+  }
+
+  initialLayout();
+  const hasDotlanRegionLayout = applyDotlanRegionLayout();
+  // Universe keeps the canonical DOTLAN anchors. Region maps now use the fixed
+  // per-system DOTLAN page anchors when the extracted layout is complete.
+  if (mapData.scope === "universe") {
+    deOverlapUniverseLayout();
+  } else if (mapData.scope === "region") {
+    if (!hasDotlanRegionLayout) {
+      relaxRegionLayout();
+      orientRegionLayoutToNeighbours();
+      fitRegionNodes();
+      deOverlapRegionLayout();
+    }
+    layoutRegionExits();
+  } else {
+    relaxLayout();
+  }
+  drawGrid();
+  drawEdges();
+  drawGroups();
+  drawExits();
+  drawNodes();
+  drawFactionLegend();
+
+  let scale = 1;
+  let tx = 0;
+  let ty = 0;
+  let dragging = false;
+  let dragX = 0;
+  let dragY = 0;
+
+  function applyTransform() {
+    viewport.setAttribute("transform", `translate(${tx} ${ty}) scale(${scale})`);
+  }
+
+  function fitMap() {
+    scale = 1;
+    tx = 0;
+    ty = 0;
+    applyTransform();
+  }
+
+  function zoomAt(factor, clientX, clientY) {
+    const rect = svg.getBoundingClientRect();
+    const sx = ((clientX - rect.left) / rect.width) * width;
+    const sy = ((clientY - rect.top) / rect.height) * height;
+    const next = Math.max(.35, Math.min(4.5, scale * factor));
+    const ratio = next / scale;
+    tx = sx - (sx - tx) * ratio;
+    ty = sy - (sy - ty) * ratio;
+    scale = next;
+    applyTransform();
+  }
+
+  svg.addEventListener("wheel", (event) => {
+    event.preventDefault();
+    zoomAt(event.deltaY < 0 ? 1.13 : .885, event.clientX, event.clientY);
+  }, {passive: false});
+
+  svg.addEventListener("pointerdown", (event) => {
+    if (event.target.closest && event.target.closest(".map-node,.map-group-label,.map-exit-node")) return;
+    dragging = true;
+    dragX = event.clientX;
+    dragY = event.clientY;
+    svg.classList.add("dragging");
+    svg.setPointerCapture(event.pointerId);
+  });
+
+  svg.addEventListener("pointermove", (event) => {
+    if (!dragging) return;
+    const rect = svg.getBoundingClientRect();
+    tx += (event.clientX - dragX) * (width / rect.width);
+    ty += (event.clientY - dragY) * (height / rect.height);
+    dragX = event.clientX;
+    dragY = event.clientY;
+    applyTransform();
+  });
+
+  svg.addEventListener("pointerup", (event) => {
+    dragging = false;
+    svg.classList.remove("dragging");
+    if (svg.hasPointerCapture(event.pointerId)) svg.releasePointerCapture(event.pointerId);
+  });
+
+  document.getElementById("mapFit").addEventListener("click", fitMap);
+  document.getElementById("mapZoomIn").addEventListener("click", () => {
+    const rect = svg.getBoundingClientRect();
+    zoomAt(1.2, rect.left + rect.width / 2, rect.top + rect.height / 2);
+  });
+  document.getElementById("mapZoomOut").addEventListener("click", () => {
+    const rect = svg.getBoundingClientRect();
+    zoomAt(.83, rect.left + rect.width / 2, rect.top + rect.height / 2);
+  });
+
+  let activeSecurityFilter = "all";
+
+  function matchesSecurityBands(bandsText) {
+    if (mapData.scope !== "universe" || activeSecurityFilter === "all") return true;
+    const bands = String(bandsText || "").split(",").filter(Boolean);
+    return bands.includes(activeSecurityFilter);
+  }
+
+  function applyFilters() {
+    const q = (search.value || "").trim().toLowerCase();
+    const visibleIds = new Set();
+
+    nodeLayer.querySelectorAll(".map-node").forEach((el) => {
+      const securityMatch = matchesSecurityBands(el.dataset.securityBands || "");
+      const nameMatch = !q || (el.dataset.nodeName || "").includes(q);
+      const visible = securityMatch;
+      el.style.display = visible ? "" : "none";
+      el.classList.toggle("is-match", !!q && nameMatch && securityMatch);
+      el.style.opacity = visible && q && !nameMatch ? ".24" : "1";
+      if (visible) visibleIds.add(String(el.dataset.nodeId));
+    });
+
+    edgeLayer.querySelectorAll(".map-edge").forEach((el) => {
+      if (mapData.scope !== "universe") return;
+      const visible = visibleIds.has(String(el.dataset.sourceId)) && visibleIds.has(String(el.dataset.targetId));
+      el.style.display = visible ? "" : "none";
+    });
+
+    sideList.querySelectorAll("[data-map-side-name]").forEach((el) => {
+      const securityMatch = matchesSecurityBands(el.dataset.mapSideBands || "");
+      const nameMatch = !q || (el.dataset.mapSideName || "").includes(q);
+      el.style.display = securityMatch && nameMatch ? "block" : "none";
+    });
+  }
+
+  securityButtons.forEach((button) => {
+    button.addEventListener("click", () => {
+      activeSecurityFilter = button.dataset.securityFilter || "all";
+      securityButtons.forEach((item) => item.classList.toggle("active", item === button));
+      applyFilters();
+    });
+  });
+
+  search.addEventListener("input", applyFilters);
+})();
+</script>
+{% endblock %}

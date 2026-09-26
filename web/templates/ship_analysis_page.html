@@ -1,0 +1,15 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-start gap-3 mb-4">
+  <div>
+    <h1 class="h3 fw-bold mb-1">EntitiesINTEL — Ship Analysis</h1>
+    <div class="muted-line">Build ship activity series without a preset selection.</div>
+  </div>
+  <a class="btn btn-outline-secondary btn-sm" href="/entities/ship">Back to Ships</a>
+</div>
+
+<section class="content-card p-3 p-md-4">
+  {% include "ship_analysis.html" %}
+</section>
+{% endblock %}

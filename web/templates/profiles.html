@@ -1,0 +1,291 @@
+{% extends "base.html" %}
+
+{% block content %}
+<style>
+  .profiles-search-shell {
+    max-width: 980px;
+    margin: 7vh auto 0;
+  }
+  .profiles-search-title {
+    font-size: clamp(2rem, 4vw, 4rem);
+    font-weight: 900;
+    letter-spacing: -0.04em;
+  }
+  .profiles-search-box {
+    position: relative;
+  }
+  .profiles-search-input {
+    height: 68px;
+    font-size: 1.35rem;
+    border-radius: 22px;
+    padding-left: 1.35rem;
+    padding-right: 1.35rem;
+  }
+  .profiles-search-results {
+    position: absolute;
+    top: calc(100% + 10px);
+    left: 0;
+    right: 0;
+    z-index: 1000;
+    background: #0b1220;
+    border: 1px solid rgba(148, 163, 184, 0.25);
+    border-radius: 18px;
+    box-shadow: 0 18px 50px rgba(0, 0, 0, 0.45);
+    overflow: hidden;
+    display: none;
+  }
+  .profiles-search-results.show {
+    display: block;
+  }
+  .profiles-search-result {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    padding: 13px 16px;
+    color: #e5eefb;
+    text-decoration: none;
+    border-bottom: 1px solid rgba(148, 163, 184, 0.10);
+  }
+  .profiles-search-result:last-child {
+    border-bottom: 0;
+  }
+  .profiles-search-result:hover,
+  .profiles-search-result.active {
+    background: rgba(13, 110, 253, 0.18);
+    color: #fff;
+  }
+  .profiles-search-result img {
+    width: 44px;
+    height: 44px;
+    border-radius: 50%;
+    object-fit: cover;
+    background: rgba(255,255,255,0.06);
+    flex: 0 0 auto;
+  }
+  .profiles-search-name {
+    font-weight: 800;
+    line-height: 1.1;
+  }
+  .profiles-search-type {
+    color: var(--muted);
+    font-size: .86rem;
+    line-height: 1.1;
+  }
+</style>
+
+<section class="profiles-search-shell">
+  <div class="text-center mb-4">
+    <h1 class="profiles-search-title mb-2">Profiles</h1>
+    <div class="muted-line">Search character, corporation or alliance profiles.</div>
+  </div>
+
+  <div class="profiles-search-box" data-profiles-search>
+    <input
+      class="form-control profiles-search-input"
+      data-profiles-search-input
+      type="search"
+      placeholder="Search a character, corporation or alliance..."
+      aria-label="Search profiles"
+      autocomplete="off"
+      autofocus>
+    <div class="profiles-search-results" data-profiles-search-results></div>
+  </div>
+</section>
+
+<script>
+  (() => {
+    const root = document.querySelector("[data-profiles-search]");
+    if (!root) {
+      throw new Error("Profiles search root missing");
+    }
+
+    const input = root.querySelector("[data-profiles-search-input]");
+    const resultsBox = root.querySelector("[data-profiles-search-results]");
+    if (!input || !resultsBox) {
+      throw new Error("Profiles search targets missing");
+    }
+
+    let debounceTimer = null;
+    let lastResults = [];
+    let selectedIndex = -1;
+    let lastQueryId = 0;
+
+    const escapeHtml = (value) => String(value ?? "")
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#039;");
+
+    const showBox = () => resultsBox.classList.add("show");
+    const hideBox = () => resultsBox.classList.remove("show");
+
+    const clearResults = () => {
+      lastResults = [];
+      selectedIndex = -1;
+      resultsBox.innerHTML = "";
+      hideBox();
+    };
+
+    const normalizeResults = (payload) => {
+      const raw = payload && Array.isArray(payload.results) ? payload.results : [];
+      return raw
+        .filter((item) => ["character", "corporation", "alliance"].includes(item.entity_type))
+        .map((item) => ({
+          label: item.label || item.name || "Unknown",
+          subtitle: item.subtitle || item.entity_type || "Profile",
+          url: item.url || "",
+          image_url: item.image_url || "",
+        }))
+        .filter((item) => item.url);
+    };
+
+    const setActive = () => {
+      resultsBox.querySelectorAll(".profiles-search-result").forEach((node, index) => {
+        node.classList.toggle("active", index === selectedIndex);
+      });
+    };
+
+    const renderResults = (items) => {
+      lastResults = items || [];
+      selectedIndex = -1;
+
+      if (!lastResults.length) {
+        resultsBox.innerHTML = '<div class="px-3 py-3 muted-line">No result</div>';
+        showBox();
+        return;
+      }
+
+      resultsBox.innerHTML = lastResults.map((item, index) => `
+        <a class="profiles-search-result" href="${escapeHtml(item.url)}" data-index="${index}">
+          ${item.image_url ? `<img src="${escapeHtml(item.image_url)}" alt="" loading="lazy" onerror="this.style.display='none'">` : ""}
+          <span>
+            <span class="profiles-search-name">${escapeHtml(item.label)}</span>
+            <span class="profiles-search-type">${escapeHtml(item.subtitle)}</span>
+          </span>
+        </a>
+      `).join("");
+
+      resultsBox.querySelectorAll(".profiles-search-result").forEach((node) => {
+        node.addEventListener("mousedown", (event) => {
+          event.preventDefault();
+          window.location.href = node.getAttribute("href");
+        });
+      });
+
+      showBox();
+    };
+
+    const searchProfiles = async (limit) => {
+      const q = input.value.trim();
+      if (!q) {
+        clearResults();
+        return [];
+      }
+
+      const queryId = ++lastQueryId;
+      const url = `/api/entity-search?q=${encodeURIComponent(q)}&limit=${encodeURIComponent(limit)}`;
+
+      try {
+        const response = await fetch(url, {
+          method: "GET",
+          headers: {"Accept": "application/json"},
+          credentials: "same-origin",
+          cache: "no-store",
+        });
+
+        if (queryId !== lastQueryId) return [];
+
+        const text = await response.text();
+        if (!response.ok) {
+          resultsBox.innerHTML = '<div class="px-3 py-3 text-danger">Erreur 500</div>';
+          showBox();
+          return [];
+        }
+
+        let payload = {};
+        try {
+          payload = JSON.parse(text || "{}");
+        } catch (error) {
+          resultsBox.innerHTML = '<div class="px-3 py-3 text-danger">Erreur 500</div>';
+          showBox();
+          return [];
+        }
+
+        return normalizeResults(payload);
+      } catch (error) {
+        if (queryId !== lastQueryId) return [];
+        resultsBox.innerHTML = '<div class="px-3 py-3 text-danger">Erreur 500</div>';
+        showBox();
+        return [];
+      }
+    };
+
+    const refreshSuggestions = async () => {
+      const items = await searchProfiles(8);
+      renderResults(items);
+    };
+
+    const scheduleSuggestions = () => {
+      window.clearTimeout(debounceTimer);
+      if (!input.value.trim()) {
+        clearResults();
+        return;
+      }
+      debounceTimer = window.setTimeout(refreshSuggestions, 350);
+    };
+
+    const goToSelectedOrFirst = async () => {
+      window.clearTimeout(debounceTimer);
+
+      if (lastResults.length) {
+        const index = selectedIndex >= 0 ? selectedIndex : 0;
+        window.location.href = lastResults[index].url;
+        return;
+      }
+
+      const items = await searchProfiles(1);
+      if (items.length) {
+        window.location.href = items[0].url;
+        return;
+      }
+      renderResults([]);
+    };
+
+    input.addEventListener("input", scheduleSuggestions);
+    input.addEventListener("focus", () => {
+      if (lastResults.length) showBox();
+      else if (input.value.trim()) scheduleSuggestions();
+    });
+
+    input.addEventListener("keydown", (event) => {
+      if (event.key === "Escape") {
+        clearResults();
+        return;
+      }
+      if (event.key === "ArrowDown") {
+        if (!lastResults.length) return;
+        event.preventDefault();
+        selectedIndex = Math.min(selectedIndex + 1, lastResults.length - 1);
+        setActive();
+        return;
+      }
+      if (event.key === "ArrowUp") {
+        if (!lastResults.length) return;
+        event.preventDefault();
+        selectedIndex = Math.max(selectedIndex - 1, 0);
+        setActive();
+        return;
+      }
+      if (event.key === "Enter") {
+        event.preventDefault();
+        goToSelectedOrFirst();
+      }
+    });
+
+    document.addEventListener("click", (event) => {
+      if (!root.contains(event.target)) hideBox();
+    });
+  })();
+</script>
+{% endblock %}

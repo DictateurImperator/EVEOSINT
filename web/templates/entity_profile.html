@@ -1,0 +1,1625 @@
+{% extends "base.html" %}
+
+{% block content %}
+{% macro entity_image_url(entity_type, entity_id, size=128) -%}
+{% if entity_type == 'character' or entity_type == 'player' %}https://images.evetech.net/characters/{{ entity_id }}/portrait?size={{ size }}{% elif entity_type == 'corporation' %}https://images.evetech.net/corporations/{{ entity_id }}/logo?size={{ size }}{% elif entity_type == 'alliance' %}https://images.evetech.net/alliances/{{ entity_id }}/logo?size={{ size }}{% endif %}
+{%- endmacro %}
+{% macro location_preview_svg(entity_type, entity_id) -%}
+{% set preview = location_previews.get(entity_type ~ ':' ~ entity_id) %}
+{% if preview %}
+<svg class="eveosint-profile-map-preview" viewBox="0 0 100 100" aria-hidden="true">
+  {% if preview.kind == 'system' %}
+    <circle cx="50" cy="50" r="20" class="mini-orbit"></circle>
+    <circle cx="50" cy="50" r="34" class="mini-orbit"></circle>
+    <circle cx="50" cy="50" r="46" class="mini-orbit"></circle>
+  {% endif %}
+  {% for edge in preview.edges %}
+    <line x1="{{ edge.x1 }}" y1="{{ edge.y1 }}" x2="{{ edge.x2 }}" y2="{{ edge.y2 }}" class="mini-edge"></line>
+  {% endfor %}
+  {% for node in preview.nodes %}
+    {% if preview.kind == 'system' %}
+      <circle cx="{{ node.x }}" cy="{{ node.y }}" r="{% if node.kind == 'star' %}5.5{% elif node.kind == 'gate' %}2.8{% else %}3.3{% endif %}" class="mini-node mini-{{ node.kind }}"></circle>
+    {% else %}
+      <circle cx="{{ node.x }}" cy="{{ node.y }}" r="{% if preview.kind == 'region' %}1.45{% else %}2.8{% endif %}" class="mini-node"></circle>
+    {% endif %}
+  {% endfor %}
+</svg>
+{% else %}
+<span class="eveosint-profile-image eveosint-profile-placeholder">{{ entity_type[:1]|upper }}</span>
+{% endif %}
+{%- endmacro %}
+{% macro entity_profile_block(entity_type, entity_id, name, subtitle, ticker=None, url=None, image_url=None, population_summary=None) -%}
+{% set final_image_url = image_url if image_url is not none else entity_image_url(entity_type, entity_id, 128) %}
+<div class="eveosint-profile-block">
+  {% if url %}<a class="text-decoration-none" href="{{ url }}">{% endif %}
+  {% if final_image_url %}
+  <img class="eveosint-profile-image" src="{{ final_image_url }}" alt="" loading="lazy" onerror="this.style.display='none'">
+  {% elif entity_type in ['system', 'constellation', 'region'] %}
+  {{ location_preview_svg(entity_type, entity_id) }}
+  {% else %}
+  <span class="eveosint-profile-image eveosint-profile-placeholder">{{ subtitle[:1] }}</span>
+  {% endif %}
+  {% if url %}</a>{% endif %}
+  <div class="eveosint-profile-text">
+    <div class="muted-line mb-1">{{ subtitle }}</div>
+    {% if url %}<a class="eveosint-profile-name text-decoration-none" href="{{ url }}">{{ name }}</a>{% else %}<div class="eveosint-profile-name">{{ name }}</div>{% endif %}
+    {% if ticker %}
+      {% if url %}<a class="eveosint-profile-ticker text-decoration-none" href="{{ url }}">{{ ticker }}</a>{% else %}<span class="eveosint-profile-ticker">{{ ticker }}</span>{% endif %}
+    {% endif %}
+    {% if population_summary and population_summary.display %}
+      <div class="eveosint-profile-population"{% if population_summary.snapshot_date %} title="Population snapshot {{ population_summary.snapshot_date }} · DOTLAN"{% endif %}>{{ population_summary.display }}</div>
+    {% endif %}
+  </div>
+</div>
+{%- endmacro %}
+{% macro small_entity(entity) -%}
+{% if entity %}
+<a class="killmail-entity text-decoration-none" href="{{ entity.url }}">
+  <span>{{ entity.name }}</span>{% if entity.ticker %}<span class="muted-line"> [{{ entity.ticker }}]</span>{% endif %}
+</a>
+{% else %}
+<span class="muted-line">Unknown</span>
+{% endif %}
+{%- endmacro %}
+{% macro entity_icon(entity) -%}
+{% if entity %}
+<a href="{{ entity.url }}" class="text-decoration-none">
+  <img class="killmail-entity-icon" src="{{ entity.image_url }}" alt="" loading="lazy" onerror="this.style.display='none'">
+</a>
+{% else %}
+<div class="killmail-entity-icon killmail-empty-icon"></div>
+{% endif %}
+{%- endmacro %}
+{% macro type_icon(item, css_class='killmail-type-icon') -%}
+{% if item and item.image_url %}
+<img class="{{ css_class }}" src="{{ item.image_url }}" alt="" title="{{ item.name }}" loading="lazy" onerror="this.style.display='none'">
+{% else %}
+<div class="{{ css_class }} killmail-empty-icon"></div>
+{% endif %}
+{%- endmacro %}
+<style>
+  .eveosint-profile-grid {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(260px, 1fr));
+    gap: 1.5rem;
+    align-items: start;
+  }
+  .eveosint-profile-block {
+    color: #f8fafc;
+    display: inline-flex;
+    align-items: center;
+    gap: 1rem;
+    min-height: 72px;
+  }
+  a.eveosint-profile-name:hover {
+    color: #b9e3ff;
+    text-decoration: underline !important;
+  }
+  .eveosint-profile-image {
+    width: 72px;
+    height: 72px;
+    border-radius: 50%;
+    object-fit: cover;
+    background: rgba(255,255,255,0.06);
+    flex: 0 0 auto;
+  }
+  .eveosint-profile-map-preview {
+    width: 72px;
+    height: 72px;
+    border-radius: 12px;
+    background: radial-gradient(circle at 50% 50%, rgba(30,41,59,.45), rgba(7,12,21,.98));
+    border: 1px solid rgba(100,116,139,.42);
+    flex: 0 0 auto;
+    overflow: hidden;
+  }
+  .eveosint-profile-map-preview .mini-edge { stroke: rgba(100,116,139,.62); stroke-width: 1.2; vector-effect: non-scaling-stroke; }
+  .eveosint-profile-map-preview .mini-node { fill: #93c5fd; stroke: #dbeafe; stroke-width: .55; vector-effect: non-scaling-stroke; }
+  .eveosint-profile-map-preview .mini-orbit { fill: none; stroke: rgba(100,116,139,.28); stroke-width: .75; vector-effect: non-scaling-stroke; }
+  .eveosint-profile-map-preview .mini-star { fill: #fbbf24; stroke: #fde68a; }
+  .eveosint-profile-map-preview .mini-planet { fill: #94a3b8; stroke: #e2e8f0; }
+  .eveosint-profile-map-preview .mini-gate { fill: #f59e0b; stroke: #fde68a; }
+  .eveosint-profile-placeholder {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    color: #bae6fd;
+    font-weight: 900;
+    font-size: 1.4rem;
+  }
+  .eveosint-profile-text {
+    min-width: 0;
+    line-height: 1.2;
+  }
+  .eveosint-profile-name {
+    color: #7cc7ff;
+    font-size: 1.35rem;
+    font-weight: 700;
+    display: block;
+  }
+  .eveosint-profile-ticker {
+    color: #b9e3ff;
+    font-size: 0.95rem;
+    font-weight: 600;
+    display: inline-block;
+    margin-top: 0.15rem;
+  }
+  .eveosint-profile-ticker:hover {
+    color: #e0f2fe;
+    text-decoration: underline !important;
+  }
+  .eveosint-profile-population {
+    color: #94a3b8;
+    font-size: 0.86rem;
+    font-weight: 600;
+    margin-top: 0.28rem;
+    line-height: 1.35;
+  }
+  .eveosint-profile-slot {
+    min-width: 0;
+    justify-self: start;
+  }
+  .eveosint-profile-slot.align-center {
+    justify-self: center;
+  }
+  .eveosint-profile-slot.align-right {
+    justify-self: center;
+  }
+  .killmail-table-wrap {
+    overflow-x: auto;
+  }
+  .killmail-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.92rem;
+  }
+  .killmail-table th {
+    color: rgba(255,255,255,0.78);
+    font-weight: 700;
+    text-align: left;
+    border-bottom: 1px solid rgba(255,255,255,0.18);
+    padding: 0.45rem 0.55rem;
+    white-space: nowrap;
+  }
+  .killmail-table td {
+    border-bottom: 1px solid rgba(255,255,255,0.10);
+    padding: 0.35rem 0.55rem;
+    vertical-align: middle;
+  }
+  .killmail-date-row td {
+    background: rgba(0,0,0,0.55);
+    color: rgba(255,255,255,0.78);
+    font-weight: 800;
+    font-style: italic;
+    padding: 0.45rem 0.55rem;
+  }
+  .killmail-row-kill {
+    background: rgba(0, 90, 20, 0.34);
+  }
+  .killmail-row-loss {
+    background: rgba(120, 0, 0, 0.42);
+  }
+  .killmail-time-cell {
+    white-space: nowrap;
+    width: 86px;
+  }
+  .killmail-status {
+    display: inline-block;
+    width: 1.1rem;
+    font-weight: 900;
+  }
+  .killmail-status-kill {
+    color: #9fd49f;
+  }
+  .killmail-status-loss {
+    color: #fca5a5;
+  }
+  .killmail-isk {
+    color: #22d3ee;
+    display: block;
+    margin-left: 1.1rem;
+    margin-top: 0.1rem;
+  }
+  .killmail-ship-cell {
+    width: 84px;
+    min-width: 84px;
+  }
+  .killmail-ship-box {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .killmail-type-icon {
+    width: 64px;
+    height: 64px;
+    border-radius: 0.45rem;
+    object-fit: cover;
+    background: rgba(255,255,255,0.08);
+    flex: 0 0 auto;
+  }
+  .killmail-pilot-icons {
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+  }
+  .killmail-pilot-icon {
+    width: 44px;
+    height: 44px;
+    border-radius: 0.45rem;
+    object-fit: cover;
+    background: rgba(255,255,255,0.08);
+    flex: 0 0 auto;
+  }
+  .killmail-pilot-cell {
+    min-width: 155px;
+  }
+  .killmail-pilot-box {
+    display: flex;
+    align-items: center;
+    gap: 0.55rem;
+  }
+  .killmail-damage {
+    white-space: nowrap;
+    line-height: 1.2;
+  }
+  .killmail-damage-main {
+    font-weight: 800;
+    color: #f8fafc;
+  }
+  .killmail-damage-percent {
+    color: #22d3ee;
+    font-size: 0.86rem;
+  }
+  .killmail-entity-box {
+    display: flex;
+    align-items: center;
+    gap: 0.55rem;
+    min-width: 260px;
+  }
+  .history-entity-icon {
+    width: 34px;
+    height: 34px;
+    object-fit: contain;
+    border-radius: 6px;
+    flex: 0 0 auto;
+  }
+  .history-share {
+    font-size: 0.72rem;
+    line-height: 1.1;
+    opacity: 0.72;
+    margin-top: 0.15rem;
+  }
+  .killmail-entity-icon {
+    width: 56px;
+    height: 56px;
+    border-radius: 0.45rem;
+    object-fit: cover;
+    background: rgba(255,255,255,0.08);
+    flex: 0 0 auto;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .killmail-main-icon-stack {
+    position: relative;
+    width: 64px;
+    height: 56px;
+    flex: 0 0 auto;
+  }
+  .killmail-main-icon-stack > .text-decoration-none:first-child .killmail-entity-icon,
+  .killmail-main-icon-stack > .killmail-entity-icon:first-child {
+    position: absolute;
+    left: 0;
+    top: 0;
+  }
+  .killmail-secondary-entity-icon {
+    position: absolute;
+    right: 0;
+    bottom: -3px;
+    width: 24px;
+    height: 24px;
+    border-radius: 0.3rem;
+    object-fit: cover;
+    background: rgba(2, 6, 23, 0.92);
+    border: 1px solid rgba(148, 163, 184, 0.45);
+  }
+  .killmail-portrait-icon {
+    width: 24px;
+    height: 24px;
+    border-radius: 0.3rem;
+    object-fit: cover;
+    background: rgba(255,255,255,0.08);
+    flex: 0 0 auto;
+  }
+  .killmail-stack-portrait-icon {
+    position: absolute;
+    left: 0;
+    bottom: -3px;
+    width: 24px;
+    height: 24px;
+    border-radius: 0.3rem;
+    object-fit: cover;
+    background: rgba(2, 6, 23, 0.92);
+    border: 1px solid rgba(148, 163, 184, 0.45);
+  }
+  .killmail-character-line {
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+  }
+  .killmail-empty-icon {
+    background: rgba(255,255,255,0.06);
+  }
+  .killmail-entity-lines {
+    line-height: 1.35;
+    min-width: 0;
+  }
+  .killmail-entity {
+    color: #22d3ee;
+    font-weight: 600;
+  }
+  .killmail-entity:hover {
+    color: #7dd3fc;
+    text-decoration: underline !important;
+  }
+  .killmail-location {
+    color: #22d3ee;
+    min-width: 210px;
+    line-height: 1.28;
+  }
+  .killmail-location-row {
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+    margin: 0.08rem 0;
+  }
+  .killmail-location-icon {
+    width: 20px;
+    height: 20px;
+    border-radius: 0.3rem;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex: 0 0 auto;
+    background: rgba(255,255,255,0.08);
+    color: #bae6fd;
+    font-weight: 800;
+    font-size: 0.7rem;
+  }
+  .killmail-location-icon img {
+    width: 20px;
+    height: 20px;
+    border-radius: 0.3rem;
+    object-fit: cover;
+  }
+  .killmail-external-link {
+    color: #7cc7ff;
+    font-size: 0.82rem;
+  }
+  @media (max-width: 991.98px) {
+    .eveosint-profile-grid {
+      grid-template-columns: 1fr;
+      gap: 1rem;
+    }
+    .eveosint-profile-slot.align-right,
+    .eveosint-profile-slot.align-center {
+      justify-self: start;
+    }
+  }
+
+  .advanced-kill-search { border:1px solid rgba(148,163,184,.2); border-radius:16px; background:rgba(2,6,23,.42); overflow:hidden; }
+  .advanced-kill-search-panel { display:none; padding:1rem; border-top:1px solid rgba(148,163,184,.16); }
+  .advanced-kill-search.open .advanced-kill-search-panel { display:block; }
+  .advanced-filter-grid { display:grid; grid-template-columns:repeat(3,minmax(180px,1fr)); gap:.8rem; }
+  .advanced-selected-list { display:flex; flex-wrap:wrap; gap:.35rem; min-height:32px; }
+  .advanced-chip { display:inline-flex; align-items:center; gap:.35rem; padding:.25rem .5rem; border:1px solid rgba(125,211,252,.3); border-radius:999px; background:rgba(14,116,144,.15); }
+  .advanced-chip button { border:0; background:transparent; color:#fca5a5; padding:0; }
+  .advanced-search-results { position:absolute; z-index:30; left:0; right:0; top:100%; background:#0b1220; border:1px solid rgba(148,163,184,.3); max-height:240px; overflow:auto; }
+  .advanced-search-result { display:flex; gap:.5rem; align-items:center; padding:.5rem; cursor:pointer; }
+  .advanced-search-result:hover { background:rgba(13,110,253,.18); }
+  .advanced-search-result img { width:28px; height:28px; object-fit:contain; }
+  .ship-filter-modal { position:fixed; inset:0; z-index:11000; display:none; background:rgba(0,0,0,.82); padding:3vh 3vw; }
+  .ship-filter-modal.open { display:flex; align-items:flex-start; justify-content:center; }
+  .ship-filter-dialog { width:min(1500px,94vw); max-height:94vh; overflow:auto; background:#090f19; border:1px solid rgba(148,163,184,.3); border-radius:18px; padding:1rem; box-shadow:0 24px 80px rgba(0,0,0,.55); }
+  .ship-filter-tabs { display:flex; flex-wrap:wrap; gap:.45rem; padding:.25rem 0 .75rem; border-bottom:1px solid rgba(148,163,184,.16); }
+  .ship-filter-tab { min-width:44px; min-height:44px; border-radius:999px; display:inline-flex; align-items:center; justify-content:center; gap:.35rem; }
+  .ship-filter-panels { margin-top:1rem; }
+  .ship-filter-panel { display:none; }
+  .ship-filter-panel.active { display:block; }
+  .ship-filter-size-row { margin-top:1rem; }
+  .ship-filter-size-title { margin-bottom:.55rem; padding:.42rem .65rem; border:1px solid rgba(13,110,253,.35); border-radius:10px; background:rgba(13,110,253,.12); color:#dbeafe; font-weight:900; text-transform:uppercase; letter-spacing:.04em; text-align:center; }
+  .ship-filter-group { margin-bottom:.75rem; border:1px solid rgba(148,163,184,.16); border-radius:14px; background:rgba(15,23,42,.52); overflow:hidden; }
+  .ship-filter-group-title { padding:.48rem .7rem; color:#cbd5e1; font-weight:800; border-bottom:1px solid rgba(148,163,184,.14); background:rgba(2,6,23,.42); }
+  .ship-filter-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(205px,1fr)); gap:.45rem; padding:.55rem; }
+  .ship-choice { display:grid; grid-template-columns:auto 48px minmax(0,1fr); align-items:center; gap:.55rem; min-height:64px; padding:.5rem; border:1px solid rgba(148,163,184,.15); border-radius:10px; background:rgba(2,6,23,.34); cursor:pointer; }
+  .ship-choice:hover { border-color:rgba(96,165,250,.48); background:rgba(13,110,253,.10); }
+  .ship-choice.selected { border-color:rgba(34,197,94,.56); background:rgba(22,101,52,.17); }
+  .ship-choice input { width:18px; height:18px; }
+  .ship-choice img { width:48px; height:48px; object-fit:contain; background:rgba(255,255,255,.05); border-radius:.4rem; }
+  .ship-choice-name { min-width:0; font-weight:700; color:#e5eefb; }
+  .ship-choice-meta { color:#94a3b8; font-size:.72rem; margin-top:.15rem; }
+  .ship-filter-empty { padding:1rem; color:#94a3b8; }
+  @media(max-width:900px){.advanced-filter-grid{grid-template-columns:1fr;}}
+  .system-profile-head { display:grid; grid-template-columns:minmax(0,1fr) auto minmax(0,1fr); align-items:start; gap:18px; }
+  .system-view-switch { display:inline-flex; align-items:center; gap:4px; justify-self:center; padding:4px; border:1px solid #334155; border-radius:13px; background:rgba(10,16,27,.96); box-shadow:0 8px 26px rgba(0,0,0,.28); }
+  .system-view-switch a, .system-view-switch span { min-width:118px; padding:9px 16px; border-radius:9px; text-align:center; text-decoration:none; font-size:.86rem; font-weight:900; letter-spacing:.045em; text-transform:uppercase; }
+  .system-view-switch a { color:#93c5fd; border:1px solid transparent; }
+  .system-view-switch a:hover { color:#fff; background:rgba(37,99,235,.18); border-color:rgba(96,165,250,.45); }
+  .system-view-switch .active { color:#fff; background:#0d6efd; border:1px solid #60a5fa; box-shadow:0 0 18px rgba(13,110,253,.24); }
+  .sde-type-link { color:#7dd3fc; text-decoration:none; font-weight:700; }
+  .sde-type-link:hover { color:#bae6fd; text-decoration:underline; }
+  .sde-details-description { color:#cbd5e1; line-height:1.55; margin-top:1rem; }
+  .sde-details-description p:last-child { margin-bottom:0; }
+  .sde-details-section { border-top:1px solid rgba(148,163,184,.16); padding-top:1rem; margin-top:1.25rem; }
+  .sde-details-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(210px,1fr)); gap:.75rem; }
+  .sde-details-field { border:1px solid rgba(148,163,184,.18); background:rgba(15,23,42,.45); border-radius:.65rem; padding:.75rem .85rem; min-width:0; }
+  .sde-details-label { color:#94a3b8; font-size:.76rem; font-weight:700; letter-spacing:.04em; text-transform:uppercase; margin-bottom:.2rem; }
+  .sde-details-value { color:#f8fafc; font-size:.95rem; font-weight:700; overflow-wrap:anywhere; }
+  .sde-details-raw-id { color:#64748b; font-size:.74rem; font-weight:500; margin-left:.35rem; }
+  .sde-details-trait { border-left:3px solid rgba(59,130,246,.7); padding-left:.85rem; margin-bottom:1rem; }
+  .sde-details-trait:last-child { margin-bottom:0; }
+  .sde-details-trait-title { color:#bfdbfe; font-weight:800; margin-bottom:.35rem; }
+  .sde-details-bonus { color:#cbd5e1; margin:.2rem 0; }
+  .sde-details-bonus-value { color:#22d3ee; font-weight:800; margin-right:.3rem; }
+  .sde-details-category { border:1px solid rgba(148,163,184,.16); border-radius:.75rem; overflow:hidden; margin-top:.9rem; background:rgba(15,23,42,.26); }
+  .sde-details-category:first-child { margin-top:0; }
+  .sde-details-category-header { display:flex; flex-wrap:wrap; align-items:baseline; justify-content:space-between; gap:.5rem 1rem; padding:.65rem .8rem; border-bottom:1px solid rgba(148,163,184,.16); background:rgba(30,41,59,.48); }
+  .sde-details-category-title { color:#bfdbfe; font-weight:800; }
+  .sde-details-category-count { color:#64748b; font-size:.76rem; }
+  .sde-details-table-wrap { overflow-x:auto; }
+  .sde-details-table { width:100%; border-collapse:collapse; font-size:.9rem; }
+  .sde-details-table th { color:#94a3b8; font-size:.76rem; font-weight:800; letter-spacing:.04em; text-transform:uppercase; text-align:left; border-bottom:1px solid rgba(148,163,184,.22); padding:.55rem .65rem; white-space:nowrap; }
+  .sde-details-table td { border-bottom:1px solid rgba(148,163,184,.10); padding:.5rem .65rem; vertical-align:middle; }
+  .sde-details-attribute-cell { display:flex; align-items:center; gap:.6rem; min-width:250px; }
+  .sde-details-attribute-icon { width:32px; height:32px; flex:0 0 32px; object-fit:contain; border-radius:.25rem; background:rgba(255,255,255,.04); }
+  .sde-details-attribute-name { color:#f8fafc; font-weight:700; }
+  .sde-details-attribute-meta { color:#64748b; font-size:.74rem; margin-top:.1rem; }
+  .sde-details-value-cell { color:#22d3ee; font-weight:800; white-space:nowrap; }
+  .sde-details-unit { color:#94a3b8; white-space:nowrap; }
+  @media(max-width:900px){ .system-profile-head{grid-template-columns:1fr;} .system-view-switch{justify-self:start;} }
+</style>
+<div class="{% if profile and profile.entity_type in ['system', 'constellation', 'region'] %}system-profile-head{% else %}d-flex justify-content-between align-items-start{% endif %} mb-4">
+  <div>
+    <h1 class="h3 fw-bold mb-1">EVE Entity Profile</h1>
+    <div class="muted-line">Public entity sheet.</div>
+  </div>
+  {% if profile and profile.entity_type in ['system', 'constellation', 'region'] %}
+    <div class="system-view-switch" aria-label="Location view">
+      <a href="/map/{{ profile.entity_type }}/{{ profile.entity_id }}">MAP</a>
+      <span class="active">KILLBOARD</span>
+    </div>
+    <div></div>
+  {% endif %}
+</div>
+
+{% if error %}
+  <div class="alert alert-danger py-2">{{ error }}</div>
+{% endif %}
+
+{% if profile and not error %}
+  <section class="content-card p-3 p-md-4 mb-4">
+    <div class="eveosint-profile-grid mb-3">
+      <div class="eveosint-profile-slot">
+        <div>
+          {{ entity_profile_block(profile.entity_type, profile.entity_id, profile.name, profile.subtitle, profile.ticker, None, profile.image_url, alliance_population_summary if profile.entity_type == 'alliance' else (corporation_population_summary if profile.entity_type == 'corporation' else None)) }}
+          {% if profile.entity_type == 'character' and profile_tab == 'history' %}
+          <div id="character-history-birth-date" class="muted-line mt-1" style="padding-left: 88px;">Loading history…</div>
+          {% endif %}
+        </div>
+      </div>
+
+      {% if profile.entity_type == 'character' %}
+        {% if profile.current_corporation %}
+        <div class="eveosint-profile-slot align-center">
+          <div>
+            {{ entity_profile_block(profile.current_corporation.entity_type, profile.current_corporation.entity_id, profile.current_corporation.name, 'Corporation', profile.current_corporation.ticker, profile.current_corporation.url) }}
+            {% if profile_tab == 'history' %}
+            <div id="character-history-corporation-since" class="muted-line mt-1" style="padding-left: 88px;"></div>
+            {% endif %}
+          </div>
+        </div>
+        {% endif %}
+        {% if profile.current_alliance %}
+        <div class="eveosint-profile-slot align-right">
+          <div>
+            {{ entity_profile_block(profile.current_alliance.entity_type, profile.current_alliance.entity_id, profile.current_alliance.name, 'Alliance', profile.current_alliance.ticker, profile.current_alliance.url) }}
+            {% if profile_tab == 'history' %}
+            <div id="character-history-alliance-since" class="muted-line mt-1" style="padding-left: 88px;"></div>
+            {% endif %}
+          </div>
+        </div>
+        {% elif profile_tab == 'history' %}
+        <div class="eveosint-profile-slot align-right" id="character-history-no-alliance"></div>
+        {% endif %}
+      {% elif profile.entity_type == 'corporation' %}
+        {% if profile_tab == 'history' %}
+        <div class="eveosint-profile-slot align-center" id="corporation-history-profile-summary">
+          <div class="d-flex align-items-center gap-2 muted-line py-2">
+            <span class="spinner-border spinner-border-sm" aria-hidden="true"></span>
+            <span>Loading history…</span>
+          </div>
+        </div>
+        {% endif %}
+        {% if profile.current_alliance %}
+        <div class="eveosint-profile-slot align-right" style="grid-column: 3;">
+          <div>
+            {{ entity_profile_block(profile.current_alliance.entity_type, profile.current_alliance.entity_id, profile.current_alliance.name, 'Alliance', profile.current_alliance.ticker, profile.current_alliance.url) }}
+            {% if profile_tab == 'history' %}
+            <div id="corporation-history-alliance-since" class="muted-line mt-1" style="padding-left: 100px;"></div>
+            {% endif %}
+          </div>
+        </div>
+        {% endif %}
+      {% elif profile.entity_type == 'system' %}
+        {% if profile.current_constellation %}
+        <div class="eveosint-profile-slot align-center">
+          {{ entity_profile_block(profile.current_constellation.entity_type, profile.current_constellation.entity_id, profile.current_constellation.name, 'Constellation', None, profile.current_constellation.url, profile.current_constellation.image_url) }}
+        </div>
+        {% endif %}
+        {% if profile.current_region %}
+        <div class="eveosint-profile-slot align-right">
+          {{ entity_profile_block(profile.current_region.entity_type, profile.current_region.entity_id, profile.current_region.name, 'Region', None, profile.current_region.url, profile.current_region.image_url) }}
+        </div>
+        {% endif %}
+      {% elif profile.entity_type == 'constellation' and profile.current_region %}
+        <div class="eveosint-profile-slot align-right" style="grid-column: 3;">
+          {{ entity_profile_block(profile.current_region.entity_type, profile.current_region.entity_id, profile.current_region.name, 'Region', None, profile.current_region.url, profile.current_region.image_url) }}
+        </div>
+      {% endif %}
+    </div>
+
+    {% if profile.entity_type in ['weapon', 'skill', 'commodity'] and profile.sde_details %}
+      {% set sde = profile.sde_details %}
+
+      {% if sde.description %}
+        <div class="sde-details-description">{{ sde.description | safe }}</div>
+      {% endif %}
+
+      {% if sde.traits %}
+        <div class="sde-details-section">
+          <h2 class="h6 fw-bold mb-3">Bonuses</h2>
+          {% for trait in sde.traits %}
+            <div class="sde-details-trait">
+              <div class="sde-details-trait-title">
+                {% if trait.skill_url %}<a class="sde-type-link" href="{{ trait.skill_url }}">{{ trait.label }}</a>{% else %}{{ trait.label }}{% endif %}
+                {% if trait.skill_type_id %}<span class="sde-details-raw-id">#{{ trait.skill_type_id }}</span>{% endif %}
+              </div>
+              {% for bonus in trait.bonuses %}
+                <div class="sde-details-bonus">
+                  {% if bonus.bonus_value_text is not none %}
+                    <span class="sde-details-bonus-value">{{ bonus.bonus_value_text }}{% if bonus.unit_name %} {{ bonus.unit_name }}{% endif %}</span>
+                  {% endif %}
+                  {{ bonus.bonus_text_html | safe if bonus.bonus_text_html else bonus.bonus_text }}
+                </div>
+              {% endfor %}
+            </div>
+          {% endfor %}
+        </div>
+      {% endif %}
+
+      {% if sde.info %}
+        <div class="sde-details-section">
+          <h2 class="h6 fw-bold mb-3">SDE information</h2>
+          <div class="sde-details-grid">
+            {% for item in sde.info %}
+              <div class="sde-details-field">
+                <div class="sde-details-label">{{ item.label }}</div>
+                <div class="sde-details-value">
+                  {{ item.value }}{% if item.unit %} {{ item.unit }}{% endif %}
+                  {% if item.raw_id and item.label != 'Type ID' %}<span class="sde-details-raw-id">#{{ item.raw_id }}</span>{% endif %}
+                </div>
+              </div>
+            {% endfor %}
+          </div>
+        </div>
+      {% endif %}
+
+      <div class="sde-details-section">
+        <div class="d-flex flex-wrap justify-content-between align-items-end gap-2 mb-2">
+          <h2 class="h6 fw-bold mb-0">Dogma attributes</h2>
+          <div class="muted-line">{{ sde.dogma_attributes_count }} attribute{% if sde.dogma_attributes_count != 1 %}s{% endif %} from SDE.</div>
+        </div>
+        {% if sde.attribute_categories %}
+          {% for category in sde.attribute_categories %}
+            <div class="sde-details-category">
+              <div class="sde-details-category-header"{% if category.description %} title="{{ category.description }}"{% endif %}>
+                <div class="sde-details-category-title">{{ category.name }}{% if category.category_id is not none %}<span class="sde-details-raw-id">#{{ category.category_id }}</span>{% endif %}</div>
+                <div class="sde-details-category-count">{{ category.attributes | length }} attribute{% if category.attributes | length != 1 %}s{% endif %}</div>
+              </div>
+              <div class="sde-details-table-wrap">
+                <table class="sde-details-table">
+                  <thead><tr><th>Attribute</th><th>Value</th><th>Unit</th></tr></thead>
+                  <tbody>
+                    {% for attr in category.attributes %}
+                      <tr{% if attr.description %} title="{{ attr.description }}"{% endif %}>
+                        <td>
+                          <div class="sde-details-attribute-cell">
+                            {% if attr.icon_url %}<img class="sde-details-attribute-icon" src="{{ attr.icon_url }}" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.style.display='none'">{% endif %}
+                            <div>
+                              <div class="sde-details-attribute-name">{{ attr.display_name }}</div>
+                              <div class="sde-details-attribute-meta">{% if attr.internal_name and attr.internal_name != attr.display_name %}{{ attr.internal_name }} · {% endif %}#{{ attr.attribute_id }}{% if attr.icon_id %} · icon #{{ attr.icon_id }}{% endif %}{% if attr.published %} · published{% endif %}</div>
+                            </div>
+                          </div>
+                        </td>
+                        <td class="sde-details-value-cell">{{ attr.value_text if attr.value_text is not none else attr.value }}</td>
+                        <td class="sde-details-unit">{{ attr.unit_name or '—' }}</td>
+                      </tr>
+                    {% endfor %}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          {% endfor %}
+        {% else %}
+          <div class="muted-line">No Dogma attributes found in SDE for this type.</div>
+        {% endif %}
+      </div>
+    {% elif profile.entity_type not in ['character', 'corporation', 'alliance', 'system', 'constellation', 'region'] %}
+      <div class="muted-line">No SDE details found for this type.</div>
+    {% endif %}
+  </section>
+
+  {% if profile.entity_type in ['system', 'constellation', 'region'] and profile_tab == 'killboard' %}
+  <section class="content-card p-3 p-md-4 mb-4">
+    <div class="d-flex justify-content-between align-items-start mb-3">
+      <div>
+        <h2 class="h5 fw-bold mb-1">Killboard</h2>
+        <div class="muted-line">All killmails in this {{ profile.entity_type }} — every row is shown as a kill.</div>
+      </div>
+    </div>
+    {% set killboard_context_family = 'zone' %}
+    {% set killboard_context_type = profile.entity_type %}
+    {% set killboard_context_id = profile.entity_id %}
+    {% include "killboard_filters.html" %}
+    <div id="entity-killmails"
+         data-killmail-url="/api/location/{{ profile.entity_type }}/{{ profile.entity_id }}/killmails"
+         data-location-context="1">
+      {% include "entity_killmails_fragment.html" %}
+    </div>
+  </section>
+  {% elif profile.entity_type in ['character', 'corporation', 'alliance'] and profile_tab == 'killboard' %}
+  <section class="content-card p-3 p-md-4 mb-4">
+    <div class="d-flex justify-content-between align-items-start mb-3">
+      <div>
+        <h2 class="h5 fw-bold mb-1">Killboard</h2>
+        <div class="muted-line">Killmails ordered by time, 100 per page.</div>
+      </div>
+    </div>
+
+    {% set killboard_context_family = 'entity' %}
+    {% set killboard_context_type = profile.entity_type %}
+    {% set killboard_context_id = profile.entity_id %}
+    {% include "killboard_filters.html" %}
+
+    {% if profile.entity_type == 'character' %}
+      {% set killmail_url = '/api/character/' ~ profile.entity_id ~ '/killmails' %}
+    {% elif profile.entity_type == 'corporation' %}
+      {% set killmail_url = '/api/corporation/' ~ profile.entity_id ~ '/killmails' %}
+    {% elif profile.entity_type == 'alliance' %}
+      {% set killmail_url = '/api/alliance/' ~ profile.entity_id ~ '/killmails' %}
+    {% endif %}
+
+    <div id="entity-killmails" data-killmail-url="{{ killmail_url }}">
+      <div class="muted-line">Loading killmails…</div>
+    </div>
+  </section>
+
+  <script>
+    (function () {
+      var root = document.getElementById('entity-killmails');
+      if (!root) return;
+
+      var killmailUrl = root.getAttribute('data-killmail-url');
+      if (!killmailUrl) {
+        root.innerHTML = '<div class="alert alert-danger py-2">Erreur 500</div>';
+        return;
+      }
+
+      var activeRequest = null;
+      var searchGeneration = 0;
+      var killmailMode = 'api';
+      var isLocationContext = root.dataset.locationContext === '1';
+      var advancedParams = new URLSearchParams();
+      var linkedParams = new URLSearchParams(window.location.search || '');
+      [
+        'participation','date_from','date_to',
+        'affiliation_corporation_ids','affiliation_alliance_ids',
+        'involved_corporation_ids','involved_alliance_ids','involved_role',
+        'type_ids','type_role','module_type_ids',
+        'builder_ship_include','builder_ship_exclude',
+        'builder_entity_include','builder_entity_exclude',
+        'builder_zone_include','builder_zone_exclude'
+      ].forEach(function(key){
+        linkedParams.getAll(key).forEach(function(value){ advancedParams.append(key, value); });
+      });
+
+      function escapeHtml(value) {
+        return String(value || '')
+          .replace(/&/g, '&amp;')
+          .replace(/</g, '&lt;')
+          .replace(/>/g, '&gt;')
+          .replace(/"/g, '&quot;')
+          .replace(/'/g, '&#039;');
+      }
+
+      function currentMonthIso() {
+        var now = new Date();
+        return now.getFullYear() + '-' + String(now.getMonth() + 1).padStart(2, '0') + '-01';
+      }
+
+      function progressiveFilterActive(params, participation) {
+        if (participation && participation !== 'both') return true;
+        var active = false;
+        params.forEach(function(value, key) {
+          if ([
+            'date_from','date_to',
+            'affiliation_corporation_ids','affiliation_alliance_ids',
+            'involved_corporation_ids','involved_alliance_ids','involved_role',
+            'type_ids','type_role','module_type_ids',
+            'builder_ship_include','builder_ship_exclude',
+            'builder_entity_include','builder_entity_exclude',
+            'builder_zone_include','builder_zone_exclude'
+          ].includes(key)) {
+            if (value !== '' && !(key === 'involved_role' && value === 'both') && !(key === 'type_role' && value === 'both')) {
+              active = true;
+            }
+          }
+        });
+        return active;
+      }
+
+      function monthLabel(isoMonth) {
+        if (!isoMonth) return 'unknown month';
+        var parts = String(isoMonth).split('-');
+        var value = new Date(Number(parts[0]), Number(parts[1]) - 1, 1);
+        try {
+          return new Intl.DateTimeFormat(undefined, {month:'long', year:'numeric'}).format(value);
+        } catch (_) {
+          return isoMonth;
+        }
+      }
+
+      function rowCount(container) {
+        return container.querySelectorAll('.killmail-row-kill, .killmail-row-loss').length;
+      }
+
+      function progressiveMeta(container) {
+        var status = container.querySelector('[data-killmail-progressive-status]');
+        var more = container.querySelector('[data-killmail-load-more]');
+        return {
+          status: status,
+          more: more,
+          scanned: status ? Number(status.dataset.kbScannedEstimate || '0') : 0,
+          scannedMonth: status ? (status.dataset.kbScannedMonth || '') : '',
+          complete: status ? status.dataset.kbScanComplete === '1' : !more,
+          next: more ? {
+            before: more.getAttribute('data-scan-before') || '',
+            month: more.getAttribute('data-scan-month') || '',
+            row: more.getAttribute('data-scan-row') || ''
+          } : null
+        };
+      }
+
+      function writeProgress(totalScanned, totalFound, meta) {
+        var status = root.querySelector('[data-killmail-progressive-status]');
+        if (!status) return;
+        var text = status.querySelector('[data-killmail-scan-text]');
+        if (!text) return;
+        var label = '≈ ' + Number(totalScanned || 0).toLocaleString()
+          + ' KM scanned · ' + Number(totalFound || 0).toLocaleString()
+          + ' result' + (Number(totalFound || 0) === 1 ? '' : 's');
+        if (meta && meta.scannedMonth) label += ' · reached ' + monthLabel(meta.scannedMonth);
+        if (meta && meta.complete) label += ' · end of search';
+        text.textContent = label;
+      }
+
+
+      function abortRequest() {
+        if (activeRequest) {
+          activeRequest.abort();
+          activeRequest = null;
+        }
+      }
+
+      function appendProgressiveChunk(html) {
+        var wrapper = document.createElement('div');
+        wrapper.innerHTML = html;
+        var currentBody = root.querySelector('.killmail-table tbody');
+        var newBody = wrapper.querySelector('.killmail-table tbody');
+        if (!currentBody || !newBody) {
+          root.innerHTML = html;
+          return;
+        }
+
+        var hadKillRows = !!currentBody.querySelector('.killmail-row-kill, .killmail-row-loss');
+        var emptyRow = currentBody.querySelector('.killmail-empty-result');
+        if (emptyRow) emptyRow.remove();
+        if (hadKillRows) {
+          var newEmptyRow = newBody.querySelector('.killmail-empty-result');
+          if (newEmptyRow) newEmptyRow.remove();
+        }
+
+        var oldDates = currentBody.querySelectorAll('.killmail-date-row');
+        var lastOldDate = oldDates.length ? oldDates[oldDates.length - 1].getAttribute('data-killmail-date') : null;
+        var firstNewDate = newBody.querySelector('.killmail-date-row');
+        if (firstNewDate && lastOldDate && firstNewDate.getAttribute('data-killmail-date') === lastOldDate) {
+          firstNewDate.remove();
+        }
+
+        while (newBody.firstChild) currentBody.appendChild(newBody.firstChild);
+
+        var oldStatus = root.querySelector('[data-killmail-progressive-status]');
+        var newStatus = wrapper.querySelector('[data-killmail-progressive-status]');
+        if (oldStatus && newStatus) oldStatus.replaceWith(newStatus);
+        else if (newStatus) root.appendChild(newStatus);
+      }
+
+      function normalLoad(page) {
+        searchGeneration += 1;
+        abortRequest();
+
+        var params = new URLSearchParams(advancedParams.toString());
+        params.set('page', page || '1');
+        params.set('mode', killmailMode);
+        var url = killmailUrl + '?' + params.toString();
+
+        root.innerHTML = '<div class="muted-line">Loading killmails…</div>';
+        var request = new XMLHttpRequest();
+        activeRequest = request;
+        request.open('GET', url, true);
+        request.withCredentials = true;
+        request.onreadystatechange = function () {
+          if (request.readyState !== 4) return;
+          if (activeRequest === request) activeRequest = null;
+          if (request.status >= 200 && request.status < 300) {
+            root.innerHTML = request.responseText;
+            return;
+          }
+          root.innerHTML = '<div class="alert alert-danger py-2">Erreur '
+            + escapeHtml(request.status) + '</div>';
+        };
+        request.onerror = function () {
+          root.innerHTML = '<div class="alert alert-danger py-2">Erreur réseau</div>';
+        };
+        request.send();
+      }
+
+      function progressiveLoad(cursor) {
+        searchGeneration += 1;
+        var generation = searchGeneration;
+        abortRequest();
+
+        root.innerHTML = '<div class="muted-line">Preparing monthly search…</div>';
+
+        var found = 0;
+        var scanned = 0;
+        var nextCursor = cursor || {month: currentMonthIso(), before:'', row:''};
+
+        function requestSlice() {
+          if (generation !== searchGeneration || !nextCursor) return;
+
+          var remaining = Math.max(1, 100 - found);
+          var params = new URLSearchParams(advancedParams.toString());
+          params.set('mode', killmailMode);
+          params.set('remaining', String(remaining));
+          params.set('scan_month', nextCursor.month || currentMonthIso());
+          if (nextCursor.before) params.set('scan_before', nextCursor.before);
+          if (nextCursor.row) params.set('scan_row', nextCursor.row);
+
+          var url = killmailUrl + '?' + params.toString();
+          var request = new XMLHttpRequest();
+          activeRequest = request;
+          request.open('GET', url, true);
+          request.withCredentials = true;
+
+          request.onreadystatechange = function () {
+            if (request.readyState !== 4) return;
+            if (generation !== searchGeneration) return;
+            if (activeRequest === request) activeRequest = null;
+
+            if (!(request.status >= 200 && request.status < 300)) {
+              root.insertAdjacentHTML('beforeend',
+                '<div class="alert alert-danger py-2">Erreur '
+                + escapeHtml(request.status) + '</div>');
+              return;
+            }
+
+            var wrapper = document.createElement('div');
+            wrapper.innerHTML = request.responseText;
+            var beforeCount = rowCount(root);
+
+            if (!root.querySelector('.killmail-table')) root.innerHTML = request.responseText;
+            else appendProgressiveChunk(request.responseText);
+
+            var afterCount = rowCount(root);
+            found += Math.max(0, afterCount - beforeCount);
+
+            var meta = progressiveMeta(wrapper);
+            scanned += Number(meta.scanned || 0);
+            nextCursor = meta.next;
+            writeProgress(scanned, found, meta);
+
+            if (found >= 100 || meta.complete || !nextCursor) return;
+            window.setTimeout(requestSlice, 0);
+          };
+
+          request.onerror = function () {
+            if (generation !== searchGeneration) return;
+            root.insertAdjacentHTML('beforeend',
+              '<div class="alert alert-danger py-2">Erreur réseau</div>');
+          };
+          request.send();
+        }
+
+        requestSlice();
+      }
+
+      function reloadKillboard() {
+        var participation = advancedParams.get('participation') || 'both';
+        if (killmailMode === 'api' && progressiveFilterActive(advancedParams, participation)) {
+          progressiveLoad(null);
+        } else {
+          normalLoad('1');
+        }
+      }
+
+      root.addEventListener('click', function (event) {
+        var modeTarget = event.target.closest ? event.target.closest('[data-killmail-mode]') : null;
+        if (modeTarget && root.contains(modeTarget)) {
+          event.preventDefault();
+          killmailMode = modeTarget.getAttribute('data-killmail-mode') || 'api';
+          reloadKillboard();
+          return;
+        }
+
+        var participationTarget = event.target.closest ? event.target.closest('[data-killmail-participation]') : null;
+        if (participationTarget && root.contains(participationTarget)) {
+          event.preventDefault();
+          var participation = participationTarget.getAttribute('data-killmail-participation') || 'both';
+          if (participation === 'both') advancedParams.delete('participation');
+          else advancedParams.set('participation', participation);
+          reloadKillboard();
+          return;
+        }
+
+        var moreTarget = event.target.closest ? event.target.closest('[data-killmail-load-more]') : null;
+        if (moreTarget && root.contains(moreTarget)) {
+          event.preventDefault();
+          progressiveLoad({
+            before: moreTarget.getAttribute('data-scan-before') || '',
+            month: moreTarget.getAttribute('data-scan-month') || currentMonthIso(),
+            row: moreTarget.getAttribute('data-scan-row') || ''
+          });
+          return;
+        }
+
+        var target = event.target.closest ? event.target.closest('[data-killmail-page]') : null;
+        if (target && root.contains(target)) {
+          event.preventDefault();
+          normalLoad(target.getAttribute('data-killmail-page') || '1');
+        }
+      });
+
+      var filterRoot = document.querySelector('[data-killboard-filters]');
+      if (filterRoot) {
+        filterRoot.addEventListener('killboard:apply', function(event){
+          var participation = advancedParams.get('participation');
+          advancedParams = new URLSearchParams(
+            event.detail && event.detail.params ? event.detail.params.toString() : ''
+          );
+          if (participation) advancedParams.set('participation', participation);
+          reloadKillboard();
+        });
+      }
+
+      if (!isLocationContext || progressiveFilterActive(advancedParams, advancedParams.get('participation') || 'both')) {
+        reloadKillboard();
+      }
+    })();
+  </script>
+  {% elif profile.entity_type in ['alliance', 'corporation'] and profile_tab == 'population' %}
+    {% include "entity_population.html" %}
+  {% elif profile.entity_type == 'character' and profile_tab == 'history' %}
+    <div id="character-history-root"
+         data-history-url="/api/character/{{ profile.entity_id }}/history"
+         data-kills-url="/api/character/{{ profile.entity_id }}/history/kills">
+      <div class="card bg-transparent border-secondary-subtle mb-3">
+        <div class="card-body">
+          <div class="d-flex justify-content-between align-items-start gap-3 flex-wrap mb-3">
+            <div>
+              <h2 class="h5 fw-bold mb-1">History</h2>
+              <div class="muted-line">Corporation / alliance affiliation periods with global kill activity during each period.</div>
+            </div>
+          </div>
+
+          <div data-history-content>
+            <div class="d-flex align-items-center gap-2 muted-line py-2">
+              <span class="spinner-border spinner-border-sm" aria-hidden="true"></span>
+              <span>Loading history…</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <script>
+      (function () {
+        const root = document.getElementById('character-history-root');
+        if (!root) return;
+
+        const content = root.querySelector('[data-history-content]');
+        const url = root.getAttribute('data-history-url');
+        const killsUrl = root.getAttribute('data-kills-url');
+
+        function escapeHtml(value) {
+          return String(value == null ? '' : value)
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#039;');
+        }
+
+        function historyEntityIcon(entityType, entityId, name) {
+          if (!entityId) return '';
+          const collection = entityType === 'corporation' ? 'corporations' : 'alliances';
+          return '<img class="history-entity-icon" src="https://images.evetech.net/'
+            + collection + '/' + encodeURIComponent(entityId) + '/logo?size=64"'
+            + ' alt="" title="' + escapeHtml(name || '') + '" loading="lazy"'
+            + ' onerror="this.style.display=\'none\'">';
+        }
+
+        function corporationCell(row) {
+          if (!row.corporation_id) return '<span class="muted-line">Unknown corporation</span>';
+          let text = '<a class="text-decoration-none fw-semibold" href="/corporation/'
+            + encodeURIComponent(row.corporation_id)
+            + '">' + escapeHtml(row.corporation_name || 'Unknown corporation') + '</a>';
+          if (row.corporation_ticker) text += '<div class="muted-line">[' + escapeHtml(row.corporation_ticker) + ']</div>';
+          if (row.corporation_deleted) text += '<div><span class="badge text-bg-secondary mt-1">Closed</span></div>';
+          return '<div class="d-flex align-items-center gap-2">'
+            + historyEntityIcon('corporation', row.corporation_id, row.corporation_name)
+            + '<div>' + text + '</div></div>';
+        }
+
+        function allianceCell(row) {
+          if (!row.alliance_id) return '<span class="fw-semibold">No alliance</span>';
+          let text = '<a class="text-decoration-none fw-semibold" href="/alliance/'
+            + encodeURIComponent(row.alliance_id)
+            + '">' + escapeHtml(row.alliance_name || 'Unknown alliance') + '</a>';
+          if (row.alliance_ticker) text += '<div class="muted-line">[' + escapeHtml(row.alliance_ticker) + ']</div>';
+          if (row.alliance_deleted) text += '<div><span class="badge text-bg-secondary mt-1">Closed</span></div>';
+          return '<div class="d-flex align-items-center gap-2">'
+            + historyEntityIcon('alliance', row.alliance_id, row.alliance_name)
+            + '<div>' + text + '</div></div>';
+        }
+
+        function numericHistoryValue(value) {
+          if (value === null || value === undefined || value === '') return null;
+          const numericValue = Number(value);
+          return Number.isFinite(numericValue) ? numericValue : null;
+        }
+
+        function historyShare(value, total) {
+          const numericValue = numericHistoryValue(value);
+          if (numericValue === null || !Number.isFinite(total) || total <= 0) return '';
+          const percent = (numericValue * 100) / total;
+          if (numericValue > 0 && percent > 0 && percent < 0.1) return '&lt;0.1%';
+          return percent.toFixed(1) + '%';
+        }
+
+        function historyDateDay(value) {
+          if (!value) return null;
+          const parts = String(value).slice(0, 10).split('-').map(Number);
+          if (parts.length !== 3 || parts.some(function (part) { return !Number.isFinite(part); })) return null;
+          return Math.floor(Date.UTC(parts[0], parts[1] - 1, parts[2]) / 86400000);
+        }
+
+        function historyTodayDay() {
+          const now = new Date();
+          return Math.floor(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()) / 86400000);
+        }
+
+        function historyDurationDays(row) {
+          const start = historyDateDay(row.start_date);
+          if (start === null) return null;
+          const end = row.current ? historyTodayDay() : historyDateDay(row.end_date);
+          if (end === null) return null;
+          return Math.max(0, end - start);
+        }
+
+        function historyDurationCell(days, totalDays) {
+          if (days === null || days === undefined) return '—';
+          const share = totalDays > 0 ? historyShare(days, totalDays) : '';
+          return '<div>' + escapeHtml(days) + ' day' + (days === 1 ? '' : 's') + '</div>'
+            + (share ? '<div class="history-share">' + share + '</div>' : '');
+        }
+
+        function renderProfileSummary(data) {
+          const birth = document.getElementById('character-history-birth-date');
+          if (birth) {
+            birth.innerHTML = data && data.birth_date
+              ? 'Birth date <span class="text-light fw-semibold">' + escapeHtml(data.birth_date) + '</span>'
+              : 'Birth date —';
+          }
+          const corporationSince = document.getElementById('character-history-corporation-since');
+          if (corporationSince) corporationSince.innerHTML = data && data.current_corporation && data.current_corporation.since ? 'since ' + escapeHtml(data.current_corporation.since) : '';
+          const allianceSince = document.getElementById('character-history-alliance-since');
+          if (allianceSince) allianceSince.innerHTML = data && data.current_alliance && data.current_alliance.since ? 'since ' + escapeHtml(data.current_alliance.since) : '';
+          const noAlliance = document.getElementById('character-history-no-alliance');
+          if (noAlliance) {
+            noAlliance.innerHTML = data && data.no_alliance_since
+              ? '<div class="eveosint-profile-text"><div class="muted-line mb-1">Alliance</div><div class="fw-semibold">No alliance</div><div class="muted-line mt-1">since ' + escapeHtml(data.no_alliance_since) + '</div></div>'
+              : '';
+          }
+        }
+
+        function killCellHtml(row, field, showShare, total) {
+          if (row._killState === 'loading') return '<span class="muted-line"><span class="spinner-border spinner-border-sm me-1" aria-hidden="true"></span>Calculating…</span>';
+          if (row._killState === 'waiting') return '<span class="muted-line">Waiting…</span>';
+          if (row._killState === 'unavailable') return '<span class="muted-line">No data</span>';
+          if (row._killState === 'failed') return '<span class="text-danger">Failed</span>';
+          const raw = field === 'inflicted' ? row.kills_inflicted : row.kills_suffered;
+          const display = field === 'inflicted' ? row.kills_inflicted_display : row.kills_suffered_display;
+          const share = showShare ? historyShare(raw, total) : '';
+          return '<div>' + escapeHtml(display || '—') + '</div>'
+            + (share ? '<div class="history-share">' + share + '</div>' : '');
+        }
+
+        function refreshKillCells(rows, showShares) {
+          const totalInflicted = rows.reduce(function (sum, row) {
+            const value = numericHistoryValue(row.kills_inflicted);
+            return sum + (value === null ? 0 : value);
+          }, 0);
+          const totalSuffered = rows.reduce(function (sum, row) {
+            const value = numericHistoryValue(row.kills_suffered);
+            return sum + (value === null ? 0 : value);
+          }, 0);
+          rows.forEach(function (row, index) {
+            const inflicted = document.getElementById('character-history-kills-inflicted-' + index);
+            const suffered = document.getElementById('character-history-kills-suffered-' + index);
+            if (inflicted) inflicted.innerHTML = killCellHtml(row, 'inflicted', showShares, totalInflicted);
+            if (suffered) suffered.innerHTML = killCellHtml(row, 'suffered', showShares, totalSuffered);
+          });
+        }
+
+        async function loadKillPeriods(rows) {
+          const progress = root.querySelector('[data-kill-progress]');
+          let processed = 0;
+          for (let index = 0; index < rows.length; index += 1) {
+            const row = rows[index];
+            row._killState = 'loading';
+            refreshKillCells(rows, false);
+            if (progress) progress.textContent = 'Kill statistics: ' + processed + ' / ' + rows.length + ' periods processed';
+
+            const params = new URLSearchParams();
+            params.set('start_at', row.kill_start_at);
+            if (row.kill_end_at) params.set('end_at', row.kill_end_at);
+
+            try {
+              const response = await fetch(killsUrl + '?' + params.toString(), {credentials: 'same-origin', cache: 'no-store'});
+              let payload = {};
+              try { payload = await response.json(); } catch (_) {}
+              if (!response.ok) throw new Error(payload.error || ('Erreur ' + response.status));
+              if (payload.available === false) {
+                row._killState = 'unavailable';
+              } else {
+                row.kills_inflicted = payload.kills_inflicted;
+                row.kills_suffered = payload.kills_suffered;
+                row.kills_inflicted_display = payload.kills_inflicted_display;
+                row.kills_suffered_display = payload.kills_suffered_display;
+                row._killState = 'done';
+              }
+            } catch (_) {
+              row._killState = 'failed';
+            }
+
+            processed += 1;
+            refreshKillCells(rows, processed === rows.length);
+            if (progress) progress.textContent = 'Kill statistics: ' + processed + ' / ' + rows.length + ' periods processed';
+          }
+        }
+
+        function render(data) {
+          const rows = Array.isArray(data && data.rows) ? data.rows : [];
+          renderProfileSummary(data);
+          if (!rows.length) {
+            content.innerHTML = '<div class="muted-line">No character affiliation history is available.</div>';
+            return;
+          }
+
+          rows.forEach(function (row) { row._killState = 'waiting'; });
+          const rowDurations = rows.map(historyDurationDays);
+          const totalHistoryDays = rowDurations.reduce(function (sum, value) { return sum + (value === null ? 0 : value); }, 0);
+
+          let html = '<div class="muted-line mb-2" data-kill-progress>Kill statistics: 0 / ' + rows.length + ' periods processed</div>'
+            + '<div class="table-responsive">'
+            + '<table class="table table-dark table-hover align-middle mb-0">'
+            + '<thead><tr><th>Corporation</th><th>Alliance</th><th>Entry</th><th>Exit</th>'
+            + '<th class="text-end">Duration</th><th class="text-end">Kills inflicted</th><th class="text-end">Kills suffered</th>'
+            + '</tr></thead><tbody>';
+
+          rows.forEach(function (row, rowIndex) {
+            html += '<tr>'
+              + '<td>' + corporationCell(row) + '</td>'
+              + '<td>' + allianceCell(row) + '</td>'
+              + '<td class="text-nowrap">' + escapeHtml(row.start_date) + '</td>'
+              + '<td class="text-nowrap">' + (row.current ? '<span class="badge text-bg-success">Current</span>' : escapeHtml(row.end_date || '—')) + '</td>'
+              + '<td class="text-end text-nowrap">' + historyDurationCell(rowDurations[rowIndex], totalHistoryDays) + '</td>'
+              + '<td id="character-history-kills-inflicted-' + rowIndex + '" class="text-end text-nowrap"><span class="muted-line">Waiting…</span></td>'
+              + '<td id="character-history-kills-suffered-' + rowIndex + '" class="text-end text-nowrap"><span class="muted-line">Waiting…</span></td>'
+              + '</tr>';
+          });
+
+          html += '</tbody></table></div>';
+          content.innerHTML = html;
+          loadKillPeriods(rows);
+        }
+
+        fetch(url, {credentials: 'same-origin', cache: 'no-store'})
+          .then(async function (response) {
+            let data = {};
+            try { data = await response.json(); } catch (_) {}
+            if (!response.ok) throw new Error(data.error || ('Erreur ' + response.status));
+            render(data);
+          })
+          .catch(function (error) {
+            const birth = document.getElementById('character-history-birth-date');
+            if (birth) birth.innerHTML = 'History unavailable';
+            content.innerHTML = '<div class="alert alert-danger py-2 mb-0">' + escapeHtml(window.eveosintPublicError(error)) + '</div>';
+          });
+      })();
+    </script>
+  {% elif profile.entity_type == 'corporation' and profile_tab == 'history' %}
+    <div id="corporation-history-root"
+         data-history-url="/api/corporation/{{ profile.entity_id }}/history"
+         data-kills-url="/api/corporation/{{ profile.entity_id }}/history/kills">
+      <div class="card bg-transparent border-secondary-subtle mb-3">
+        <div class="card-body">
+          <div class="d-flex justify-content-between align-items-start gap-3 flex-wrap mb-3">
+            <div>
+              <h2 class="h5 fw-bold mb-1">History</h2>
+              <div class="muted-line">Alliance affiliation periods with corporation population and global kill activity during each period.</div>
+            </div>
+          </div>
+
+          <div data-history-content>
+            <div class="d-flex align-items-center gap-2 muted-line py-2">
+              <span class="spinner-border spinner-border-sm" aria-hidden="true"></span>
+              <span>Loading history…</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <script>
+      (function () {
+        const root = document.getElementById('corporation-history-root');
+        if (!root) return;
+
+        const content = root.querySelector('[data-history-content]');
+        const url = root.getAttribute('data-history-url');
+        const killsUrl = root.getAttribute('data-kills-url');
+
+        function escapeHtml(value) {
+          return String(value == null ? '' : value)
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#039;');
+        }
+
+        function historyEntityIcon(entityId, name) {
+          if (!entityId) return '';
+          return '<img class="history-entity-icon" src="https://images.evetech.net/alliances/'
+            + encodeURIComponent(entityId) + '/logo?size=64" alt="" title="' + escapeHtml(name || '')
+            + '" loading="lazy" onerror="this.style.display=\'none\'">';
+        }
+
+        function allianceCell(row) {
+          if (!row.alliance_id) return '<span class="fw-semibold">No alliance</span>';
+          let text = '<a class="text-decoration-none fw-semibold" href="/alliance/'
+            + encodeURIComponent(row.alliance_id) + '">' + escapeHtml(row.alliance_name || 'Unknown alliance') + '</a>';
+          if (row.alliance_ticker) text += '<div class="muted-line">[' + escapeHtml(row.alliance_ticker) + ']</div>';
+          if (row.alliance_deleted) text += '<div><span class="badge text-bg-secondary mt-1">Closed</span></div>';
+          return '<div class="d-flex align-items-center gap-2">' + historyEntityIcon(row.alliance_id, row.alliance_name) + '<div>' + text + '</div></div>';
+        }
+
+        function numericHistoryValue(value) {
+          if (value === null || value === undefined || value === '') return null;
+          const numericValue = Number(value);
+          return Number.isFinite(numericValue) ? numericValue : null;
+        }
+
+        function historyShare(value, total) {
+          const numericValue = numericHistoryValue(value);
+          if (numericValue === null || !Number.isFinite(total) || total <= 0) return '';
+          const percent = (numericValue * 100) / total;
+          if (numericValue > 0 && percent > 0 && percent < 0.1) return '&lt;0.1%';
+          return percent.toFixed(1) + '%';
+        }
+
+        function historyDateDay(value) {
+          if (!value) return null;
+          const parts = String(value).slice(0, 10).split('-').map(Number);
+          if (parts.length !== 3 || parts.some(function (part) { return !Number.isFinite(part); })) return null;
+          return Math.floor(Date.UTC(parts[0], parts[1] - 1, parts[2]) / 86400000);
+        }
+
+        function historyTodayDay() {
+          const now = new Date();
+          return Math.floor(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()) / 86400000);
+        }
+
+        function historyDurationDays(row) {
+          const start = historyDateDay(row.start_date);
+          if (start === null) return null;
+          const end = row.current ? historyTodayDay() : historyDateDay(row.end_date);
+          if (end === null) return null;
+          return Math.max(0, end - start);
+        }
+
+        function historyDurationCell(days, totalDays) {
+          if (days === null || days === undefined) return '—';
+          const share = totalDays > 0 ? historyShare(days, totalDays) : '';
+          return '<div>' + escapeHtml(days) + ' day' + (days === 1 ? '' : 's') + '</div>'
+            + (share ? '<div class="history-share">' + share + '</div>' : '');
+        }
+
+        function renderProfileHistorySummary(data) {
+          const target = document.getElementById('corporation-history-profile-summary');
+          if (!target) return;
+          const createdDate = data && data.created_date ? escapeHtml(data.created_date) : '—';
+          const status = data && data.current_status ? data.current_status : {};
+          let statusHtml = '<span class="muted-line">Current status unavailable</span>';
+          const allianceSince = document.getElementById('corporation-history-alliance-since');
+          if (allianceSince) allianceSince.innerHTML = '';
+          if (status.kind === 'closed') {
+            statusHtml = '<span class="badge text-bg-secondary">Closed</span>';
+          } else if (status.kind === 'alliance' && status.alliance_id) {
+            statusHtml = '';
+            if (allianceSince && status.since) allianceSince.innerHTML = 'since ' + escapeHtml(status.since);
+          } else if (status.kind === 'no_alliance') {
+            statusHtml = 'No alliance' + (status.since ? '<div class="muted-line mt-1">since ' + escapeHtml(status.since) + '</div>' : '');
+          }
+          target.innerHTML = '<div class="eveosint-profile-text"><div class="muted-line mb-1">Created</div>'
+            + '<div class="fw-semibold' + (statusHtml ? ' mb-2' : '') + '">' + createdDate + '</div>'
+            + (statusHtml ? '<div>' + statusHtml + '</div>' : '') + '</div>';
+        }
+
+        function killCellHtml(row, field, showShare, total) {
+          if (row._killState === 'loading') return '<span class="muted-line"><span class="spinner-border spinner-border-sm me-1" aria-hidden="true"></span>Calculating…</span>';
+          if (row._killState === 'waiting') return '<span class="muted-line">Waiting…</span>';
+          if (row._killState === 'unavailable') return '<span class="muted-line">No data</span>';
+          if (row._killState === 'failed') return '<span class="text-danger">Failed</span>';
+          const raw = field === 'inflicted' ? row.kills_inflicted : row.kills_suffered;
+          const display = field === 'inflicted' ? row.kills_inflicted_display : row.kills_suffered_display;
+          const share = showShare ? historyShare(raw, total) : '';
+          return '<div>' + escapeHtml(display || '—') + '</div>' + (share ? '<div class="history-share">' + share + '</div>' : '');
+        }
+
+        function refreshKillCells(rows, showShares) {
+          const totalInflicted = rows.reduce(function (sum, row) {
+            const value = numericHistoryValue(row.kills_inflicted);
+            return sum + (value === null ? 0 : value);
+          }, 0);
+          const totalSuffered = rows.reduce(function (sum, row) {
+            const value = numericHistoryValue(row.kills_suffered);
+            return sum + (value === null ? 0 : value);
+          }, 0);
+          rows.forEach(function (row, index) {
+            const inflicted = document.getElementById('corporation-history-kills-inflicted-' + index);
+            const suffered = document.getElementById('corporation-history-kills-suffered-' + index);
+            if (inflicted) inflicted.innerHTML = killCellHtml(row, 'inflicted', showShares, totalInflicted);
+            if (suffered) suffered.innerHTML = killCellHtml(row, 'suffered', showShares, totalSuffered);
+          });
+        }
+
+        async function loadKillPeriods(rows) {
+          const progress = root.querySelector('[data-kill-progress]');
+          let processed = 0;
+          for (let index = 0; index < rows.length; index += 1) {
+            const row = rows[index];
+            row._killState = 'loading';
+            refreshKillCells(rows, false);
+            if (progress) progress.textContent = 'Kill statistics: ' + processed + ' / ' + rows.length + ' periods processed';
+
+            const params = new URLSearchParams();
+            params.set('start_at', row.kill_start_at);
+            if (row.kill_end_at) params.set('end_at', row.kill_end_at);
+
+            try {
+              const response = await fetch(killsUrl + '?' + params.toString(), {credentials: 'same-origin', cache: 'no-store'});
+              let payload = {};
+              try { payload = await response.json(); } catch (_) {}
+              if (!response.ok) throw new Error(payload.error || ('Erreur ' + response.status));
+              if (payload.available === false) {
+                row._killState = 'unavailable';
+              } else {
+                row.kills_inflicted = payload.kills_inflicted;
+                row.kills_suffered = payload.kills_suffered;
+                row.kills_inflicted_display = payload.kills_inflicted_display;
+                row.kills_suffered_display = payload.kills_suffered_display;
+                row._killState = 'done';
+              }
+            } catch (_) {
+              row._killState = 'failed';
+            }
+
+            processed += 1;
+            refreshKillCells(rows, processed === rows.length);
+            if (progress) progress.textContent = 'Kill statistics: ' + processed + ' / ' + rows.length + ' periods processed';
+          }
+        }
+
+        function render(data) {
+          const rows = Array.isArray(data && data.rows) ? data.rows : [];
+          renderProfileHistorySummary(data);
+          if (!rows.length) {
+            content.innerHTML = '<div class="muted-line">No corporation alliance history is available.</div>';
+            return;
+          }
+
+          rows.forEach(function (row) { row._killState = 'waiting'; });
+          const rowDurations = rows.map(historyDurationDays);
+          const totalHistoryDays = rowDurations.reduce(function (sum, value) { return sum + (value === null ? 0 : value); }, 0);
+
+          let html = '<div class="muted-line mb-2" data-kill-progress>Kill statistics: 0 / ' + rows.length + ' periods processed</div>'
+            + '<div class="table-responsive"><table class="table table-dark table-hover align-middle mb-0">'
+            + '<thead><tr><th>Alliance</th><th>Entry</th><th>Exit</th><th class="text-end">Duration</th>'
+            + '<th class="text-end">Members at entry</th><th class="text-end">Members at exit / current</th>'
+            + '<th class="text-end">Min members</th><th class="text-end">Max members</th>'
+            + '<th class="text-end">Kills inflicted</th><th class="text-end">Kills suffered</th></tr></thead><tbody>';
+
+          rows.forEach(function (row, rowIndex) {
+            html += '<tr>'
+              + '<td>' + allianceCell(row) + '</td>'
+              + '<td class="text-nowrap">' + escapeHtml(row.start_date) + '</td>'
+              + '<td class="text-nowrap">' + (row.current ? '<span class="badge text-bg-success">Current</span>' : escapeHtml(row.end_date || '—')) + '</td>'
+              + '<td class="text-end text-nowrap">' + historyDurationCell(rowDurations[rowIndex], totalHistoryDays) + '</td>'
+              + '<td class="text-end text-nowrap">' + escapeHtml(row.members_entry_display) + '</td>'
+              + '<td class="text-end text-nowrap">' + escapeHtml(row.members_exit_display) + '</td>'
+              + '<td class="text-end text-nowrap">' + escapeHtml(row.members_min_display) + '</td>'
+              + '<td class="text-end text-nowrap">' + escapeHtml(row.members_max_display) + '</td>'
+              + '<td id="corporation-history-kills-inflicted-' + rowIndex + '" class="text-end text-nowrap"><span class="muted-line">Waiting…</span></td>'
+              + '<td id="corporation-history-kills-suffered-' + rowIndex + '" class="text-end text-nowrap"><span class="muted-line">Waiting…</span></td>'
+              + '</tr>';
+          });
+
+          html += '</tbody></table></div>';
+          content.innerHTML = html;
+          loadKillPeriods(rows);
+        }
+
+        fetch(url, {credentials: 'same-origin', cache: 'no-store'})
+          .then(async function (response) {
+            let data = {};
+            try { data = await response.json(); } catch (_) {}
+            if (!response.ok) throw new Error(data.error || ('Erreur ' + response.status));
+            render(data);
+          })
+          .catch(function (error) {
+            const profileSummary = document.getElementById('corporation-history-profile-summary');
+            if (profileSummary) profileSummary.innerHTML = '<div class="muted-line">History unavailable</div>';
+            content.innerHTML = '<div class="alert alert-danger py-2 mb-0">' + escapeHtml(window.eveosintPublicError(error)) + '</div>';
+          });
+      })();
+    </script>
+  {% elif profile.entity_type in ['character', 'corporation', 'alliance'] and profile_tab == 'pilotable-ships' %}
+  <section class="content-card p-3 p-md-4 mb-4">
+    <div class="d-flex justify-content-between align-items-start mb-3">
+      <div>
+        <h2 class="h5 fw-bold mb-1">Pilotable Ships</h2>
+        {% if profile.entity_type == 'character' %}
+          <div class="muted-line">Ships this character can pilot from inferred skills.</div>
+        {% elif profile.entity_type == 'corporation' %}
+          <div class="muted-line">Pilotable ships across current corporation pilots. Counts are computed progressively.</div>
+        {% else %}
+          <div class="muted-line">Pilotable ships across current alliance pilots. Counts are computed progressively.</div>
+        {% endif %}
+      </div>
+    </div>
+
+    {% if profile.entity_type == 'character' %}
+      {% set pilotable_url = '/api/character/' ~ profile.entity_id ~ '/pilotable-ships' %}
+    {% elif profile.entity_type == 'corporation' %}
+      {% set pilotable_url = '/api/corporation/' ~ profile.entity_id ~ '/pilotable-ships' %}
+    {% else %}
+      {% set pilotable_url = '/api/alliance/' ~ profile.entity_id ~ '/pilotable-ships' %}
+    {% endif %}
+    <div id="entity-pilotable-ships" data-pilotable-url="{{ pilotable_url }}">
+      <div class="muted-line">Loading pilotable ships…</div>
+    </div>
+  </section>
+
+  <script>
+    (function () {
+      var root = document.getElementById('entity-pilotable-ships');
+      if (!root) return;
+
+      var pilotableUrl = root.getAttribute('data-pilotable-url');
+      if (!pilotableUrl) {
+        root.innerHTML = '<div class="alert alert-danger py-2">Erreur 500</div>';
+        return;
+      }
+
+      function escapeHtml(value) {
+        return String(value || '')
+          .replace(/&/g, '&amp;')
+          .replace(/</g, '&lt;')
+          .replace(/>/g, '&gt;')
+          .replace(/"/g, '&quot;')
+          .replace(/'/g, '&#039;');
+      }
+
+      function initShipTreeTabs(rootNode) {
+        var tabs = rootNode.querySelectorAll('[data-ship-faction-tab]');
+        var panels = rootNode.querySelectorAll('[data-ship-faction-panel]');
+
+        tabs.forEach(function (tab) {
+          tab.addEventListener('click', function () {
+            var target = tab.getAttribute('data-ship-faction-tab');
+
+            tabs.forEach(function (item) {
+              item.classList.toggle('active', item === tab);
+            });
+
+            panels.forEach(function (panel) {
+              panel.classList.toggle('active', panel.getAttribute('data-ship-faction-panel') === target);
+            });
+          });
+        });
+      }
+
+      var currentParams = new URLSearchParams(window.location.search || '');
+      var apiParams = new URLSearchParams();
+      ['tier', 'group', 'size', 'faction'].forEach(function (key) {
+        var value = currentParams.get(key);
+        if (value) {
+          apiParams.set(key, value);
+        }
+      });
+      var requestUrl = pilotableUrl + (apiParams.toString() ? '?' + apiParams.toString() : '');
+
+      var activeRequest = null;
+      var refreshTimer = null;
+
+      function loadPilotableShips() {
+        if (activeRequest) {
+          activeRequest.abort();
+        }
+
+        activeRequest = new XMLHttpRequest();
+        activeRequest.open('GET', requestUrl, true);
+        activeRequest.withCredentials = true;
+        activeRequest.onreadystatechange = function () {
+          if (activeRequest.readyState !== 4) return;
+
+          if (activeRequest.status >= 200 && activeRequest.status < 300) {
+            root.innerHTML = activeRequest.responseText;
+            initShipTreeTabs(root);
+
+            var refreshNode = root.querySelector('[data-pilotable-refresh="1"]');
+            if (refreshNode) {
+              if (refreshTimer) {
+                window.clearTimeout(refreshTimer);
+              }
+              refreshTimer = window.setTimeout(loadPilotableShips, 10000);
+            }
+            return;
+          }
+
+          root.innerHTML = '<div class="alert alert-danger py-2">Erreur ' + escapeHtml(activeRequest.status) + '</div>';
+        };
+        activeRequest.onerror = function () {
+          root.innerHTML = '<div class="alert alert-danger py-2">Erreur réseau</div>';
+        };
+        activeRequest.send();
+      }
+
+      loadPilotableShips();
+    })();
+  </script>
+  {% endif %}
+{% endif %}
+{% endblock %}

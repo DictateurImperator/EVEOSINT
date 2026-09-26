@@ -1,0 +1,1205 @@
+<div data-ship-panel="analysis"{% if not (ship_analysis_standalone | default(false)) %} class="d-none"{% endif %}>
+  <style>
+    .ship-analysis-warning {
+      border: 1px solid rgba(245,158,11,.35);
+      background: rgba(120,53,15,.15);
+      border-radius: .75rem;
+      padding: .8rem 1rem;
+      color: #fde68a;
+    }
+    .ship-analysis-grid {
+      display: grid;
+      grid-template-columns: minmax(330px, 430px) minmax(0, 1fr);
+      gap: 1rem;
+      align-items: start;
+    }
+    @media (max-width: 1100px) {
+      .ship-analysis-grid { grid-template-columns: 1fr; }
+    }
+    .ship-analysis-builder,
+    .ship-analysis-chart-card {
+      border: 1px solid rgba(148,163,184,.18);
+      border-radius: .8rem;
+      background: rgba(15,23,42,.32);
+      padding: 1rem;
+    }
+    .ship-analysis-field-label {
+      color: #cbd5e1;
+      font-size: .79rem;
+      font-weight: 800;
+      letter-spacing: .035em;
+      text-transform: uppercase;
+      margin-bottom: .35rem;
+    }
+    .ship-analysis-search-wrap { position: relative; }
+    .ship-analysis-results {
+      position: absolute;
+      left: 0;
+      right: 0;
+      top: calc(100% + 4px);
+      z-index: 40;
+      border: 1px solid rgba(148,163,184,.28);
+      border-radius: .6rem;
+      background: #0b1220;
+      box-shadow: 0 16px 34px rgba(0,0,0,.38);
+      max-height: 270px;
+      overflow-y: auto;
+    }
+    .ship-analysis-result {
+      width: 100%;
+      display: flex;
+      align-items: center;
+      gap: .55rem;
+      padding: .52rem .65rem;
+      border: 0;
+      border-bottom: 1px solid rgba(148,163,184,.10);
+      background: transparent;
+      color: #f8fafc;
+      text-align: left;
+    }
+    .ship-analysis-result:hover { background: rgba(37,99,235,.18); }
+    .ship-analysis-result img {
+      width: 30px;
+      height: 30px;
+      border-radius: .35rem;
+      object-fit: cover;
+      background: rgba(255,255,255,.06);
+      flex: 0 0 30px;
+    }
+    .ship-analysis-result-main { font-weight: 700; line-height: 1.2; }
+    .ship-analysis-result-meta { color: #94a3b8; font-size: .75rem; line-height: 1.15; }
+    .ship-analysis-terms {
+      display: flex;
+      flex-direction: column;
+      gap: .4rem;
+      margin-top: .55rem;
+    }
+    .ship-analysis-empty {
+      color: #64748b;
+      font-size: .78rem;
+      font-style: italic;
+      padding: .15rem 0;
+    }
+    .ship-analysis-term {
+      display: grid;
+      grid-template-columns: 34px 30px minmax(0,1fr) 28px;
+      gap: .45rem;
+      align-items: center;
+      padding: .38rem .45rem;
+      border: 1px solid rgba(34,197,94,.22);
+      border-radius: .55rem;
+      background: rgba(22,101,52,.10);
+    }
+    .ship-analysis-term.is-minus {
+      border-color: rgba(239,68,68,.25);
+      background: rgba(127,29,29,.10);
+    }
+    .ship-analysis-term img {
+      width: 28px;
+      height: 28px;
+      border-radius: .32rem;
+      object-fit: cover;
+      background: rgba(255,255,255,.05);
+    }
+    .ship-analysis-term-name { min-width: 0; }
+    .ship-analysis-term-main {
+      color: #f8fafc;
+      font-weight: 700;
+      font-size: .86rem;
+      overflow: hidden;
+      white-space: nowrap;
+      text-overflow: ellipsis;
+    }
+    .ship-analysis-term-meta { color: #64748b; font-size: .72rem; }
+    .ship-analysis-remove {
+      border: 0;
+      background: transparent;
+      color: #94a3b8;
+      font-size: 1.2rem;
+      line-height: 1;
+    }
+    .ship-analysis-series-list { display: flex; flex-direction: column; gap: .55rem; }
+    .ship-analysis-series-row {
+      border: 1px solid rgba(148,163,184,.16);
+      border-radius: .65rem;
+      padding: .65rem .7rem;
+      background: rgba(15,23,42,.55);
+    }
+    .ship-analysis-series-title { font-weight: 800; color: #f8fafc; }
+    .ship-analysis-series-meta { color: #94a3b8; font-size: .77rem; margin-top: .16rem; }
+    .ship-analysis-chart-wrap {
+      width: 100%;
+      overflow-x: auto;
+      border: 1px solid rgba(148,163,184,.16);
+      border-radius: .7rem;
+      background: #080f1d;
+    }
+    #shipAnalysisChart {
+      display: block;
+      min-width: 760px;
+      width: 100%;
+      height: 520px;
+    }
+    .ship-analysis-legend {
+      display: flex;
+      flex-wrap: wrap;
+      gap: .5rem 1rem;
+      margin-top: .75rem;
+    }
+    .ship-analysis-legend-item {
+      display: inline-flex;
+      align-items: center;
+      gap: .4rem;
+      color: #cbd5e1;
+      font-size: .8rem;
+    }
+    .ship-analysis-legend-swatch {
+      width: 18px;
+      height: 3px;
+      border-radius: 99px;
+      display: inline-block;
+    }
+    .ship-analysis-status {
+      min-height: 1.35rem;
+      white-space: pre-wrap;
+    }
+    .ship-analysis-special-note { color:#fbbf24; font-size:.76rem; }
+    .ship-analysis-view-switch .btn.active {
+      background: rgba(37,99,235,.28);
+      border-color: #3b82f6;
+      color: #dbeafe;
+    }
+    .ship-analysis-csv-wrap {
+      width: 100%;
+      overflow: auto;
+      max-height: 620px;
+      border: 1px solid rgba(148,163,184,.16);
+      border-radius: .7rem;
+      background: #080f1d;
+    }
+    .ship-analysis-csv-table {
+      width: max-content;
+      min-width: 100%;
+      border-collapse: collapse;
+      font-size: .78rem;
+      color: #cbd5e1;
+    }
+    .ship-analysis-csv-table th,
+    .ship-analysis-csv-table td {
+      padding: .45rem .6rem;
+      border-bottom: 1px solid rgba(148,163,184,.13);
+      border-right: 1px solid rgba(148,163,184,.08);
+      white-space: nowrap;
+      vertical-align: top;
+    }
+    .ship-analysis-csv-table th {
+      position: sticky;
+      top: 0;
+      z-index: 2;
+      background: #111827;
+      color: #f8fafc;
+      font-weight: 800;
+    }
+    .ship-analysis-csv-empty {
+      padding: 2rem;
+      color: #64748b;
+      text-align: center;
+    }
+  </style>
+
+  <div class="d-flex flex-wrap justify-content-between align-items-start gap-3 mb-3">
+    <div>
+      <h2 class="h5 mb-1">Analysis</h2>
+      <div class="muted-line">Daily ship activity analysis with independent series and rolling activity windows.</div>
+    </div>
+    <div class="ship-analysis-warning small">
+      Heavy historical queries are scanned progressively. Infinite and percentage series can be especially expensive.
+    </div>
+  </div>
+
+  <div id="shipAnalysisApp" class="ship-analysis-grid">
+    <div class="ship-analysis-builder">
+      <div class="row g-2 mb-3">
+        <div class="col-sm-6">
+          <label class="ship-analysis-field-label" for="shipAnalysisDateFrom">Graph from</label>
+          <input id="shipAnalysisDateFrom" class="form-control form-control-sm" type="date">
+        </div>
+        <div class="col-sm-6">
+          <label class="ship-analysis-field-label" for="shipAnalysisDateTo">Graph to</label>
+          <input id="shipAnalysisDateTo" class="form-control form-control-sm" type="date">
+        </div>
+      </div>
+
+      <div class="border-top border-secondary pt-3">
+        <div class="d-flex justify-content-between align-items-center gap-2 mb-2">
+          <div class="fw-bold" id="shipAnalysisEditorTitle">New series</div>
+          <button id="shipAnalysisResetDraft" class="btn btn-outline-secondary btn-sm" type="button">Reset</button>
+        </div>
+
+        <div class="mb-3">
+          <label class="ship-analysis-field-label" for="shipAnalysisSeriesName">Series name</label>
+          <input id="shipAnalysisSeriesName" class="form-control form-control-sm" type="text" maxlength="120">
+        </div>
+
+        <div class="row g-2 mb-3">
+          <div class="col-sm-6">
+            <label class="ship-analysis-field-label" for="shipAnalysisRole">Ship side</label>
+            <select id="shipAnalysisRole" class="form-select form-select-sm">
+              <option value="both">Attacker + Victim</option>
+              <option value="attacker">Attacker</option>
+              <option value="victim">Victim</option>
+            </select>
+          </div>
+          <div class="col-sm-6">
+            <label class="ship-analysis-field-label" for="shipAnalysisMetric">Measure</label>
+            <select id="shipAnalysisMetric" class="form-select form-select-sm">
+              <option value="unique">Unique pilots</option>
+              <option value="unique_percent">Unique pilots % of all ships</option>
+              <option value="uses">Uses</option>
+              <option value="uses_percent">Uses % of all ships</option>
+            </select>
+          </div>
+        </div>
+        <div class="muted-line small mb-2">% of all ships keeps the same side, alliance/corporation, area and activity window. A % reference against another series is selected directly in Graph series.</div>
+
+        <div class="row g-2 mb-3">
+          <div class="col-sm-7">
+            <label class="ship-analysis-field-label" for="shipAnalysisWindow">Activity window</label>
+            <select id="shipAnalysisWindow" class="form-select form-select-sm">
+              <option value="infinite" selected>Infinite</option>
+              <option value="7">7 days</option>
+              <option value="30">30 days</option>
+              <option value="90">90 days</option>
+              <option value="180">180 days</option>
+              <option value="365">365 days</option>
+              <option value="custom">Custom…</option>
+            </select>
+          </div>
+          <div class="col-sm-5 d-none" id="shipAnalysisCustomWindowWrap">
+            <label class="ship-analysis-field-label" for="shipAnalysisCustomWindow">Days</label>
+            <input id="shipAnalysisCustomWindow" class="form-control form-control-sm" type="number" min="1" max="36500" value="90">
+          </div>
+        </div>
+
+        <div class="mb-3" data-analysis-family="ship">
+          <div class="d-flex justify-content-between align-items-center gap-2 mb-1">
+            <div class="ship-analysis-field-label mb-0">Ships</div>
+            <button class="btn btn-outline-secondary btn-sm py-0" type="button" data-analysis-clear="ship">Universe</button>
+          </div>
+          <div class="ship-analysis-search-wrap">
+            <input class="form-control form-control-sm" type="search" placeholder="Ship or ship type…" autocomplete="off" data-analysis-search="ship">
+            <div class="ship-analysis-results d-none" data-analysis-results="ship"></div>
+          </div>
+          <div class="ship-analysis-terms" data-analysis-terms="ship"></div>
+        </div>
+
+        <div class="mb-3" data-analysis-family="alliance">
+          <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-1">
+            <div class="ship-analysis-field-label mb-0">Alliances</div>
+            <div class="d-flex gap-1">
+              <button class="btn btn-outline-secondary btn-sm py-0" type="button" data-analysis-clear="alliance">Universe</button>
+              <button class="btn btn-outline-warning btn-sm py-0" type="button" data-analysis-no-alliance>No alliance</button>
+            </div>
+          </div>
+          <div class="ship-analysis-search-wrap">
+            <input class="form-control form-control-sm" type="search" placeholder="Alliance name / ticker…" autocomplete="off" data-analysis-search="alliance">
+            <div class="ship-analysis-results d-none" data-analysis-results="alliance"></div>
+          </div>
+          <div class="ship-analysis-terms" data-analysis-terms="alliance"></div>
+        </div>
+
+        <div class="mb-3" data-analysis-family="corporation">
+          <div class="d-flex justify-content-between align-items-center gap-2 mb-1">
+            <div class="ship-analysis-field-label mb-0">Corporations</div>
+            <button class="btn btn-outline-secondary btn-sm py-0" type="button" data-analysis-clear="corporation">Universe</button>
+          </div>
+          <div class="ship-analysis-search-wrap">
+            <input class="form-control form-control-sm" type="search" placeholder="Corporation name / ticker…" autocomplete="off" data-analysis-search="corporation">
+            <div class="ship-analysis-results d-none" data-analysis-results="corporation"></div>
+          </div>
+          <div class="ship-analysis-terms" data-analysis-terms="corporation"></div>
+        </div>
+
+        <div class="mb-3" data-analysis-family="zone">
+          <div class="d-flex justify-content-between align-items-center gap-2 mb-1">
+            <div class="ship-analysis-field-label mb-0">Area</div>
+            <button class="btn btn-outline-secondary btn-sm py-0" type="button" data-analysis-clear="zone">Universe</button>
+          </div>
+          <div class="d-flex flex-wrap gap-1 mb-2">
+            <button class="btn btn-outline-info btn-sm py-0" type="button" data-analysis-zone="highsec">Highsec</button>
+            <button class="btn btn-outline-info btn-sm py-0" type="button" data-analysis-zone="lowsec">Lowsec</button>
+            <button class="btn btn-outline-info btn-sm py-0" type="button" data-analysis-zone="nullsec">Nullsec</button>
+            <button class="btn btn-outline-info btn-sm py-0" type="button" data-analysis-zone="pochven">Pochven</button>
+            <button class="btn btn-outline-info btn-sm py-0" type="button" data-analysis-zone="wormhole">Wormhole</button>
+          </div>
+          <div class="ship-analysis-search-wrap">
+            <input class="form-control form-control-sm" type="search" placeholder="Region, constellation or system…" autocomplete="off" data-analysis-search="zone">
+            <div class="ship-analysis-results d-none" data-analysis-results="zone"></div>
+          </div>
+          <div class="ship-analysis-terms" data-analysis-terms="zone"></div>
+        </div>
+
+        <div class="d-flex gap-2 mb-3">
+          <button id="shipAnalysisSaveSeries" class="btn btn-primary btn-sm" type="button">Add series</button>
+          <button id="shipAnalysisCancelEdit" class="btn btn-outline-secondary btn-sm d-none" type="button">Cancel edit</button>
+        </div>
+      </div>
+
+      <div class="border-top border-secondary pt-3">
+        <div class="d-flex justify-content-between align-items-center gap-2 mb-2">
+          <div class="fw-bold">Graph series</div>
+          <span class="ship-analysis-special-note">Max 12</span>
+        </div>
+        <div id="shipAnalysisSeriesList" class="ship-analysis-series-list"></div>
+      </div>
+    </div>
+
+    <div class="ship-analysis-chart-card">
+      <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
+        <div>
+          <div class="fw-bold">Daily activity</div>
+          <div id="shipAnalysisStatus" class="muted-line small ship-analysis-status">Configure series, then run the analysis.</div>
+        </div>
+        <div class="d-flex flex-wrap gap-2 align-items-center">
+          <div class="btn-group btn-group-sm ship-analysis-view-switch" role="group" aria-label="Result view">
+            <button id="shipAnalysisViewChart" class="btn btn-outline-secondary active" type="button">Chart</button>
+            <button id="shipAnalysisViewCsv" class="btn btn-outline-secondary" type="button">CSV</button>
+          </div>
+          <button id="shipAnalysisCsv" class="btn btn-outline-secondary btn-sm" type="button" disabled>Download CSV</button>
+          <button id="shipAnalysisStop" class="btn btn-outline-danger btn-sm d-none" type="button">Stop</button>
+          <button id="shipAnalysisRun" class="btn btn-primary btn-sm" type="button">Update</button>
+        </div>
+      </div>
+      <div id="shipAnalysisChartView">
+        <div class="ship-analysis-chart-wrap">
+          <svg id="shipAnalysisChart" viewBox="0 0 1200 520" preserveAspectRatio="none"></svg>
+        </div>
+        <div id="shipAnalysisLegend" class="ship-analysis-legend"></div>
+      </div>
+      <div id="shipAnalysisCsvView" class="d-none">
+        <div class="ship-analysis-csv-wrap">
+          <table id="shipAnalysisCsvTable" class="ship-analysis-csv-table"></table>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+  (() => {
+    const app = document.getElementById('shipAnalysisApp');
+    if (!app) return;
+
+    const rawDefaultShips = {{ selection.ships | tojson }};
+    const selectionTitle = {{ selection.title | tojson }};
+    const defaultShips = rawDefaultShips.map(item => ({
+      sign: 1,
+      entity_type: 'ship',
+      entity_id: Number(item.entity_id),
+      name: item.name || ('Type ' + item.entity_id),
+      label: item.name || ('Type ' + item.entity_id),
+      subtitle: item.group_name || item.category_name || 'Ship',
+      image_url: item.image_url || ('https://images.evetech.net/types/' + item.entity_id + '/icon?size=32')
+    }));
+
+    const colors = [
+      '#60a5fa','#f97316','#4ade80','#f472b6','#a78bfa','#facc15',
+      '#22d3ee','#fb7185','#34d399','#c084fc','#fbbf24','#38bdf8'
+    ];
+
+    const dateFrom = document.getElementById('shipAnalysisDateFrom');
+    const dateTo = document.getElementById('shipAnalysisDateTo');
+    const nameInput = document.getElementById('shipAnalysisSeriesName');
+    const roleInput = document.getElementById('shipAnalysisRole');
+    const metricInput = document.getElementById('shipAnalysisMetric');
+    const windowInput = document.getElementById('shipAnalysisWindow');
+    const customWindowWrap = document.getElementById('shipAnalysisCustomWindowWrap');
+    const customWindowInput = document.getElementById('shipAnalysisCustomWindow');
+    const saveSeriesButton = document.getElementById('shipAnalysisSaveSeries');
+    const cancelEditButton = document.getElementById('shipAnalysisCancelEdit');
+    const resetDraftButton = document.getElementById('shipAnalysisResetDraft');
+    const editorTitle = document.getElementById('shipAnalysisEditorTitle');
+    const seriesList = document.getElementById('shipAnalysisSeriesList');
+    const runButton = document.getElementById('shipAnalysisRun');
+    const csvButton = document.getElementById('shipAnalysisCsv');
+    const viewChartButton = document.getElementById('shipAnalysisViewChart');
+    const viewCsvButton = document.getElementById('shipAnalysisViewCsv');
+    const chartView = document.getElementById('shipAnalysisChartView');
+    const csvView = document.getElementById('shipAnalysisCsvView');
+    const csvTable = document.getElementById('shipAnalysisCsvTable');
+    const stopButton = document.getElementById('shipAnalysisStop');
+    const status = document.getElementById('shipAnalysisStatus');
+    const svg = document.getElementById('shipAnalysisChart');
+    const legend = document.getElementById('shipAnalysisLegend');
+
+    const timers = {};
+    const aborters = {};
+    let analysisAbort = null;
+    let editingIndex = null;
+    let draftTerms = {ship: [], alliance: [], corporation: [], zone: []};
+    let resultsByUid = {};
+    const hiddenSeriesUids = new Set();
+    let resultView = 'chart';
+
+    function uid() {
+      if (window.crypto && typeof window.crypto.randomUUID === 'function') return window.crypto.randomUUID();
+      return 'analysis-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2);
+    }
+
+    function clone(value) { return JSON.parse(JSON.stringify(value)); }
+    function esc(value) {
+      return String(value == null ? '' : value)
+        .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+        .replace(/"/g,'&quot;').replace(/'/g,'&#039;');
+    }
+
+    function isoDateLocal(value) {
+      const y = value.getFullYear();
+      const m = String(value.getMonth() + 1).padStart(2, '0');
+      const d = String(value.getDate()).padStart(2, '0');
+      return y + '-' + m + '-' + d;
+    }
+
+    const today = new Date();
+    const yearAgo = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+    yearAgo.setDate(yearAgo.getDate() - 365);
+    dateTo.value = isoDateLocal(today);
+    dateFrom.value = isoDateLocal(yearAgo);
+
+    function defaultName() {
+      if (defaultShips.length === 1) return defaultShips[0].name;
+      if (defaultShips.length > 1) return selectionTitle;
+      return 'Ship activity';
+    }
+
+    function newDraft() {
+      return {
+        uid: uid(),
+        name: defaultName(),
+        role: 'both',
+        metric: 'unique',
+        percent_of_uid: null,
+        activity_days: null,
+        ships: clone(defaultShips),
+        alliances: [],
+        corporations: [],
+        zones: []
+      };
+    }
+
+    let series = [newDraft()];
+
+    function setDraft(item) {
+      nameInput.value = item.name || '';
+      roleInput.value = item.role || 'both';
+      metricInput.value = item.metric || 'unique';
+      if (item.activity_days == null) {
+        windowInput.value = 'infinite';
+      } else if (['7','30','90','180','365'].includes(String(item.activity_days))) {
+        windowInput.value = String(item.activity_days);
+      } else {
+        windowInput.value = 'custom';
+        customWindowInput.value = String(item.activity_days || 90);
+      }
+      customWindowWrap.classList.toggle('d-none', windowInput.value !== 'custom');
+      draftTerms = {
+        ship: clone(item.ships || []),
+        alliance: clone(item.alliances || []),
+        corporation: clone(item.corporations || []),
+        zone: clone(item.zones || [])
+      };
+      renderTerms();
+    }
+
+    function resetEditor() {
+      editingIndex = null;
+      editorTitle.textContent = 'New series';
+      saveSeriesButton.textContent = 'Add series';
+      cancelEditButton.classList.add('d-none');
+      setDraft(newDraft());
+    }
+
+    function activityDaysFromForm() {
+      if (windowInput.value === 'infinite') return null;
+      if (windowInput.value === 'custom') {
+        const value = Number(customWindowInput.value || 0);
+        return Number.isFinite(value) && value > 0 ? Math.min(36500, Math.floor(value)) : 1;
+      }
+      return Number(windowInput.value);
+    }
+
+    function isPercentMetric(metric) {
+      return metric === 'unique_percent' || metric === 'uses_percent';
+    }
+
+    function metricBase(metric) {
+      return String(metric || '').startsWith('uses') ? 'uses' : 'unique';
+    }
+
+    function backendMetric(metric) {
+      return metric;
+    }
+
+    function draftFromForm(existingUid) {
+      const metric = metricInput.value || 'unique';
+      const previous = existingUid ? series.find(item => item.uid === existingUid) : null;
+      let percentOfUid = previous ? (previous.percent_of_uid || null) : null;
+      if (percentOfUid) {
+        const denominator = series.find(item => item.uid === percentOfUid);
+        if (!denominator || metricBase(denominator.metric) !== metricBase(metric)) percentOfUid = null;
+      }
+      return {
+        uid: existingUid || uid(),
+        name: (nameInput.value || '').trim() || 'Series',
+        role: roleInput.value || 'both',
+        metric,
+        percent_of_uid: percentOfUid,
+        activity_days: activityDaysFromForm(),
+        ships: clone(draftTerms.ship),
+        alliances: clone(draftTerms.alliance),
+        corporations: clone(draftTerms.corporation),
+        zones: clone(draftTerms.zone)
+      };
+    }
+
+    function termMeta(kind, term) {
+      if (kind === 'ship') return term.entity_type === 'ship_group' ? 'Ship type' : (term.subtitle || 'Ship');
+      if (kind === 'alliance') return term.entity_id === 'none' ? 'No alliance' : 'Alliance';
+      if (kind === 'corporation') return 'Corporation';
+      if (kind === 'zone') return term.entity_type === 'security' ? 'Preset area' : (term.entity_type || 'Area');
+      return kind;
+    }
+
+    function renderTermFamily(kind) {
+      const box = document.querySelector('[data-analysis-terms="' + kind + '"]');
+      if (!box) return;
+      const list = draftTerms[kind] || [];
+      if (!list.length) {
+        box.innerHTML = '<div class="ship-analysis-empty">Universe / ALL by default.</div>';
+        return;
+      }
+      box.innerHTML = list.map((term, index) => {
+        const img = term.image_url ? '<img src="' + esc(term.image_url) + '" alt="" loading="lazy">' : '<span style="width:28px"></span>';
+        return '<div class="ship-analysis-term ' + (term.sign < 0 ? 'is-minus' : '') + '">' +
+          '<button class="btn btn-sm ' + (term.sign > 0 ? 'btn-outline-success' : 'btn-outline-danger') + ' py-0" type="button" data-analysis-sign="' + kind + ':' + index + '">' + (term.sign > 0 ? '+' : '−') + '</button>' +
+          img +
+          '<div class="ship-analysis-term-name"><div class="ship-analysis-term-main">' + esc(term.label || term.name || term.entity_id) + '</div><div class="ship-analysis-term-meta">' + esc(termMeta(kind, term)) + '</div></div>' +
+          '<button class="ship-analysis-remove" type="button" title="Remove" data-analysis-remove="' + kind + ':' + index + '">×</button>' +
+        '</div>';
+      }).join('');
+    }
+
+    function renderTerms() {
+      ['ship','alliance','corporation','zone'].forEach(renderTermFamily);
+    }
+
+    function addTerm(kind, item) {
+      const entityId = (kind === 'alliance' && item.entity_id === 'none') ? 'none' : item.entity_id;
+      const key = String(item.entity_type || kind) + ':' + String(entityId);
+      const exists = (draftTerms[kind] || []).some(term => String(term.entity_type || kind) + ':' + String(term.entity_id) === key);
+      if (exists) return;
+      draftTerms[kind].push({
+        sign: 1,
+        entity_type: item.entity_type || kind,
+        entity_id: entityId,
+        name: item.name || item.label || String(entityId),
+        label: item.label || item.name || String(entityId),
+        subtitle: item.subtitle || '',
+        image_url: item.image_url || ''
+      });
+      renderTermFamily(kind);
+    }
+
+    function metricLabel(metric) {
+      return ({
+        unique:'Unique pilots',
+        unique_percent:'Unique pilots % of all ships',
+        uses:'Uses',
+        uses_percent:'Uses % of all ships'
+      })[metric] || metric;
+    }
+
+    function roleLabel(role) {
+      return ({both:'Attacker + Victim', attacker:'Attacker', victim:'Victim'})[role] || role;
+    }
+
+    function seriesMeta(item) {
+      const activity = item.activity_days == null ? 'Infinite' : item.activity_days + 'd';
+      const bits = [metricLabel(item.metric), roleLabel(item.role), activity];
+      if (item.percent_of_uid) {
+        const denominator = series.find(candidate => candidate.uid === item.percent_of_uid);
+        bits.push('% of ' + (denominator ? denominator.name : 'missing series'));
+      }
+      const a = item.alliances || [];
+      const c = item.corporations || [];
+      const z = item.zones || [];
+      const s = item.ships || [];
+      bits.push((s.length ? s.length + ' ship term' + (s.length === 1 ? '' : 's') : 'Ship universe'));
+      bits.push((a.length ? a.length + ' alliance term' + (a.length === 1 ? '' : 's') : 'Alliance universe'));
+      bits.push((c.length ? c.length + ' corp term' + (c.length === 1 ? '' : 's') : 'Corp universe'));
+      bits.push((z.length ? z.length + ' area term' + (z.length === 1 ? '' : 's') : 'Area universe'));
+      return bits.join(' · ');
+    }
+
+    function renderSeriesList() {
+      if (!series.length) {
+        seriesList.innerHTML = '<div class="ship-analysis-empty">No series.</div>';
+        return;
+      }
+
+      series.forEach(item => {
+        if (!item.percent_of_uid) return;
+        const denominator = series.find(candidate => candidate.uid === item.percent_of_uid);
+        if (!denominator || denominator.uid === item.uid || metricBase(denominator.metric) !== metricBase(item.metric)) {
+          item.percent_of_uid = null;
+        }
+      });
+
+      seriesList.innerHTML = series.map((item, index) => {
+        const swatch = colors[index % colors.length];
+        const denominator = item.percent_of_uid ? series.find(candidate => candidate.uid === item.percent_of_uid) : null;
+        const candidates = series.filter(candidate => candidate.uid !== item.uid && metricBase(candidate.metric) === metricBase(item.metric));
+        const baseOptions = ['<option value="">— no % reference —</option>'].concat(candidates.map(candidate =>
+          '<option value="' + esc(candidate.uid) + '"' + (item.percent_of_uid === candidate.uid ? ' selected' : '') + '>' + esc(candidate.name) + '</option>'
+        )).join('');
+
+        const hidden = hiddenSeriesUids.has(item.uid);
+        return '<div class="ship-analysis-series-row' + (hidden ? ' opacity-50' : '') + '">' +
+          '<div class="d-flex justify-content-between align-items-start gap-2">' +
+            '<div class="min-w-0 flex-grow-1"><div class="ship-analysis-series-title"><span style="display:inline-block;width:14px;height:3px;background:' + swatch + ';vertical-align:middle;margin-right:6px"></span>' + esc(item.name) + (hidden ? ' <span class="badge text-bg-secondary ms-1">Hidden</span>' : '') + (denominator ? ' <span class="badge text-bg-info ms-1">% of ' + esc(denominator.name) + '</span>' : '') + '</div><div class="ship-analysis-series-meta">' + esc(seriesMeta(item)) + '</div></div>' +
+            '<div class="d-flex gap-1 flex-shrink-0"><button class="btn ' + (hidden ? 'btn-outline-success' : 'btn-outline-secondary') + ' btn-sm py-0" type="button" data-analysis-toggle-visibility="' + index + '">' + (hidden ? 'Show' : 'Hide') + '</button><button class="btn btn-outline-primary btn-sm py-0" type="button" data-analysis-edit="' + index + '">Edit</button><button class="btn btn-outline-danger btn-sm py-0" type="button" data-analysis-delete="' + index + '">×</button></div>' +
+          '</div>' +
+          '<div class="d-flex justify-content-end mt-2">' +
+            '<div class="input-group input-group-sm" style="width:min(300px,100%);">' +
+              '<span class="input-group-text">% of</span>' +
+              '<select class="form-select" data-analysis-percent-reference="' + index + '">' + baseOptions + '</select>' +
+            '</div>' +
+          '</div>' +
+        '</div>';
+      }).join('');
+    }
+
+    windowInput.addEventListener('change', () => {
+      customWindowWrap.classList.toggle('d-none', windowInput.value !== 'custom');
+    });
+
+    resetDraftButton.addEventListener('click', resetEditor);
+    cancelEditButton.addEventListener('click', resetEditor);
+
+    saveSeriesButton.addEventListener('click', () => {
+      if (editingIndex == null && series.length >= 12) {
+        status.textContent = 'Maximum 12 series.';
+        return;
+      }
+      if (editingIndex == null) {
+        series.push(draftFromForm());
+      } else {
+        series[editingIndex] = draftFromForm(series[editingIndex].uid);
+      }
+      resultsByUid = {};
+      renderSeriesList();
+      renderChart();
+      resetEditor();
+    });
+
+    seriesList.addEventListener('change', event => {
+      const select = event.target.closest('[data-analysis-percent-reference]');
+      if (!select) return;
+      const index = Number(select.dataset.analysisPercentReference);
+      const item = series[index];
+      if (!item) return;
+      const selectedUid = select.value || null;
+      if (selectedUid) {
+        const denominator = series.find(candidate => candidate.uid === selectedUid);
+        if (!denominator || denominator.uid === item.uid || metricBase(denominator.metric) !== metricBase(item.metric)) return;
+      }
+      item.percent_of_uid = selectedUid;
+      renderSeriesList();
+      renderChart();
+    });
+
+    seriesList.addEventListener('click', event => {
+      const visibility = event.target.closest('[data-analysis-toggle-visibility]');
+      if (visibility) {
+        const index = Number(visibility.dataset.analysisToggleVisibility);
+        const item = series[index];
+        if (!item) return;
+        if (hiddenSeriesUids.has(item.uid)) hiddenSeriesUids.delete(item.uid);
+        else hiddenSeriesUids.add(item.uid);
+        renderSeriesList();
+        renderChart();
+        return;
+      }
+      const edit = event.target.closest('[data-analysis-edit]');
+      if (edit) {
+        const index = Number(edit.dataset.analysisEdit);
+        if (!series[index]) return;
+        editingIndex = index;
+        editorTitle.textContent = 'Edit series';
+        saveSeriesButton.textContent = 'Save series';
+        cancelEditButton.classList.remove('d-none');
+        setDraft(series[index]);
+        return;
+      }
+      const del = event.target.closest('[data-analysis-delete]');
+      if (del) {
+        const index = Number(del.dataset.analysisDelete);
+        if (!series[index]) return;
+        const removed = series.splice(index, 1)[0];
+        if (removed) {
+          delete resultsByUid[removed.uid];
+          hiddenSeriesUids.delete(removed.uid);
+          series.forEach(item => {
+            if (item.percent_of_uid === removed.uid) item.percent_of_uid = null;
+          });
+        }
+        renderSeriesList();
+        renderChart();
+        if (editingIndex === index) resetEditor();
+      }
+    });
+
+    document.addEventListener('click', event => {
+      const sign = event.target.closest('[data-analysis-sign]');
+      if (sign && app.contains(sign)) {
+        const [kind, rawIndex] = sign.dataset.analysisSign.split(':');
+        const index = Number(rawIndex);
+        if (draftTerms[kind] && draftTerms[kind][index]) {
+          draftTerms[kind][index].sign *= -1;
+          renderTermFamily(kind);
+        }
+        return;
+      }
+      const remove = event.target.closest('[data-analysis-remove]');
+      if (remove && app.contains(remove)) {
+        const [kind, rawIndex] = remove.dataset.analysisRemove.split(':');
+        const index = Number(rawIndex);
+        if (draftTerms[kind]) {
+          draftTerms[kind].splice(index, 1);
+          renderTermFamily(kind);
+        }
+        return;
+      }
+      const clear = event.target.closest('[data-analysis-clear]');
+      if (clear && app.contains(clear)) {
+        const kind = clear.dataset.analysisClear;
+        if (draftTerms[kind]) {
+          draftTerms[kind] = [];
+          renderTermFamily(kind);
+        }
+        return;
+      }
+      const noAlliance = event.target.closest('[data-analysis-no-alliance]');
+      if (noAlliance && app.contains(noAlliance)) {
+        addTerm('alliance', {entity_type:'alliance', entity_id:'none', name:'No alliance', label:'No alliance', subtitle:'No alliance'});
+        return;
+      }
+      const zone = event.target.closest('[data-analysis-zone]');
+      if (zone && app.contains(zone)) {
+        const labels = {highsec:'Highsec',lowsec:'Lowsec',nullsec:'Nullsec',pochven:'Pochven',wormhole:'Wormhole'};
+        const key = zone.dataset.analysisZone;
+        addTerm('zone', {entity_type:'security', entity_id:key, name:labels[key] || key, label:labels[key] || key, subtitle:'Preset area'});
+        return;
+      }
+      if (!event.target.closest('.ship-analysis-search-wrap')) {
+        document.querySelectorAll('.ship-analysis-results').forEach(node => node.classList.add('d-none'));
+      }
+    });
+
+    function searchUrl(kind, q) {
+      if (kind === 'zone') {
+        return '/killboard/search?kind=' + encodeURIComponent(kind) + '&q=' + encodeURIComponent(q) + '&limit=15';
+      }
+      return '/api/ship-analysis/search?kind=' + encodeURIComponent(kind) + '&q=' + encodeURIComponent(q) + '&limit=15';
+    }
+
+    document.querySelectorAll('[data-analysis-search]').forEach(input => {
+      const kind = input.dataset.analysisSearch;
+      const results = document.querySelector('[data-analysis-results="' + kind + '"]');
+      if (!results) return;
+      input.addEventListener('input', () => {
+        window.clearTimeout(timers[kind]);
+        if (aborters[kind]) aborters[kind].abort();
+        const q = input.value.trim();
+        if (q.length < 2) {
+          results.classList.add('d-none');
+          results.innerHTML = '';
+          return;
+        }
+        timers[kind] = window.setTimeout(async () => {
+          const controller = new AbortController();
+          aborters[kind] = controller;
+          try {
+            const response = await fetch(searchUrl(kind, q), {credentials:'same-origin', cache:'no-store', signal:controller.signal});
+            const data = await response.json();
+            const items = Array.isArray(data.results) ? data.results : [];
+            if (!items.length) {
+              results.innerHTML = '<div class="p-2 muted-line small">No result.</div>';
+            } else {
+              results.innerHTML = items.map((item, index) => {
+                const img = item.image_url ? '<img src="' + esc(item.image_url) + '" alt="" loading="lazy">' : '<span style="width:30px"></span>';
+                return '<button class="ship-analysis-result" type="button" data-analysis-result-index="' + index + '">' + img + '<span><span class="ship-analysis-result-main">' + esc(item.label || item.name) + '</span><br><span class="ship-analysis-result-meta">' + esc(item.subtitle || item.entity_type || '') + '</span></span></button>';
+              }).join('');
+              results.querySelectorAll('[data-analysis-result-index]').forEach(button => {
+                button.addEventListener('click', () => {
+                  const item = items[Number(button.dataset.analysisResultIndex)];
+                  if (!item) return;
+                  addTerm(kind, item);
+                  input.value = '';
+                  results.classList.add('d-none');
+                });
+              });
+            }
+            results.classList.remove('d-none');
+          } catch (error) {
+            if (error.name !== 'AbortError') {
+              results.innerHTML = '<div class="p-2 text-danger small">Erreur 500</div>';
+              results.classList.remove('d-none');
+            }
+          }
+        }, 180);
+      });
+    });
+
+    function svgNode(name, attrs={}, text=null) {
+      const node = document.createElementNS('http://www.w3.org/2000/svg', name);
+      Object.entries(attrs).forEach(([key,value]) => node.setAttribute(key, String(value)));
+      if (text !== null) node.textContent = text;
+      return node;
+    }
+
+    function selectedRawValue(point) {
+      if (!point) return null;
+      const numerator = Number(point.numerator);
+      if (point.numerator != null && Number.isFinite(numerator)) return numerator;
+      const value = Number(point.value);
+      return point.value != null && Number.isFinite(value) ? value : null;
+    }
+
+    function displayPointsFor(item) {
+      const result = resultsByUid[item.uid];
+      if (!result || !Array.isArray(result.points)) return [];
+      if (!item.percent_of_uid) return result.points;
+
+      const denominatorSeries = series.find(candidate => candidate.uid === item.percent_of_uid);
+      const denominatorResult = denominatorSeries ? resultsByUid[denominatorSeries.uid] : null;
+      const denominatorByDate = new Map();
+      if (denominatorResult && Array.isArray(denominatorResult.points)) {
+        denominatorResult.points.forEach(point => denominatorByDate.set(point.date, point));
+      }
+
+      return result.points.map(point => {
+        const numerator = selectedRawValue(point);
+        const denominator = selectedRawValue(denominatorByDate.get(point.date));
+        const value = denominator && numerator != null ? (numerator / denominator * 100.0) : null;
+        return {
+          ...point,
+          value: value == null ? null : Number(value.toFixed(6)),
+          numerator,
+          denominator
+        };
+      });
+    }
+
+    function isDisplayPercent(item) {
+      return Boolean(item && (isPercentMetric(item.metric) || item.percent_of_uid));
+    }
+
+    function displayMetricLabel(item) {
+      const base = metricLabel(item.metric);
+      if (!item.percent_of_uid) return base;
+      const denominator = series.find(candidate => candidate.uid === item.percent_of_uid);
+      return base + ' % of ' + (denominator ? denominator.name : 'missing series');
+    }
+
+    function formatSeriesValue(value, item) {
+      if (value == null || !Number.isFinite(Number(value))) return '—';
+      if (isDisplayPercent(item)) return Number(value).toFixed(2).replace(/\.00$/,'') + '%';
+      return formatValue(value, item.metric);
+    }
+
+    function setResultView(mode) {
+      resultView = mode === 'csv' ? 'csv' : 'chart';
+      chartView.classList.toggle('d-none', resultView !== 'chart');
+      csvView.classList.toggle('d-none', resultView !== 'csv');
+      viewChartButton.classList.toggle('active', resultView === 'chart');
+      viewCsvButton.classList.toggle('active', resultView === 'csv');
+      if (resultView === 'csv') renderCsvTable();
+    }
+
+    function formatValue(value, metric) {
+      if (value == null || !Number.isFinite(Number(value))) return '—';
+      if (String(metric).endsWith('_percent')) return Number(value).toFixed(2).replace(/\.00$/,'') + '%';
+      const n = Number(value);
+      if (Math.abs(n) >= 1000000) return (n / 1000000).toFixed(1).replace(/\.0$/,'') + 'M';
+      if (Math.abs(n) >= 1000) return (n / 1000).toFixed(1).replace(/\.0$/,'') + 'k';
+      return String(Math.round(n));
+    }
+
+    function renderChart() {
+      svg.innerHTML = '';
+      legend.innerHTML = '';
+      const active = series.map((item,index) => ({item,index,result:resultsByUid[item.uid],points:displayPointsFor(item)})).filter(entry => !hiddenSeriesUids.has(entry.item.uid) && entry.result && Array.isArray(entry.result.points));
+      csvButton.disabled = !active.length;
+      viewCsvButton.disabled = !active.length;
+      renderCsvTable();
+      if (!active.length) {
+        svg.appendChild(svgNode('rect',{x:0,y:0,width:1200,height:520,fill:'#080f1d'}));
+        svg.appendChild(svgNode('text',{x:600,y:260,fill:'#64748b','text-anchor':'middle','font-size':18},'No analysis result yet.'));
+        return;
+      }
+
+      const allDates = active[0].points.map(point => point.date);
+      const values = [];
+      active.forEach(entry => entry.points.forEach(point => {
+        const value = Number(point.value);
+        if (point.value != null && Number.isFinite(value)) values.push(value);
+      }));
+
+      const width=1200, height=520, left=78, right=28, top=28, bottom=60;
+      const plotW=width-left-right, plotH=height-top-bottom;
+      const maxY = values.length ? Math.max(1, ...values) * 1.06 : 1;
+      const axisMetric = active.every(entry => isDisplayPercent(entry.item)) ? 'unique_percent' : 'count';
+      const xAt = index => allDates.length <= 1 ? left + plotW / 2 : left + (index / (allDates.length - 1)) * plotW;
+      const yAt = value => top + ((maxY - value) / maxY) * plotH;
+
+      svg.appendChild(svgNode('rect',{x:0,y:0,width,height,fill:'#080f1d'}));
+      for (let tick=0; tick<=5; tick++) {
+        const value = maxY * tick / 5;
+        const y = yAt(value);
+        svg.appendChild(svgNode('line',{x1:left,y1:y,x2:width-right,y2:y,stroke:'#263449','stroke-width':1}));
+        svg.appendChild(svgNode('text',{x:left-10,y:y+4,fill:'#94a3b8','text-anchor':'end','font-size':12},formatValue(value,axisMetric)));
+      }
+
+      const tickCount = Math.min(7, Math.max(2, allDates.length));
+      for (let i=0; i<tickCount; i++) {
+        const index = allDates.length <= 1 ? 0 : Math.round(i * (allDates.length - 1) / (tickCount - 1));
+        const x = xAt(index);
+        svg.appendChild(svgNode('line',{x1:x,y1:top,x2:x,y2:height-bottom,stroke:'#162235','stroke-width':1}));
+        svg.appendChild(svgNode('text',{x,y:height-bottom+22,fill:'#94a3b8','text-anchor':'middle','font-size':11},allDates[index] || ''));
+      }
+
+      active.forEach(entry => {
+        const color = colors[entry.index % colors.length];
+        const points = entry.points;
+        let d = '';
+        let drawing = false;
+        points.forEach((point,index) => {
+          const value = Number(point.value);
+          if (point.value == null || !Number.isFinite(value)) {
+            drawing = false;
+            return;
+          }
+          const cmd = drawing ? 'L' : 'M';
+          d += cmd + xAt(index).toFixed(2) + ' ' + yAt(value).toFixed(2) + ' ';
+          drawing = true;
+        });
+        if (d) svg.appendChild(svgNode('path',{d,fill:'none',stroke:color,'stroke-width':2.4,'vector-effect':'non-scaling-stroke'}));
+
+        const last = [...points].reverse().find(point => point.value != null && Number.isFinite(Number(point.value)));
+        legend.insertAdjacentHTML('beforeend','<span class="ship-analysis-legend-item"><span class="ship-analysis-legend-swatch" style="background:' + color + '"></span><span>' + esc(entry.item.name) + ' · ' + esc(displayMetricLabel(entry.item)) + (last ? ' · ' + esc(formatSeriesValue(Number(last.value), entry.item)) : '') + '</span></span>');
+      });
+    }
+
+    function csvCell(value) {
+      let text = value == null ? "" : String(value);
+      if (["=", "+", "-", "@"].includes(text.charAt(0))) {
+        text = "'" + text;
+      }
+      return '"' + text.replace(/"/g, '""') + '"';
+    }
+
+    function csvTerms(items) {
+      if (!Array.isArray(items) || !items.length) return 'Universe';
+      return items.map(item => (Number(item.sign) < 0 ? '-' : '+') + (item.label || item.name || item.entity_id)).join(' | ');
+    }
+
+    function activeResults() {
+      return series
+        .map((item,index) => ({item,index,result:resultsByUid[item.uid],points:displayPointsFor(item)}))
+        .filter(entry => !hiddenSeriesUids.has(entry.item.uid) && entry.result && Array.isArray(entry.result.points));
+    }
+
+    function renderCsvTable() {
+      if (!csvTable) return;
+      const active = activeResults();
+      if (!active.length) {
+        csvTable.innerHTML = '<tbody><tr><td class="ship-analysis-csv-empty">No analysis result yet.</td></tr></tbody>';
+        return;
+      }
+
+      const headers = ['date','series','metric','role','activity_window','value','numerator','denominator','ships','alliances','corporations','areas'];
+      let html = '<thead><tr>' + headers.map(header => '<th>' + esc(header) + '</th>').join('') + '</tr></thead><tbody>';
+      active.forEach(entry => {
+        const item = entry.item;
+        const activityWindow = item.activity_days == null ? 'Infinite' : String(item.activity_days) + ' days';
+        const ships = csvTerms(item.ships);
+        const alliances = csvTerms(item.alliances);
+        const corporations = csvTerms(item.corporations);
+        const areas = csvTerms(item.zones);
+        entry.points.forEach(point => {
+          const cells = [point.date,item.name,displayMetricLabel(item),roleLabel(item.role),activityWindow,point.value,point.numerator,point.denominator,ships,alliances,corporations,areas];
+          html += '<tr>' + cells.map(value => '<td>' + esc(value == null ? '' : value) + '</td>').join('') + '</tr>';
+        });
+      });
+      html += '</tbody>';
+      csvTable.innerHTML = html;
+    }
+
+    function exportCsv() {
+      const active = activeResults();
+
+      if (!active.length) {
+        status.textContent = 'Run the analysis before exporting CSV.';
+        return;
+      }
+
+      const rows = [[
+        'date',
+        'series',
+        'metric',
+        'role',
+        'activity_window',
+        'value',
+        'numerator',
+        'denominator',
+        'ships',
+        'alliances',
+        'corporations',
+        'areas'
+      ]];
+
+      active.forEach(entry => {
+        const item = entry.item;
+        const result = entry.result;
+        const activityWindow = item.activity_days == null ? 'Infinite' : String(item.activity_days) + ' days';
+        const ships = csvTerms(item.ships);
+        const alliances = csvTerms(item.alliances);
+        const corporations = csvTerms(item.corporations);
+        const areas = csvTerms(item.zones);
+
+        entry.points.forEach(point => {
+          rows.push([
+            point.date,
+            item.name,
+            displayMetricLabel(item),
+            roleLabel(item.role),
+            activityWindow,
+            point.value,
+            point.numerator,
+            point.denominator,
+            ships,
+            alliances,
+            corporations,
+            areas
+          ]);
+        });
+      });
+
+      const csv = '\ufeff' + rows.map(row => row.map(csvCell).join(',')).join('\r\n');
+      const blob = new Blob([csv], {type:'text/csv;charset=utf-8'});
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = 'ship_analysis_' + dateFrom.value + '_' + dateTo.value + '.csv';
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+      status.textContent = 'CSV exported · ' + active.length + ' series.';
+    }
+
+    async function runAnalysis() {
+      if (!series.length) {
+        status.textContent = 'Add at least one series.';
+        return;
+      }
+      if (!dateFrom.value || !dateTo.value || dateFrom.value > dateTo.value) {
+        status.textContent = 'Invalid graph date range.';
+        return;
+      }
+
+      if (analysisAbort) analysisAbort.abort();
+      analysisAbort = new AbortController();
+      resultsByUid = {};
+      renderChart();
+      runButton.disabled = true;
+      stopButton.classList.remove('d-none');
+      status.textContent = 'Starting analysis…';
+
+      try {
+        const response = await fetch('/api/ship-analysis', {
+          method: 'POST',
+          credentials: 'same-origin',
+          cache: 'no-store',
+          headers: {'Content-Type':'application/json','Accept':'application/x-ndjson'},
+          body: JSON.stringify({
+            date_from: dateFrom.value,
+            date_to: dateTo.value,
+            series: series.map(item => ({...item, metric: backendMetric(item.metric)}))
+          }),
+          signal: analysisAbort.signal
+        });
+        if (!response.ok) throw new Error('Erreur ' + response.status);
+        if (!response.body) throw new Error('Streaming response unavailable');
+
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+        let completed = 0;
+        while (true) {
+          const {value,done} = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value,{stream:true});
+          const lines = buffer.split('\n');
+          buffer = lines.pop() || '';
+          for (const rawLine of lines) {
+            const line = rawLine.trim();
+            if (!line) continue;
+            const message = JSON.parse(line);
+            if (message.type === 'progress') {
+              const rowText = Number(message.rows || 0).toLocaleString();
+              status.textContent = message.name + ': ' + message.message + (message.rows ? ' · ' + rowText + ' aggregated rows' : '');
+            } else if (message.type === 'series') {
+              resultsByUid[message.uid] = message;
+              completed += 1;
+              status.textContent = completed + '/' + series.length + ' series complete · ' + message.name;
+              renderChart();
+            } else if (message.type === 'error') {
+              completed += 1;
+              status.textContent = message.error || 'Erreur 500';
+            } else if (message.type === 'done') {
+              status.textContent = 'Analysis complete · ' + Object.keys(resultsByUid).length + '/' + series.length + ' series rendered.';
+            }
+          }
+        }
+      } catch (error) {
+        if (error.name === 'AbortError') status.textContent = 'Analysis stopped.';
+        else status.textContent = '' + window.eveosintPublicError(error);
+      } finally {
+        runButton.disabled = false;
+        stopButton.classList.add('d-none');
+        analysisAbort = null;
+      }
+    }
+
+    runButton.addEventListener('click', runAnalysis);
+    csvButton.addEventListener('click', exportCsv);
+    viewChartButton.addEventListener('click', () => setResultView('chart'));
+    viewCsvButton.addEventListener('click', () => setResultView('csv'));
+    stopButton.addEventListener('click', () => { if (analysisAbort) analysisAbort.abort(); });
+
+    document.querySelectorAll('[data-ship-tab="analysis"]').forEach(tab => {
+      tab.addEventListener('click', () => {
+        if (!series.length) series = [newDraft()];
+        renderSeriesList();
+        renderChart();
+      });
+    });
+
+    setDraft(newDraft());
+    renderSeriesList();
+    renderChart();
+    setResultView('chart');
+  })();
+  </script>
+</div>

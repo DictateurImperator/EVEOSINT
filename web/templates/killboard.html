@@ -1,0 +1,428 @@
+{% extends "base.html" %}
+
+{% block content %}
+<style>
+  .killmail-table-wrap { overflow-x:auto; }
+  .killmail-table { width:100%; border-collapse:collapse; font-size:.92rem; }
+  .killmail-table th { color:rgba(255,255,255,.78); font-weight:700; text-align:left; border-bottom:1px solid rgba(255,255,255,.18); padding:.45rem .55rem; white-space:nowrap; }
+  .killmail-table td { border-bottom:1px solid rgba(255,255,255,.10); padding:.35rem .55rem; vertical-align:middle; }
+  .killmail-date-row td { background:rgba(0,0,0,.55); color:rgba(255,255,255,.78); font-weight:800; font-style:italic; padding:.45rem .55rem; }
+  .killmail-row-kill { background:rgba(0,90,20,.34); }
+  .killmail-row-loss { background:rgba(120,0,0,.42); }
+  .killmail-time-cell { white-space:nowrap; width:86px; }
+  .killmail-status { display:inline-block; width:1.1rem; font-weight:900; }
+  .killmail-status-kill { color:#9fd49f; }
+  .killmail-status-loss { color:#fca5a5; }
+  .killmail-isk { color:#22d3ee; display:block; margin-left:1.1rem; margin-top:.1rem; }
+  .killmail-ship-cell { width:84px; min-width:84px; }
+  .killmail-ship-box { display:inline-flex; align-items:center; justify-content:center; }
+  .killmail-type-icon { width:64px; height:64px; border-radius:.45rem; object-fit:cover; background:rgba(255,255,255,.08); flex:0 0 auto; }
+  .killmail-pilot-icons { display:flex; align-items:center; gap:.35rem; }
+  .killmail-pilot-icon { width:44px; height:44px; border-radius:.45rem; object-fit:cover; background:rgba(255,255,255,.08); flex:0 0 auto; }
+  .killmail-pilot-cell { min-width:155px; }
+  .killmail-pilot-box { display:flex; align-items:center; gap:.55rem; }
+  .killmail-damage { white-space:nowrap; line-height:1.2; }
+  .killmail-damage-main { font-weight:800; color:#f8fafc; }
+  .killmail-damage-percent { color:#22d3ee; font-size:.86rem; }
+  .killmail-entity-box { display:flex; align-items:center; gap:.55rem; min-width:260px; }
+  .killmail-entity-icon { width:56px; height:56px; border-radius:.45rem; object-fit:cover; background:rgba(255,255,255,.08); flex:0 0 auto; display:inline-flex; align-items:center; justify-content:center; }
+  .killmail-main-icon-stack { position:relative; width:64px; height:56px; flex:0 0 auto; }
+  .killmail-main-icon-stack > .text-decoration-none:first-child .killmail-entity-icon,
+  .killmail-main-icon-stack > .killmail-entity-icon:first-child { position:absolute; left:0; top:0; }
+  .killmail-secondary-entity-icon { position:absolute; right:0; bottom:-3px; width:24px; height:24px; border-radius:.3rem; object-fit:cover; background:rgba(2,6,23,.92); border:1px solid rgba(148,163,184,.45); }
+  .killmail-portrait-icon { width:24px; height:24px; border-radius:.3rem; object-fit:cover; background:rgba(255,255,255,.08); flex:0 0 auto; }
+  .killmail-stack-portrait-icon { position:absolute; left:0; bottom:-3px; width:24px; height:24px; border-radius:.3rem; object-fit:cover; background:rgba(2,6,23,.92); border:1px solid rgba(148,163,184,.45); }
+  .killmail-character-line { display:flex; align-items:center; gap:.35rem; }
+  .killmail-empty-icon { background:rgba(255,255,255,.06); }
+  .killmail-entity-lines { line-height:1.35; min-width:0; }
+  .killmail-entity { color:#22d3ee; font-weight:600; }
+  .killmail-entity:hover { color:#7dd3fc; text-decoration:underline !important; }
+  .killmail-location { color:#22d3ee; min-width:210px; line-height:1.28; }
+  .killmail-location-row { display:flex; align-items:center; gap:.35rem; margin:.08rem 0; }
+  .killmail-location-icon { width:20px; height:20px; border-radius:.3rem; display:inline-flex; align-items:center; justify-content:center; flex:0 0 auto; background:rgba(255,255,255,.08); color:#bae6fd; font-weight:800; font-size:.7rem; }
+  .killmail-location-icon img { width:20px; height:20px; border-radius:.3rem; object-fit:cover; }
+  .killmail-external-link { color:#7cc7ff; font-size:.82rem; }
+</style>
+
+<div class="d-flex justify-content-between align-items-start gap-3 mb-4">
+  <div>
+    <h1 class="h3 fw-bold mb-1">Killboard</h1>
+    <div class="muted-line">Latest EVE killmails. No filter is active by default.</div>
+  </div>
+</div>
+
+{% include "killboard_filters.html" %}
+
+<div id="killboard-scan-progress" class="content-card p-3 mb-3 d-none">
+  <div class="d-flex flex-wrap justify-content-between align-items-center gap-2">
+    <div>
+      <div class="fw-semibold" data-kb-progress-title>Searching killmails…</div>
+      <div class="muted-line small" data-kb-progress-text></div>
+    </div>
+    <div class="d-flex gap-2">
+      <button class="btn btn-sm btn-outline-light d-none" type="button" data-kb-next-results>Next 100</button>
+      <button class="btn btn-sm btn-outline-danger" type="button" data-kb-stop>Stop</button>
+    </div>
+  </div>
+</div>
+
+<section class="content-card p-3 p-md-4">
+  <div id="global-killmails">
+    {% if killboard_defer_scan %}
+      <div class="muted-line">Preparing progressive killmail search…</div>
+    {% else %}
+      {% include "entity_killmails_fragment.html" %}
+    {% endif %}
+  </div>
+</section>
+
+<script>
+(function () {
+  var root = document.getElementById('global-killmails');
+  var filterRoot = document.querySelector('[data-killboard-filters]');
+  var progressRoot = document.getElementById('killboard-scan-progress');
+  if (!root || !filterRoot || !progressRoot) return;
+
+  var progressTitle = progressRoot.querySelector('[data-kb-progress-title]');
+  var progressText = progressRoot.querySelector('[data-kb-progress-text]');
+  var nextButton = progressRoot.querySelector('[data-kb-next-results]');
+  var stopButton = progressRoot.querySelector('[data-kb-stop]');
+
+  var activeRequest = null;
+  var searchGeneration = 0;
+  var stopped = false;
+  var filterParams = new URLSearchParams(window.location.search || '');
+  filterParams.delete('page');
+  filterParams.delete('scan_month');
+  filterParams.delete('scan_before');
+  filterParams.delete('scan_row');
+  filterParams.delete('remaining');
+
+  var nextCursor = null;
+
+  function escapeHtml(value) {
+    return String(value == null ? '' : value)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#039;');
+  }
+
+  function formatNumber(value) {
+    try {
+      return new Intl.NumberFormat().format(Number(value || 0));
+    } catch (_) {
+      return String(value || 0);
+    }
+  }
+
+  function activeFilterCount(params) {
+    var count = 0;
+    params.forEach(function (_, key) {
+      if (!['page', 'scan_month', 'scan_before', 'scan_row', 'remaining'].includes(key)) {
+        count += 1;
+      }
+    });
+    return count;
+  }
+
+  function hasActiveFilters(params) {
+    return activeFilterCount(params) > 0;
+  }
+
+  function updateBrowserUrl() {
+    var qs = filterParams.toString();
+    var url = window.location.pathname + (qs ? '?' + qs : '');
+    window.history.replaceState({}, '', url);
+  }
+
+  function abortActiveRequest() {
+    if (activeRequest) {
+      activeRequest.abort();
+      activeRequest = null;
+    }
+  }
+
+  function loadPage(page) {
+    searchGeneration += 1;
+    stopped = true;
+    abortActiveRequest();
+    progressRoot.classList.add('d-none');
+    nextButton.classList.add('d-none');
+
+    var params = new URLSearchParams(filterParams.toString());
+    params.set('page', page || '1');
+    var url = '/killboard/data?' + params.toString();
+    root.innerHTML = '<div class="muted-line">Loading killmails…</div>';
+
+    activeRequest = new XMLHttpRequest();
+    activeRequest.open('GET', url, true);
+    activeRequest.withCredentials = true;
+    activeRequest.onreadystatechange = function () {
+      if (!activeRequest || activeRequest.readyState !== 4) return;
+      if (activeRequest.status >= 200 && activeRequest.status < 300) {
+        root.innerHTML = activeRequest.responseText;
+        return;
+      }
+      root.innerHTML = '<div class="alert alert-danger py-2">Erreur ' +
+        escapeHtml(activeRequest.status) + '</div>';
+    };
+    activeRequest.onerror = function () {
+      root.innerHTML = '<div class="alert alert-danger py-2">Erreur réseau</div>';
+    };
+    activeRequest.send();
+  }
+
+  function monthLabel(isoMonth) {
+    if (!isoMonth) return 'unknown month';
+    var parts = String(isoMonth).split('-');
+    if (parts.length < 2) return isoMonth;
+    var date = new Date(Number(parts[0]), Number(parts[1]) - 1, 1);
+    try {
+      return new Intl.DateTimeFormat(undefined, {month:'long', year:'numeric'}).format(date);
+    } catch (_) {
+      return isoMonth;
+    }
+  }
+
+  function parseFragment(html) {
+    var holder = document.createElement('div');
+    holder.innerHTML = html;
+    return holder;
+  }
+
+  function ensureResultShell(fragment) {
+    var currentTable = root.querySelector('.killmail-table');
+    if (currentTable) return currentTable.querySelector('tbody');
+
+    root.innerHTML = fragment.innerHTML;
+    var tbody = root.querySelector('.killmail-table tbody');
+    if (tbody) {
+      tbody.querySelectorAll('.killmail-empty-result').forEach(function (row) {
+        row.remove();
+      });
+    }
+
+    // Pagination inside monthly fragments is controlled by this progressive
+    // loader, not by the normal page links.
+    root.querySelectorAll('.killmail-progressive-status').forEach(function (node) {
+      node.remove();
+    });
+    return tbody;
+  }
+
+  function appendFragmentRows(fragment) {
+    var sourceBody = fragment.querySelector('.killmail-table tbody');
+    if (!sourceBody) return 0;
+
+    var targetBody = ensureResultShell(fragment);
+    if (!targetBody) return 0;
+
+    targetBody.querySelectorAll('.killmail-empty-result').forEach(function (row) {
+      row.remove();
+    });
+
+    var rows = Array.from(sourceBody.querySelectorAll('tr'));
+    var matchCount = sourceBody.querySelectorAll('.killmail-row-kill, .killmail-row-loss').length;
+
+    rows.forEach(function (row) {
+      if (row.classList.contains('killmail-empty-result')) return;
+      targetBody.appendChild(row.cloneNode(true));
+    });
+
+    return matchCount;
+  }
+
+  function showEmptyIfNeeded() {
+    var tbody = root.querySelector('.killmail-table tbody');
+    if (!tbody) return;
+    if (tbody.querySelector('.killmail-row-kill, .killmail-row-loss')) return;
+
+    var row = document.createElement('tr');
+    row.className = 'killmail-empty-result';
+    row.innerHTML = '<td colspan="6" class="muted-line">No killmails found in the scanned history.</td>';
+    tbody.appendChild(row);
+  }
+
+  function scanUrl(cursor, remaining) {
+    var params = new URLSearchParams(filterParams.toString());
+    params.set('remaining', String(Math.max(1, Math.min(100, remaining))));
+
+    if (cursor && cursor.month) params.set('scan_month', cursor.month);
+    if (cursor && cursor.before) params.set('scan_before', cursor.before);
+    if (cursor && cursor.row) params.set('scan_row', cursor.row);
+
+    return '/killboard/scan?' + params.toString();
+  }
+
+  function startProgressiveSearch(cursor) {
+    searchGeneration += 1;
+    var generation = searchGeneration;
+
+    stopped = false;
+    abortActiveRequest();
+    nextButton.classList.add('d-none');
+    progressRoot.classList.remove('d-none');
+    progressTitle.textContent = 'Searching killmails…';
+
+    root.innerHTML = '<div class="muted-line">Preparing monthly search…</div>';
+
+    var found = 0;
+    var scanned = 0;
+    var currentCursor = cursor || null;
+    nextCursor = null;
+
+    function updateProgress(currentMonth, complete) {
+      var text =
+        '≈ ' + formatNumber(scanned) + ' KM scanned'
+        + ' · ' + formatNumber(found) + ' result' + (found === 1 ? '' : 's');
+
+      if (currentMonth) {
+        text += ' · reached ' + monthLabel(currentMonth);
+      }
+      if (complete) text += ' · end of search';
+
+      progressText.textContent = text;
+    }
+
+    function requestNextMonth() {
+      if (stopped || generation !== searchGeneration) return;
+
+      var remaining = 100 - found;
+      if (remaining <= 0) {
+        progressTitle.textContent = '100 killmails loaded.';
+        updateProgress(currentCursor && currentCursor.month, false);
+        if (nextCursor) nextButton.classList.remove('d-none');
+        return;
+      }
+
+      activeRequest = new XMLHttpRequest();
+      activeRequest.open('GET', scanUrl(currentCursor, remaining), true);
+      activeRequest.withCredentials = true;
+
+      activeRequest.onreadystatechange = function () {
+        if (!activeRequest || activeRequest.readyState !== 4) return;
+        if (generation !== searchGeneration || stopped) return;
+
+        if (!(activeRequest.status >= 200 && activeRequest.status < 300)) {
+          progressTitle.textContent = 'Erreur ' + activeRequest.status;
+          progressText.textContent = '';
+          return;
+        }
+
+        var response = activeRequest;
+        var fragment = parseFragment(response.responseText);
+        var errorNode = fragment.querySelector('.alert-danger');
+
+        if (errorNode) {
+          progressTitle.textContent = 'Monthly scan stopped.';
+          progressText.textContent = errorNode.textContent.trim();
+          return;
+        }
+
+        var month = response.getResponseHeader('X-KB-Scan-Month') || '';
+        var matchesHeader = Number(response.getResponseHeader('X-KB-Matches') || '0');
+        var scannedDelta = Number(response.getResponseHeader('X-KB-Scanned') || '0');
+        var scanComplete = response.getResponseHeader('X-KB-Scan-Complete') === '1';
+
+        var appended = appendFragmentRows(fragment);
+        found += Number.isFinite(matchesHeader) ? matchesHeader : appended;
+        scanned += Number.isFinite(scannedDelta) ? scannedDelta : 0;
+
+        var nextMonth = response.getResponseHeader('X-KB-Next-Month') || '';
+        var nextBefore = response.getResponseHeader('X-KB-Next-Before') || '';
+        var nextRow = response.getResponseHeader('X-KB-Next-Row') || '';
+
+        currentCursor = nextMonth ? {
+          month: nextMonth,
+          before: nextBefore || '',
+          row: nextRow || ''
+        } : null;
+
+        nextCursor = currentCursor;
+        updateProgress(month, scanComplete);
+
+        if (found >= 100) {
+          progressTitle.textContent = '100 killmails loaded.';
+          if (nextCursor && !scanComplete) {
+            nextButton.classList.remove('d-none');
+          }
+          return;
+        }
+
+        if (scanComplete || !currentCursor) {
+          progressTitle.textContent = 'Search complete.';
+          showEmptyIfNeeded();
+          nextButton.classList.add('d-none');
+          return;
+        }
+
+        // Give the browser a paint opportunity so the user visibly sees
+        // month-by-month progress before starting the next request.
+        window.setTimeout(requestNextMonth, 0);
+      };
+
+      activeRequest.onerror = function () {
+        if (generation !== searchGeneration || stopped) return;
+        progressTitle.textContent = 'Erreur réseau';
+        progressText.textContent = '';
+      };
+
+      // Show which month is about to be queried when resuming from a cursor.
+      if (currentCursor && currentCursor.month) {
+        progressTitle.textContent = 'Searching ' + monthLabel(currentCursor.month) + '…';
+      }
+
+      activeRequest.send();
+    }
+
+    requestNextMonth();
+  }
+
+  filterRoot.addEventListener('killboard:apply', function (event) {
+    filterParams = new URLSearchParams(
+      event.detail && event.detail.params ? event.detail.params.toString() : ''
+    );
+    filterParams.delete('page');
+    filterParams.delete('scan_month');
+    filterParams.delete('scan_before');
+    filterParams.delete('scan_row');
+    filterParams.delete('remaining');
+
+    updateBrowserUrl();
+
+    if (hasActiveFilters(filterParams)) {
+      startProgressiveSearch(null);
+    } else {
+      loadPage('1');
+    }
+  });
+
+  root.addEventListener('click', function (event) {
+    var target = event.target.closest ? event.target.closest('[data-killmail-page]') : null;
+    if (!target || !root.contains(target)) return;
+    event.preventDefault();
+    loadPage(target.getAttribute('data-killmail-page') || '1');
+  });
+
+  stopButton.addEventListener('click', function () {
+    stopped = true;
+    abortActiveRequest();
+    progressTitle.textContent = 'Search stopped.';
+  });
+
+  nextButton.addEventListener('click', function () {
+    if (!nextCursor) return;
+    startProgressiveSearch(nextCursor);
+  });
+
+  // A filtered URL can be refreshed/bookmarked. In that case the server
+  // deliberately skipped the monolithic history query, so resume the same
+  // progressive month-by-month search automatically.
+  if (hasActiveFilters(filterParams)) {
+    startProgressiveSearch(null);
+  }
+})();
+</script>
+{% endblock %}

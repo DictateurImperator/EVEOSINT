@@ -1,0 +1,1916 @@
+<style>
+  .population-subnav { display:flex; gap:.45rem; margin:0 0 1rem .25rem; flex-wrap:wrap; }
+  .population-subnav button {
+    border:1px solid rgba(148,163,184,.28); background:rgba(15,23,42,.72); color:#cbd5e1;
+    border-radius:.45rem; padding:.42rem .72rem; font-size:.86rem; font-weight:800; cursor:pointer;
+  }
+  .population-subnav button:hover { border-color:rgba(125,211,252,.58); color:#e0f2fe; }
+  .population-subnav button.active { border-color:rgba(56,189,248,.78); background:rgba(14,116,144,.24); color:#bae6fd; }
+</style>
+<div class="population-subnav" aria-label="Population Intelligence views">
+  <button type="button" class="active" data-population-subtab="metrics">Global metrics</button>
+  <button type="button" data-population-subtab="flows">Flows</button>
+</div>
+
+<div id="dotlan-population-history-status" class="muted-line" hidden style="margin:.1rem .25rem .75rem .25rem; font-size:.78rem; color:#94a3b8;">
+  <span id="dotlan-population-history-spinner" aria-hidden="true" style="display:inline-block;width:.62rem;height:.62rem;margin-right:.35rem;border:1px solid rgba(148,163,184,.45);border-top-color:#7dd3fc;border-radius:50%;vertical-align:-.03rem;animation:dotlan-pop-spin .8s linear infinite;"></span>
+  <span id="dotlan-population-history-text">Checking DOTLAN population history…</span>
+</div>
+<style>@keyframes dotlan-pop-spin { to { transform:rotate(360deg); } }</style>
+
+<script>
+(function(){
+  const root = document.getElementById('dotlan-population-history-status');
+  const text = document.getElementById('dotlan-population-history-text');
+  const spinner = document.getElementById('dotlan-population-history-spinner');
+  const entityType = '{{ profile.entity_type }}';
+  const entityId = {{ profile.entity_id | int }};
+  const statusUrl = `/api/${entityType}/${entityId}/population-history-check/status`;
+  const startUrl = `/api/${entityType}/${entityId}/population-history-check`;
+  let startedHere = false;
+
+  function show(message) {
+    if (message) text.textContent = message;
+    root.hidden = false;
+  }
+
+  function hideSpinner() {
+    if (spinner) spinner.style.display = 'none';
+  }
+
+  async function readStatus() {
+    const response = await fetch(statusUrl, {credentials:'same-origin', cache:'no-store', headers:{'Accept':'application/json'}});
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || `Erreur ${response.status}`);
+    return data;
+  }
+
+  async function poll() {
+    try {
+      const state = await readStatus();
+      if (state.initialization_done) {
+        if (startedHere) {
+          text.textContent = 'DOTLAN population history loaded.';
+          hideSpinner();
+          setTimeout(() => window.location.reload(), 450);
+        }
+        return;
+      }
+      if (state.last_error && startedHere) {
+        text.textContent = "Erreur 500";
+        hideSpinner();
+        return;
+      }
+      show('Checking DOTLAN population history…');
+      setTimeout(poll, 2500);
+    } catch (_) {
+      if (startedHere) {
+        show('Checking DOTLAN population history…');
+        setTimeout(poll, 3500);
+      }
+    }
+  }
+
+  readStatus().then(async state => {
+    if (state.initialization_done) return;
+
+    show('Checking DOTLAN population history…');
+    const response = await fetch(startUrl, {
+      method:'POST', credentials:'same-origin', cache:'no-store', headers:{'Accept':'application/json'}
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(data.error || `Erreur ${response.status}`);
+    if (data.status === 'complete') {
+      root.hidden = true;
+      return;
+    }
+    startedHere = true;
+    show('Checking DOTLAN population history…');
+    setTimeout(poll, 800);
+  }).catch(error => {
+    show(window.eveosintPublicError(error));
+    hideSpinner();
+  });
+})();
+</script>
+
+<section id="population-global-metrics" class="content-card p-3 p-md-4 mb-4 population-intelligence" data-entity-type="{{ profile.entity_type }}" data-entity-id="{{ profile.entity_id }}">
+  <style>
+    .population-intelligence .pi-toolbar { display:flex; flex-wrap:wrap; gap:.5rem; align-items:center; }
+    .population-intelligence .pi-button {
+      border:1px solid rgba(148,163,184,.28); background:rgba(15,23,42,.72); color:#cbd5e1;
+      border-radius:.45rem; padding:.34rem .62rem; font-size:.83rem; font-weight:700; cursor:pointer;
+    }
+    .population-intelligence .pi-button:hover { border-color:rgba(125,211,252,.58); color:#e0f2fe; }
+    .population-intelligence .pi-button.active { border-color:rgba(56,189,248,.78); background:rgba(14,116,144,.24); color:#bae6fd; }
+    .population-intelligence .pi-input, .population-intelligence .pi-select {
+      border:1px solid rgba(148,163,184,.28); background:rgba(15,23,42,.82); color:#e2e8f0;
+      border-radius:.45rem; padding:.31rem .48rem; font-size:.83rem;
+    }
+    .population-intelligence .pi-select { min-width:250px; max-width:100%; }
+    .population-intelligence .pi-table-wrap { overflow-x:auto; }
+    .population-intelligence .pi-table { width:100%; border-collapse:collapse; font-size:.86rem; }
+    .population-intelligence .pi-table th {
+      color:#cbd5e1; text-align:right; padding:.48rem .56rem; border-bottom:1px solid rgba(148,163,184,.22); white-space:nowrap;
+    }
+    .population-intelligence .pi-table th:first-child, .population-intelligence .pi-table td:first-child { text-align:left; }
+    .population-intelligence .pi-table td {
+      color:#e2e8f0; text-align:right; padding:.48rem .56rem; border-bottom:1px solid rgba(148,163,184,.12); white-space:nowrap;
+    }
+    .population-intelligence .pi-info { margin-left:.25rem; color:#7dd3fc; cursor:help; font-size:.78rem; font-weight:700; }
+    .population-intelligence .pi-pilots-link {
+      display:inline-block; margin-left:.42rem; padding:.08rem .32rem; border:1px solid rgba(125,211,252,.35);
+      border-radius:.32rem; color:#7dd3fc; font-size:.68rem; font-weight:800; text-decoration:none; vertical-align:middle;
+    }
+    .population-intelligence .pi-pilots-link:hover { color:#e0f2fe; border-color:rgba(125,211,252,.7); }
+    .population-intelligence .pi-value { color:#f8fafc; font-weight:800; }
+    .population-intelligence .pi-positive { color:#4ade80; font-weight:700; }
+    .population-intelligence .pi-negative { color:#fb7185; font-weight:700; }
+    .population-intelligence .pi-neutral { color:#94a3b8; }
+    .population-intelligence .pi-section { margin-top:1.45rem; padding-top:1.25rem; border-top:1px solid rgba(148,163,184,.14); }
+    .population-intelligence .pi-section-title { font-size:1rem; font-weight:800; color:#f8fafc; margin:0 0 .25rem; }
+    .population-intelligence .pi-status { font-size:.82rem; color:#94a3b8; }
+    .population-intelligence .pi-status strong { color:#cbd5e1; }
+    .population-intelligence .pi-note {
+      margin-top:.75rem; padding:.65rem .75rem; border:1px solid rgba(148,163,184,.16); border-radius:.55rem;
+      color:#94a3b8; background:rgba(15,23,42,.36); font-size:.8rem;
+    }
+    .population-intelligence .pi-chart-shell {
+      position:relative; margin-top:.8rem; border:1px solid rgba(148,163,184,.18); border-radius:.65rem;
+      background:rgba(2,6,23,.48); overflow:hidden;
+    }
+    .population-intelligence .pi-chart {
+      display:block; width:100%; height:auto; min-height:300px; touch-action:none; cursor:crosshair; user-select:none;
+    }
+    .population-intelligence .pi-chart.dragging { cursor:grabbing; }
+    .population-intelligence .pi-tooltip {
+      position:absolute; z-index:5; pointer-events:none; display:none; min-width:155px; padding:.48rem .58rem;
+      border:1px solid rgba(125,211,252,.4); border-radius:.45rem; background:rgba(2,6,23,.96); color:#e2e8f0;
+      font-size:.78rem; box-shadow:0 8px 28px rgba(0,0,0,.35);
+    }
+    .population-intelligence .pi-tooltip strong { color:#f8fafc; }
+    .population-intelligence .pi-chart-help { color:#64748b; font-size:.76rem; margin-top:.45rem; }
+    .population-intelligence .pi-csv {
+      display:none; margin:0; max-height:420px; overflow:auto; white-space:pre; padding:.8rem;
+      border:1px solid rgba(148,163,184,.16); border-radius:.55rem; background:rgba(2,6,23,.72);
+      color:#cbd5e1; font-size:.77rem; line-height:1.45;
+    }
+    .population-intelligence .pi-csv.visible { display:block; }
+    .population-intelligence .pi-error { color:#fda4af; }
+    .population-intelligence .pi-loading { color:#94a3b8; padding:.6rem 0; }
+    .population-intelligence .pi-custom { display:none; gap:.4rem; align-items:center; flex-wrap:wrap; }
+    .population-intelligence .pi-custom.visible { display:flex; }
+    .population-intelligence .pi-pill {
+      display:inline-block; padding:.15rem .38rem; border-radius:.35rem; background:rgba(51,65,85,.55); color:#cbd5e1; font-size:.75rem;
+    }
+    .population-intelligence .pi-indicator-group {
+      margin-top:.75rem; border:1px solid rgba(148,163,184,.18); border-radius:.65rem; overflow:hidden;
+      background:rgba(15,23,42,.26);
+    }
+    .population-intelligence .pi-indicator-group summary {
+      cursor:pointer; user-select:none; list-style:none; padding:.72rem .85rem; font-weight:800; color:#f8fafc;
+      background:rgba(30,41,59,.55); border-bottom:1px solid rgba(148,163,184,.12);
+    }
+    .population-intelligence .pi-indicator-group summary::-webkit-details-marker { display:none; }
+    .population-intelligence .pi-indicator-group summary::before { content:'▾'; display:inline-block; margin-right:.45rem; color:#7dd3fc; }
+    .population-intelligence .pi-indicator-group:not([open]) summary::before { content:'▸'; }
+    .population-intelligence .pi-indicator-group:not([open]) summary { border-bottom:0; }
+    .population-intelligence .pi-indicator-group .pi-table-wrap { margin:0; }
+    @media(max-width:720px) {
+      .population-intelligence .pi-chart { min-height:240px; }
+      .population-intelligence .pi-select { min-width:190px; }
+    }
+  </style>
+
+  <div class="d-flex justify-content-between align-items-start gap-3 flex-wrap mb-3">
+    <div>
+      <h2 class="h5 fw-bold mb-1">Population Intelligence</h2>
+      <div class="muted-line">Population and PvP activity over time.</div>
+    </div>
+    <div id="pi-status" class="pi-status"></div>
+  </div>
+
+  <div id="pi-loading" class="pi-loading">Loading population history…</div>
+  <div id="pi-error" class="pi-error" hidden></div>
+
+  <div id="pi-content" hidden>
+    <div class="pi-table-wrap">
+      <table class="pi-table" aria-label="Population overview">
+        <thead>
+          <tr><th>Metric</th><th>Current</th><th>7d</th><th>7d %</th><th>30d</th><th>30d %</th></tr>
+        </thead>
+        <tbody id="pi-overview-body"></tbody>
+      </table>
+    </div>
+
+
+    <div class="pi-section">
+      <div class="d-flex justify-content-between align-items-start gap-3 flex-wrap mb-2">
+        <div>
+          <h3 class="pi-section-title">PvP population</h3>
+          <div class="muted-line">A character is counted only while they are in this {{ profile.entity_type }}.</div>
+        </div>
+      </div>
+
+      <div class="pi-toolbar mb-2">
+        <span class="muted-line">PvP definition</span>
+        <button class="pi-button active" type="button" data-pi-mode="any">Any involvement</button>
+        <button class="pi-button" type="button" data-pi-mode="attacker">Attacker only</button>
+        <button class="pi-button" type="button" data-pi-mode="loss">Loss only</button>
+        <span class="muted-line ms-2">Activity window</span>
+        <button class="pi-button" type="button" data-pi-window="30">30d</button>
+        <button class="pi-button" type="button" data-pi-window="60">60d</button>
+        <button class="pi-button active" type="button" data-pi-window="90">90d</button>
+        <button class="pi-button" type="button" data-pi-window="180">180d</button>
+        <button class="pi-button" type="button" data-pi-window="custom">Custom</button>
+        <span id="pi-window-custom" class="pi-custom">
+          <input id="pi-window-days" class="pi-input" type="number" min="1" max="730" value="90" style="width:88px">
+          <button id="pi-apply-window" class="pi-button" type="button">Apply</button>
+        </span>
+        <span class="muted-line ms-2">Core PvP</span>
+        <input id="pi-core-months" class="pi-input" type="number" min="1" max="24" value="6" style="width:72px">
+        <span class="muted-line">months</span>
+        <button id="pi-apply-core" class="pi-button" type="button">Apply</button>
+      </div>
+
+      <div id="pi-activity-loading" class="pi-loading">Loading indicators progressively…</div>
+      <div id="pi-activity-error" class="pi-error" hidden></div>
+      <div id="pi-activity-content" hidden>
+        <div id="pi-activity-sections"></div>
+        <div class="pi-note">Each EVE character is counted separately. We do not know which characters belong to the same player.</div>
+      </div>
+    </div>
+
+    <div class="pi-section">
+      <div class="d-flex justify-content-between align-items-start gap-3 flex-wrap mb-2">
+        <div>
+          <h3 class="pi-section-title">Evolution</h3>
+          <div id="pi-chart-caption" class="muted-line">Full {{ profile.entity_type }} population history.</div>
+        </div>
+        <button id="pi-reset-zoom" class="pi-button" type="button">Reset zoom</button>
+      </div>
+
+      <div class="pi-toolbar mb-2">
+        <span class="muted-line">Indicator</span>
+        <select id="pi-chart-metric" class="pi-select"></select>
+        <span id="pi-chart-context" class="pi-pill"></span>
+      </div>
+
+      <div class="pi-toolbar mb-2">
+        <span class="muted-line">Range</span>
+        <button class="pi-button" type="button" data-pi-range="1m">1M</button>
+        <button class="pi-button" type="button" data-pi-range="3m">3M</button>
+        <button class="pi-button" type="button" data-pi-range="6m">6M</button>
+        <button class="pi-button" type="button" data-pi-range="1y">1Y</button>
+        <button class="pi-button" type="button" data-pi-range="3y">3Y</button>
+        <button class="pi-button active" type="button" data-pi-range="all">All</button>
+        <button class="pi-button" type="button" data-pi-range="custom">Custom</button>
+      </div>
+      <div id="pi-custom-range" class="pi-custom mb-2">
+        <span class="muted-line">From</span><input id="pi-range-from" class="pi-input" type="date">
+        <span class="muted-line">To</span><input id="pi-range-to" class="pi-input" type="date">
+        <button id="pi-apply-range" class="pi-button" type="button">Apply</button>
+      </div>
+
+      <div id="pi-series-loading" class="pi-loading" hidden>Calculating indicator history…</div>
+      <div id="pi-series-error" class="pi-error" hidden></div>
+      <div class="pi-chart-shell">
+        <svg id="pi-chart" class="pi-chart" viewBox="0 0 1000 360" role="img" aria-label="Population Intelligence evolution"></svg>
+        <div id="pi-tooltip" class="pi-tooltip"></div>
+      </div>
+      <div class="pi-chart-help">Mouse wheel: zoom · drag: pan · hover: exact value · double-click: reset zoom.</div>
+
+      <div class="pi-toolbar mt-3">
+        <button id="pi-show-csv" class="pi-button" type="button">Show CSV</button>
+        <button id="pi-download-csv" class="pi-button" type="button">Download CSV</button>
+        <span id="pi-csv-note" class="muted-line"></span>
+      </div>
+      <pre id="pi-csv" class="pi-csv mt-2"></pre>
+
+      <div class="pi-section mt-4">
+        <div class="d-flex justify-content-between align-items-start gap-3 flex-wrap mb-2">
+          <div>
+            <h3 class="pi-section-title">Date comparison</h3>
+            <div class="muted-line">Optional. Choose a reference date, then add dates to compare every indicator.</div>
+          </div>
+          <div class="pi-toolbar">
+            <span class="muted-line">Reference</span>
+            <input id="pi-manual-reference-date" class="pi-input" type="date">
+            <button id="pi-manual-set-reference" class="pi-button" type="button">Set reference</button>
+            <span class="muted-line ms-2">Compare</span>
+            <input id="pi-manual-compare-date" class="pi-input" type="date">
+            <button id="pi-manual-add-date" class="pi-button" type="button">Add date</button>
+            <button id="pi-manual-clear" class="pi-button" type="button">Clear</button>
+          </div>
+        </div>
+        <div id="pi-manual-empty" class="muted-line">No date comparison selected.</div>
+        <div id="pi-manual-loading" class="pi-loading" hidden></div>
+        <div id="pi-manual-error" class="pi-error" hidden></div>
+        <div id="pi-manual-content" hidden>
+          <div class="pi-table-wrap">
+            <table class="pi-table" aria-label="Population Intelligence date comparison">
+              <thead id="pi-manual-head"></thead>
+              <tbody id="pi-manual-body"></tbody>
+            </table>
+          </div>
+          <div class="pi-toolbar mt-2">
+            <button id="pi-manual-show-csv" class="pi-button" type="button">Show comparison CSV</button>
+            <button id="pi-manual-download-csv" class="pi-button" type="button">Download comparison CSV</button>
+          </div>
+          <pre id="pi-manual-csv" class="pi-csv mt-2"></pre>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <script>
+    (function () {
+      'use strict';
+
+      const entityType = '{{ profile.entity_type }}';
+      const entityId = {{ profile.entity_id|int }};
+      const entityLabel = entityType === 'corporation' ? 'corporation' : 'alliance';
+      const entityFilePrefix = entityType + '_' + entityId;
+      const officialApi = '/api/' + entityType + '/' + entityId + '/population';
+      const intelligenceApi = '/api/' + entityType + '/' + entityId + '/population-intelligence';
+      const groupApi = intelligenceApi + '/group';
+      const populationStateKey = 'eveosint:population-state:' + entityType + ':' + entityId;
+      const populationReturnFlagKey = populationStateKey + ':return';
+      const populationStateMaxAgeMs = 2 * 60 * 60 * 1000;
+      const numberFormat = new Intl.NumberFormat('en-US', {maximumFractionDigits: 0});
+      const oneDecimal = new Intl.NumberFormat('en-US', {minimumFractionDigits: 1, maximumFractionDigits: 1});
+      const twoDecimal = new Intl.NumberFormat('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2});
+
+      const metrics = {
+        member_count: {label:'Total population', group:'Population', type:'count', deltaSense:'higher_good', description:'Total number of characters in the alliance on this date.'},
+        corporation_count: {label:'Corporations', group:'Population', type:'count', deltaSense:'neutral', description:'Number of corporations in the alliance on this date.'},
+        sovereignty_count: {label:'Sov systems', group:'Population', type:'count', deltaSense:'higher_good', description:'Number of solar systems held by the alliance on this date.'},
+
+        active_count: {label:'PvP population', group:'PvP activity', type:'count', deltaSense:'higher_good', description:'Characters who are in the alliance on this date and were seen in PvP during the selected activity window. Only PvP done while they were in the alliance counts. Example: with a 90-day window run on September 13, we look at June 16 to September 13. PvP before joining or after leaving does not count.'},
+        active_rate_pct: {label:'PvP share', group:'PvP activity', type:'percent', deltaSense:'higher_good', description:'The part of the Total population that is in the PvP population. Example: with a 90-day window run on September 13, 20% means 1 character out of 5 in the alliance was seen in PvP between June 16 and September 13.'},
+        victim_only_count: {label:'Victim-only characters', group:'PvP activity', type:'count', deltaSense:'neutral', description:'Characters who are in the alliance on this date, were seen as a PvP victim during the selected window, and were never seen as an attacker during that same window while in the alliance. Example: with a 90-day window run on September 13, we check June 16 to September 13 only.'},
+        victim_only_rate_pct: {label:'Victim-only share', group:'PvP activity', type:'percent', deltaSense:'neutral', description:'The part of the Total population that is Victim-only. Example: with a 90-day window run on September 13, the percentage uses the alliance population on September 13 and victim-only characters found between June 16 and September 13.'},
+        top10_activity_concentration_pct: {label:'Top 10% PvP concentration', group:'PvP activity', type:'percent', deltaSense:'neutral', description:'How much of the PvP activity is done by the most active 10% of the PvP population. Example: with a 90-day window run on September 13, 65% means the most active 10% of PvP characters produced 65% of the counted PvP appearances between June 16 and September 13.'},
+        median_character_age_years: {label:'Median PvP character age', group:'PvP activity', type:'years', deltaSense:'neutral', description:'Half of the PvP population has a character younger than this age, and half has a character older than this age. Example: with a 90-day window run on September 13, the PvP population is the characters seen in PvP between June 16 and September 13.'},
+        median_alliance_tenure_days: {label:'Median alliance tenure', group:'PvP activity', type:'days', deltaSense:'neutral', description:'Half of the PvP population has been in the alliance for less than this time, and half for longer. Example: with a 90-day window run on September 13, we first build the PvP population from June 16 to September 13, then measure how long those characters have continuously been in the alliance as of September 13.'},
+
+        retained_pvp_count: {label:'Retained PvP', group:'Retention', type:'count', deltaSense:'higher_good', description:'Characters who were in the PvP population during the previous period and are still in the PvP population during the current period, without leaving the alliance between the two. Example: with a 90-day window run on September 13, the current period is June 16 to September 13 and the previous period is March 18 to June 15. The character must be seen in PvP in both periods and stay in the alliance continuously. If they leave and come back, they do not count as retained.'},
+        retention_pct: {label:'PvP retention', group:'Retention', type:'percent', deltaSense:'higher_good', description:'The percentage of the previous PvP population that is still in the current PvP population without leaving the alliance between the two periods. Example: with a 90-day window run on September 13, we compare March 18 to June 15 with June 16 to September 13. If 6 out of 10 previous PvP characters are still present and seen in PvP, retention is 60%. If a character leaves and comes back, they do not count as retained.'},
+        churn_count: {label:'PvP churn', group:'Retention', type:'count', deltaSense:'lower_good', description:'Characters who were in the previous PvP population but are not retained in the current one. They may have left the alliance or simply not appeared in PvP during the current period. Example: with a 90-day window run on September 13, we compare March 18 to June 15 with June 16 to September 13. A character who leaves and comes back is not retained, so they are counted in churn.'},
+        churn_pct: {label:'PvP churn rate', group:'Retention', type:'percent', deltaSense:'lower_good', description:'The percentage of the previous PvP population that is not retained in the current PvP population. Example: with a 90-day window run on September 13, we compare March 18 to June 15 with June 16 to September 13. If 4 out of 10 previous PvP characters are not retained, churn rate is 40%.'},
+        newly_active_pvp: {label:'Entered PvP population', group:'Retention', type:'count', deltaSense:'higher_good', description:'Characters who are in the current PvP population but were not in the previous PvP population. They may be new to the alliance or simply returning to PvP after being inactive. Example: with a 90-day window run on September 13, they appear in PvP between June 16 and September 13 but were not in the PvP population for March 18 to June 15.'},
+
+        pvp_arrivals: {label:'PvP-active joiners', group:'PvP member movement', type:'count', deltaSense:'neutral', description:'Characters who joined the alliance during the selected period and were seen in PvP after joining, while they were still in the alliance. PvP before joining is ignored. Example: with a 90-day window run on September 13, the join must happen between June 16 and September 13, and the counted PvP must happen after that join and before any later departure.'},
+        pvp_departures: {label:'PvP-active leavers', group:'PvP member movement', type:'count', deltaSense:'lower_good', description:'Characters who left the alliance during the selected period and were seen in PvP before leaving, while they were still in the alliance. PvP after leaving is ignored. Example: with a 90-day window run on September 13, the departure must happen between June 16 and September 13, and the counted PvP must happen before that departure while the character is still in the alliance.'},
+        pvp_turnover_count: {label:'PvP-active member movement', group:'PvP member movement', type:'count', deltaSense:'neutral', description:'PvP-active joiners plus PvP-active leavers during the selected period. Example: with a 90-day window run on September 13, we count qualifying joins and leaves between June 16 and September 13. A character who joins and later leaves during that same period can count once as a joiner and once as a leaver.'},
+        pvp_turnover_rate_pct: {label:'PvP-active movement rate', group:'PvP member movement', type:'percent', deltaSense:'neutral', description:'PvP-active member movement divided by the PvP population on the analysed date. Example: with a 90-day window run on September 13, movement is counted from June 16 to September 13 and divided by the PvP population on September 13.'},
+
+        core_pvp_count: {label:'Core PvP population', group:'Core PvP', type:'count', deltaSense:'higher_good', description:'Characters in the current PvP population who were seen in PvP in every rolling one-month block of the selected Core period. Example: run on September 13. Core 1 requires PvP from August 13 to September 13. Core 2 also requires PvP from July 13 to August 12. Core 3 also requires PvP from June 13 to July 12. PvP only counts while the character is in the alliance.'},
+        core_pvp_rate_pct: {label:'Core PvP share', group:'Core PvP', type:'percent', deltaSense:'higher_good', description:'The part of the PvP population that belongs to the Core PvP population. Example: run on September 13 with Core 3. The character must meet the Core PvP rule for all three rolling month blocks, and the percentage is calculated against the PvP population on September 13.'},
+
+        median_activation_delay_days: {label:'Median PvP activation delay', group:'PvP activation', type:'days', deltaSense:'lower_good', description:'Among characters who joined the alliance during the selected activity window, are still in the alliance on the analysed date, and were seen in PvP after joining, half reached their first PvP in fewer days than this and half took longer. PvP before joining is ignored. Example: with a 90-day window run on September 13, we look at characters who joined between June 16 and September 13 and measure the days from joining to their first PvP after joining.'}
+      };
+      if (entityType === 'corporation') {
+        delete metrics.corporation_count;
+        delete metrics.sovereignty_count;
+        metrics.member_count.description = 'Total number of characters in the corporation on this date.';
+        metrics.median_alliance_tenure_days.label = 'Median corporation tenure';
+      }
+
+      const officialMetricKeys = entityType === 'corporation' ? ['member_count'] : ['member_count','corporation_count','sovereignty_count'];
+      const activityMetricKeys = Object.keys(metrics).filter(function (key) { return officialMetricKeys.indexOf(key) < 0; });
+
+      const loadingEl = document.getElementById('pi-loading');
+      const errorEl = document.getElementById('pi-error');
+      const contentEl = document.getElementById('pi-content');
+      const statusEl = document.getElementById('pi-status');
+      const overviewBody = document.getElementById('pi-overview-body');
+      const manualReferenceInput = document.getElementById('pi-manual-reference-date');
+      const manualCompareInput = document.getElementById('pi-manual-compare-date');
+      const manualEmpty = document.getElementById('pi-manual-empty');
+      const manualLoading = document.getElementById('pi-manual-loading');
+      const manualError = document.getElementById('pi-manual-error');
+      const manualContent = document.getElementById('pi-manual-content');
+      const manualHead = document.getElementById('pi-manual-head');
+      const manualBody = document.getElementById('pi-manual-body');
+      const manualCsvPre = document.getElementById('pi-manual-csv');
+      const manualShowCsv = document.getElementById('pi-manual-show-csv');
+      const activityLoading = document.getElementById('pi-activity-loading');
+      const activityError = document.getElementById('pi-activity-error');
+      const activityContent = document.getElementById('pi-activity-content');
+      const activitySections = document.getElementById('pi-activity-sections');
+      const metricSelect = document.getElementById('pi-chart-metric');
+      const chartContext = document.getElementById('pi-chart-context');
+      const chart = document.getElementById('pi-chart');
+      const tooltip = document.getElementById('pi-tooltip');
+      const chartCaption = document.getElementById('pi-chart-caption');
+      const customRange = document.getElementById('pi-custom-range');
+      const rangeFrom = document.getElementById('pi-range-from');
+      const rangeTo = document.getElementById('pi-range-to');
+      const seriesLoading = document.getElementById('pi-series-loading');
+      const seriesError = document.getElementById('pi-series-error');
+      const csvPre = document.getElementById('pi-csv');
+      const csvNote = document.getElementById('pi-csv-note');
+
+      let officialPayload = null;
+      let officialRows = [];
+      let officialByDate = new Map();
+      let referenceDate = null;
+      let compareDates = [];
+      let manualReferenceDate = null;
+      let manualCompareDates = [];
+      let manualRows = new Map();
+      let manualLoadedMetrics = new Set();
+      let manualFailedMetrics = new Set();
+      let manualRequestToken = 0;
+      let snapshotRows = new Map();
+      let loadedActivityMetrics = new Set();
+      let failedActivityMetrics = new Set();
+      let activityRequestToken = 0;
+      let activityMode = 'any';
+      let activityWindow = 90;
+      let coreMonths = 6;
+      let chartMetric = 'member_count';
+      let rangeName = 'all';
+      let rangeStartDate = null;
+      let rangeEndDate = null;
+      let chartRows = [];
+      let baseStart = 0;
+      let baseEnd = 0;
+      let viewStart = 0;
+      let viewEnd = 0;
+      let dragging = false;
+      let dragStartX = 0;
+      let dragStartViewStart = 0;
+      let seriesRequestToken = 0;
+
+      function parseDate(iso) { return new Date(iso + 'T00:00:00Z'); }
+      function isoDate(value) { return value.toISOString().slice(0,10); }
+      function shiftDays(iso, delta) { const d=parseDate(iso); d.setUTCDate(d.getUTCDate()+delta); return isoDate(d); }
+      function escapeHtml(value) {
+        return String(value == null ? '' : value).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#039;');
+      }
+      function escapeXml(value) { return escapeHtml(value); }
+
+      function populationOpenGroups() {
+        const result={};
+        activitySections.querySelectorAll('details[data-pi-group]').forEach(function(details){
+          result[details.getAttribute('data-pi-group')]=details.open;
+        });
+        return result;
+      }
+
+      function savePopulationState() {
+        if(!officialRows.length)return;
+        const state={
+          version:1,
+          savedAt:Date.now(),
+          scrollY:window.scrollY||0,
+          officialPayload:officialPayload,
+          officialRows:officialRows,
+          referenceDate:referenceDate,
+          compareDates:compareDates,
+          manualReferenceDate:manualReferenceDate,
+          manualCompareDates:manualCompareDates,
+          manualRows:Array.from(manualRows.entries()),
+          manualLoadedMetrics:Array.from(manualLoadedMetrics),
+          manualFailedMetrics:Array.from(manualFailedMetrics),
+          snapshotRows:Array.from(snapshotRows.entries()),
+          loadedActivityMetrics:Array.from(loadedActivityMetrics),
+          failedActivityMetrics:Array.from(failedActivityMetrics),
+          activityMode:activityMode,
+          activityWindow:activityWindow,
+          coreMonths:coreMonths,
+          chartMetric:chartMetric,
+          rangeName:rangeName,
+          rangeStartDate:rangeStartDate,
+          rangeEndDate:rangeEndDate,
+          chartRows:chartRows,
+          baseStart:baseStart,
+          baseEnd:baseEnd,
+          viewStart:viewStart,
+          viewEnd:viewEnd,
+          openGroups:populationOpenGroups()
+        };
+        try {
+          sessionStorage.setItem(populationStateKey,JSON.stringify(state));
+          sessionStorage.setItem(populationReturnFlagKey,'1');
+        } catch(error) {
+          console.warn('Population page state could not be saved',error);
+        }
+      }
+
+      function shouldRestorePopulationState() {
+        const params=new URLSearchParams(window.location.search);
+        if(params.get('restore_population')==='1')return true;
+        try { return sessionStorage.getItem(populationReturnFlagKey)==='1'; } catch(error) { return false; }
+      }
+
+      function restorePopulationState() {
+        if(!shouldRestorePopulationState())return false;
+        let raw=null;
+        try { raw=sessionStorage.getItem(populationStateKey); } catch(error) { return false; }
+        if(!raw)return false;
+        let state=null;
+        try { state=JSON.parse(raw); } catch(error) { return false; }
+        if(!state || state.version!==1 || !Array.isArray(state.officialRows) || !state.officialRows.length)return false;
+        if(!state.savedAt || Date.now()-state.savedAt>populationStateMaxAgeMs)return false;
+
+        officialPayload=state.officialPayload||{};
+        officialRows=state.officialRows;
+        officialByDate=new Map(officialRows.map(function(row){return [row.date,row];}));
+        referenceDate=state.referenceDate||null;
+        compareDates=Array.isArray(state.compareDates)?state.compareDates:[];
+        manualReferenceDate=state.manualReferenceDate||null;
+        manualCompareDates=Array.isArray(state.manualCompareDates)?state.manualCompareDates:[];
+        manualRows=new Map(Array.isArray(state.manualRows)?state.manualRows:[]);
+        manualLoadedMetrics=new Set(Array.isArray(state.manualLoadedMetrics)?state.manualLoadedMetrics:[]);
+        manualFailedMetrics=new Set(Array.isArray(state.manualFailedMetrics)?state.manualFailedMetrics:[]);
+        snapshotRows=new Map(Array.isArray(state.snapshotRows)?state.snapshotRows:[]);
+        loadedActivityMetrics=new Set(Array.isArray(state.loadedActivityMetrics)?state.loadedActivityMetrics:[]);
+        failedActivityMetrics=new Set(Array.isArray(state.failedActivityMetrics)?state.failedActivityMetrics:[]);
+        activityMode=['any','attacker','loss'].includes(state.activityMode)?state.activityMode:'any';
+        activityWindow=Math.max(1,Math.min(730,Number(state.activityWindow)||90));
+        coreMonths=Math.max(1,Math.min(24,Number(state.coreMonths)||6));
+        chartMetric=metrics[state.chartMetric]?state.chartMetric:'member_count';
+        rangeName=state.rangeName||'all';
+        rangeStartDate=state.rangeStartDate||officialRows[0].date;
+        rangeEndDate=state.rangeEndDate||officialRows[officialRows.length-1].date;
+        chartRows=Array.isArray(state.chartRows)?state.chartRows:[];
+        baseStart=Number.isInteger(state.baseStart)?state.baseStart:0;
+        baseEnd=Number.isInteger(state.baseEnd)?state.baseEnd:Math.max(0,chartRows.length-1);
+        viewStart=Number.isInteger(state.viewStart)?state.viewStart:baseStart;
+        viewEnd=Number.isInteger(state.viewEnd)?state.viewEnd:baseEnd;
+
+        loadingEl.hidden=true;
+        errorEl.hidden=true;
+        contentEl.hidden=false;
+        renderStatus(officialPayload||{});
+        renderOverview();
+
+        const first=officialRows[0].date,last=officialRows[officialRows.length-1].date;
+        [manualReferenceInput,manualCompareInput,rangeFrom,rangeTo].forEach(function(input){input.min=first;input.max=last;});
+        manualReferenceInput.value=manualReferenceDate||'';
+        manualCompareInput.value='';
+        rangeFrom.value=rangeStartDate;
+        rangeTo.value=rangeEndDate;
+        document.getElementById('pi-window-days').value=String(activityWindow);
+        document.getElementById('pi-core-months').value=String(coreMonths);
+        setActiveButtons('mode',activityMode);
+        const standardWindow=['30','60','90','180'].indexOf(String(activityWindow))>=0?String(activityWindow):'custom';
+        setActiveButtons('window',standardWindow);
+        document.getElementById('pi-window-custom').classList.toggle('visible',standardWindow==='custom');
+        setActiveButtons('range',rangeName);
+        customRange.classList.toggle('visible',rangeName==='custom');
+        metricSelect.value=chartMetric;
+
+        activityContent.hidden=false;
+        activityLoading.hidden=true;
+        activityError.hidden=failedActivityMetrics.size===0;
+        activityError.textContent=failedActivityMetrics.size?('Some indicators could not be restored: '+Array.from(failedActivityMetrics).join(', ')):'';
+        renderActivityTable();
+        if(state.openGroups){
+          activitySections.querySelectorAll('details[data-pi-group]').forEach(function(details){
+            const key=details.getAttribute('data-pi-group');
+            if(Object.prototype.hasOwnProperty.call(state.openGroups,key))details.open=!!state.openGroups[key];
+          });
+        }
+        renderManualComparison();
+        manualLoading.hidden=true;
+        seriesLoading.hidden=true;
+        seriesError.hidden=true;
+        chartContext.textContent=officialMetricKeys.indexOf(chartMetric)>=0?'absolute values':pvpModeLabel()+' · '+activityWindow+'d · core '+coreMonths+'m';
+        chartCaption.textContent=metrics[chartMetric].label+' · '+rangeStartDate+' → '+rangeEndDate;
+        if(chartRows.length)renderChart(); else chart.innerHTML='<text x="500" y="180" text-anchor="middle" fill="#94a3b8" font-size="14">No cached chart data.</text>';;
+
+        try { sessionStorage.removeItem(populationReturnFlagKey); } catch(error) {}
+        const params=new URLSearchParams(window.location.search);
+        if(params.get('restore_population')==='1'){
+          params.delete('restore_population');
+          const clean=window.location.pathname+(params.toString()?'?'+params.toString():'')+window.location.hash;
+          history.replaceState(null,'',clean);
+        }
+        requestAnimationFrame(function(){window.scrollTo(0,Number(state.scrollY)||0);});
+        return true;
+      }
+
+      const pilotListMetricKeys = new Set([
+        'active_count','victim_only_count','retained_pvp_count','churn_count',
+        'newly_active_pvp','pvp_arrivals','pvp_departures','core_pvp_count'
+      ]);
+      const longDateFormat = new Intl.DateTimeFormat('en-GB', {day:'numeric', month:'long', year:'numeric', timeZone:'UTC'});
+
+      function formatLongDate(iso) {
+        if(!iso)return 'the selected date';
+        return longDateFormat.format(parseDate(iso));
+      }
+      function shiftMonthsClamped(iso, delta) {
+        const source=parseDate(iso);
+        const day=source.getUTCDate();
+        const baseIndex=source.getUTCFullYear()*12+source.getUTCMonth()+delta;
+        const year=Math.floor(baseIndex/12);
+        const month=((baseIndex%12)+12)%12;
+        const lastDay=new Date(Date.UTC(year,month+1,0)).getUTCDate();
+        return isoDate(new Date(Date.UTC(year,month,Math.min(day,lastDay))));
+      }
+      function pvpModeLabel() {
+        if(activityMode==='attacker') return 'Attacker only';
+        if(activityMode==='loss') return 'Loss only';
+        return 'Any involvement';
+      }
+      function pvpRuleText() {
+        if(activityMode==='attacker') return 'as an attacker';
+        if(activityMode==='loss') return 'only as a victim, with no attacker appearance in that same period';
+        return 'as an attacker or a victim';
+      }
+      function tooltipAnchorDate() {
+        const dates=activityDates().filter(Boolean).sort();
+        return dates.length ? dates[dates.length-1] : (officialRows.length ? officialRows[officialRows.length-1].date : null);
+      }
+      function metricDescription(key, anchorDate) {
+        const anchor=anchorDate || tooltipAnchorDate();
+        const anchorText=formatLongDate(anchor);
+        const currentStart=anchor ? shiftDays(anchor,-(activityWindow-1)) : null;
+        const previousEnd=anchor ? shiftDays(anchor,-activityWindow) : null;
+        const previousStart=previousEnd ? shiftDays(previousEnd,-(activityWindow-1)) : null;
+        const currentRange=currentStart ? formatLongDate(currentStart)+' to '+anchorText : 'the selected activity window';
+        const previousRange=previousStart ? formatLongDate(previousStart)+' to '+formatLongDate(previousEnd) : 'the previous equal-length window';
+        const pvpRule=pvpRuleText();
+
+        if(key==='member_count') return 'Total number of characters in the '+entityLabel+' on '+anchorText+'.';
+        if(key==='corporation_count') return 'Number of corporations in the alliance on '+anchorText+'.';
+        if(key==='sovereignty_count') return 'Number of solar systems held by the alliance on '+anchorText+'.';
+        if(key==='active_count') return 'Characters who are members of the '+entityLabel+' on '+anchorText+' and were seen in PvP '+pvpRule+' from '+currentRange+'. PvP only counts while the character is in the '+entityLabel+'.';
+        if(key==='active_rate_pct') return 'PvP population divided by Total population on '+anchorText+'. The PvP population uses '+currentRange+' and counts PvP '+pvpRule+' only while each character is in the '+entityLabel+'.';
+        if(key==='victim_only_count') return 'Characters who are members of the '+entityLabel+' on '+anchorText+', were seen as a PvP victim from '+currentRange+', and were never seen as an attacker during that same period while in the '+entityLabel+'.';
+        if(key==='victim_only_rate_pct') return 'Victim-only characters divided by Total population on '+anchorText+'. Victim-only activity is checked from '+currentRange+' while each character is in the '+entityLabel+'.';
+        if(key==='top10_activity_concentration_pct') return 'Share of the selected PvP activity done by the most active 10% of the PvP population from '+currentRange+'. With the current setting, PvP activity means appearances '+pvpRule+'.';
+        if(key==='median_character_age_years') return 'Half of the PvP population on '+anchorText+' has a character younger than this age, and half has a character older than this age. The PvP population is built from '+currentRange+'.';
+        if(key==='median_alliance_tenure_days') return 'Half of the PvP population on '+anchorText+' has been continuously in the '+entityLabel+' for less than this time, and half for longer. The PvP population is built from '+currentRange+'.';
+        if(key==='retained_pvp_count') return 'Characters seen in PvP '+pvpRule+' during '+previousRange+' and again during '+currentRange+', without leaving the '+entityLabel+' between the two periods. If they leave and come back, they are not counted as retained.';
+        if(key==='retention_pct') return 'Retained PvP divided by the PvP population from '+previousRange+'. To count as retained on '+anchorText+', a character must also be seen in PvP '+pvpRule+' during '+currentRange+' and must not leave the '+entityLabel+' between the two periods.';
+        if(key==='churn_count') return 'Characters who were in the PvP population from '+previousRange+' but are not retained in '+currentRange+'. They may have left the '+entityLabel+' or simply had no selected PvP activity in the current period. Leaving and coming back also means they are not retained.';
+        if(key==='churn_pct') return 'PvP churn divided by the PvP population from '+previousRange+'. The current period is '+currentRange+'.';
+        if(key==='newly_active_pvp') return 'Characters in the PvP population from '+currentRange+' who were not in the PvP population from '+previousRange+'. They may be new to the '+entityLabel+' or returning to PvP after inactivity.';
+        if(key==='pvp_arrivals') return 'Characters who joined the '+entityLabel+' during the period from '+currentRange+' and were then seen in PvP '+pvpRule+' after joining, before any later departure. PvP before joining is ignored.';
+        if(key==='pvp_departures') return 'Characters who left the '+entityLabel+' during the period from '+currentRange+' and were seen in PvP '+pvpRule+' before leaving, while they were still in the '+entityLabel+'. PvP after leaving is ignored.';
+        if(key==='pvp_turnover_count') return 'PvP-active joiners plus PvP-active leavers during the period from '+currentRange+'. A character who joins and later leaves during this same period can count once in each group.';
+        if(key==='pvp_turnover_rate_pct') return 'PvP-active member movement during the period from '+currentRange+' divided by the PvP population on '+anchorText+'.';
+        if(key==='core_pvp_count' || key==='core_pvp_rate_pct') {
+          const periods=[];
+          for(let back=coreMonths-1;back>=0;back-=1){
+            const start=shiftMonthsClamped(anchor,-(back+1));
+            const end=back===0?anchor:shiftDays(shiftMonthsClamped(anchor,-back),-1);
+            periods.push(formatLongDate(start)+' to '+formatLongDate(end));
+          }
+          const periodText=periods.length<=6 ? periods.join('; ') : (periods[0]+'; …; '+periods[periods.length-1]+' ('+periods.length+' rolling months total)');
+          if(key==='core_pvp_count') return 'Characters in the PvP population on '+anchorText+' (built from '+currentRange+') who were seen in PvP '+pvpRule+' in every rolling one-month block of the selected Core period: '+periodText+'. PvP only counts while the character is in the '+entityLabel+'.';
+          return 'Core PvP population divided by the PvP population on '+anchorText+' (built from '+currentRange+'). Core '+coreMonths+' uses these rolling one-month blocks: '+periodText+'.';
+        }
+        if(key==='median_activation_delay_days') return 'Among characters who joined the '+entityLabel+' during '+currentRange+', are still members on '+anchorText+', and were seen in PvP '+pvpRule+' after joining, half reached their first PvP within fewer days than this and half took longer. PvP before joining is ignored.';
+        return (metrics[key]&&metrics[key].description)||'';
+      }
+      function pilotListUrl(key, rowDate) {
+        if(!pilotListMetricKeys.has(key) || !rowDate)return null;
+        const params=new URLSearchParams();
+        params.set('metric',key);
+        params.set('date',rowDate);
+        params.set('window',String(activityWindow));
+        params.set('mode',activityMode);
+        params.set('core_months',String(coreMonths));
+        return '/api/'+entityType+'/'+entityId+'/population/pilots?'+params.toString();
+      }
+      function pilotListLink(key,row,value) {
+        if(!pilotListMetricKeys.has(key) || !row || !row.date || value==null || Number(value)<=0)return '';
+        const href=pilotListUrl(key,row.date);
+        return href ? '<a class="pi-pilots-link" href="'+escapeHtml(href)+'" title="View the pilots behind this number">View pilots</a>' : '';
+      }
+
+      function formatValue(key, value) {
+        if (value == null || !Number.isFinite(Number(value))) return '—';
+        const type = metrics[key] ? metrics[key].type : 'count';
+        const n = Number(value);
+        if (type === 'count') return numberFormat.format(Math.round(n));
+        if (type === 'signed_count') return (n > 0 ? '+' : '') + numberFormat.format(Math.round(n));
+        if (type === 'percent') return twoDecimal.format(n) + '%';
+        if (type === 'signed_percent') return (n > 0 ? '+' : '') + twoDecimal.format(n) + '%';
+        if (type === 'signed_pp') return (n > 0 ? '+' : '') + twoDecimal.format(n) + ' pp';
+        if (type === 'years') return oneDecimal.format(n) + ' y';
+        if (type === 'days') return oneDecimal.format(n) + ' d';
+        return twoDecimal.format(n);
+      }
+
+      function deltaInfo(current, reference) {
+        if (current == null || reference == null || !Number.isFinite(Number(current)) || !Number.isFinite(Number(reference))) return {delta:null,pct:null};
+        const delta = Number(current) - Number(reference);
+        const pct = Number(reference) !== 0 ? (delta / Number(reference)) * 100 : null;
+        return {delta:delta,pct:pct};
+      }
+      function deltaClassForMetric(key, value) {
+        if (value == null || Math.abs(value) < 1e-12) return 'pi-neutral';
+        const sense=(metrics[key]&&metrics[key].deltaSense)||'neutral';
+        if(sense==='neutral') return 'pi-neutral';
+        const good=sense==='lower_good' ? value<0 : value>0;
+        return good ? 'pi-positive' : 'pi-negative';
+      }
+      function formatComparisonDelta(key, current, reference) {
+        const info = deltaInfo(current, reference);
+        if (info.delta == null) return '<span class="pi-neutral">—</span>';
+        const type = metrics[key] ? metrics[key].type : 'count';
+        const cls=deltaClassForMetric(key,info.delta);
+        let absolute;
+        if (type.indexOf('percent') >= 0 || type === 'signed_pp') {
+          absolute = (info.delta > 0 ? '+' : '') + twoDecimal.format(info.delta) + ' pp';
+          return '<span class="' + cls + '">' + absolute + '</span>';
+        }
+        if (type === 'years') absolute = (info.delta > 0 ? '+' : '') + oneDecimal.format(info.delta) + ' y';
+        else if (type === 'days') absolute = (info.delta > 0 ? '+' : '') + oneDecimal.format(info.delta) + ' d';
+        else absolute = (info.delta > 0 ? '+' : '') + numberFormat.format(Math.round(info.delta));
+        const relative = info.pct == null ? '—' : (info.pct > 0 ? '+' : '') + twoDecimal.format(info.pct) + '%';
+        return '<span class="' + cls + '">' + absolute + ' (' + relative + ')</span>';
+      }
+
+      function rowAtOrBefore(targetIso) {
+        if (!officialRows.length) return null;
+        let low=0, high=officialRows.length-1, found=-1;
+        while (low<=high) { const mid=Math.floor((low+high)/2); if (officialRows[mid].date<=targetIso) {found=mid;low=mid+1;} else high=mid-1; }
+        return found>=0 ? officialRows[found] : null;
+      }
+
+      function renderStatus(payload) {
+        if (!officialRows.length) { statusEl.textContent=''; return; }
+        const first=payload.oldest_synced_date || officialRows[0].date;
+        const last=payload.last_synced_date || officialRows[officialRows.length-1].date;
+        statusEl.innerHTML=first+' → '+last+' · history '+(payload.initialization_done?'complete':'loading');
+      }
+
+      function renderOverview() {
+        const latest=officialRows[officialRows.length-1];
+        const seven=rowAtOrBefore(shiftDays(latest.date,-7));
+        const thirty=rowAtOrBefore(shiftDays(latest.date,-30));
+        overviewBody.innerHTML='';
+        officialMetricKeys.forEach(function (key) {
+          const d7=deltaInfo(latest[key],seven?seven[key]:null), d30=deltaInfo(latest[key],thirty?thirty[key]:null);
+          const tr=document.createElement('tr');
+          tr.innerHTML='<td><strong>'+metrics[key].label+'</strong></td>'+ '<td class="pi-value">'+formatValue(key,latest[key])+'</td>'+ '<td class="'+deltaClassForMetric(key,d7.delta)+'">'+(d7.delta==null?'—':(d7.delta>0?'+':'')+numberFormat.format(Math.round(d7.delta)))+'</td>'+ '<td class="'+deltaClassForMetric(key,d7.delta)+'">'+(d7.pct==null?'—':(d7.pct>0?'+':'')+twoDecimal.format(d7.pct)+'%')+'</td>'+ '<td class="'+deltaClassForMetric(key,d30.delta)+'">'+(d30.delta==null?'—':(d30.delta>0?'+':'')+numberFormat.format(Math.round(d30.delta)))+'</td>'+ '<td class="'+deltaClassForMetric(key,d30.delta)+'">'+(d30.pct==null?'—':(d30.pct>0?'+':'')+twoDecimal.format(d30.pct)+'%')+'</td>';
+          overviewBody.appendChild(tr);
+        });
+      }
+
+      function resetComparisonDates() {
+        const first=officialRows[0].date;
+        const latest=officialRows[officialRows.length-1].date;
+        const baseline=shiftDays(latest,-Math.max(1,activityWindow));
+        referenceDate=baseline < first ? first : baseline;
+        compareDates=[shiftDays(latest,-30),shiftDays(latest,-7),latest]
+          .filter(function (v,i,a) {return a.indexOf(v)===i && v>referenceDate && v>=first;})
+          .sort();
+        loadActivitySnapshots();
+      }
+
+      function activityDates() { return [referenceDate].concat(compareDates.filter(function(d){return d!==referenceDate;})); }
+
+      const progressiveGroups = [
+        {key:'activity', label:'PvP activity', metrics:['active_count','active_rate_pct','victim_only_count','victim_only_rate_pct','top10_activity_concentration_pct','median_character_age_years','median_alliance_tenure_days']},
+        {key:'retention', label:'Retention', metrics:['retained_pvp_count','retention_pct','churn_count','churn_pct','newly_active_pvp']},
+        {key:'movement', label:'PvP member movement', metrics:['pvp_arrivals','pvp_departures','pvp_turnover_count','pvp_turnover_rate_pct']},
+        {key:'core', label:'Core PvP', metrics:['core_pvp_count','core_pvp_rate_pct']},
+        {key:'first_pvp', label:'PvP activation', metrics:['median_activation_delay_days']}
+      ];
+
+      function metricGroupKey(metricKey) {
+        const found=progressiveGroups.find(function(group){return group.metrics.indexOf(metricKey)>=0;});
+        return found ? found.key : null;
+      }
+
+      function groupUrl(groupKey, dates) {
+        const params=new URLSearchParams();
+        params.set('group',groupKey);
+        params.set('dates',dates.join(','));
+        params.set('window',String(activityWindow));
+        params.set('mode',activityMode);
+        params.set('core_months',String(coreMonths));
+        return groupApi+'?'+params.toString();
+      }
+
+      function mergeActivityRows(rows) {
+        (rows||[]).forEach(function(row){
+          const existing=snapshotRows.get(row.date)||{date:row.date};
+          Object.keys(row).forEach(function(key){existing[key]=row[key];});
+          snapshotRows.set(row.date,existing);
+        });
+      }
+
+      function metricCell(key, row, referenceRow, includeDelta) {
+        if (failedActivityMetrics.has(key)) return '<span class="pi-error">Error</span>';
+        if (!loadedActivityMetrics.has(key)) return '<span class="pi-neutral">Loading…</span>';
+        const value=row?row[key]:null;
+        let html='<span class="pi-value">'+formatValue(key,value)+'</span>'+pilotListLink(key,row,value);
+        if (includeDelta) html+='<br>'+formatComparisonDelta(key,value,referenceRow?referenceRow[key]:null);
+        return html;
+      }
+
+      function renderActivityTable() {
+        const ref=snapshotRows.get(referenceDate);
+        const dates=compareDates.filter(function(d){return d!==referenceDate;});
+        const openState=new Map();
+        activitySections.querySelectorAll('details[data-pi-group]').forEach(function(details){
+          openState.set(details.getAttribute('data-pi-group'),details.open);
+        });
+        activitySections.innerHTML='';
+        progressiveGroups.forEach(function(group){
+          const details=document.createElement('details');
+          details.className='pi-indicator-group';
+          details.setAttribute('data-pi-group',group.key);
+          details.open=openState.has(group.key)?openState.get(group.key):true;
+          const summary=document.createElement('summary');
+          summary.textContent=group.label;
+          details.appendChild(summary);
+
+          const wrap=document.createElement('div');
+          wrap.className='pi-table-wrap';
+          const table=document.createElement('table');
+          table.className='pi-table';
+          table.setAttribute('aria-label',group.label+' indicators');
+          const thead=document.createElement('thead');
+          thead.innerHTML='<tr><th>Indicator</th><th>Reference '+escapeHtml(referenceDate)+'</th>'+dates.map(function(d){return '<th>'+escapeHtml(d)+' · Δ / %</th>';}).join('')+'</tr>';
+          const tbody=document.createElement('tbody');
+
+          group.metrics.forEach(function(key){
+            const meta=metrics[key];
+            if(!meta)return;
+            const tr=document.createElement('tr');
+            let html='<td><strong>'+escapeHtml(meta.label)+'</strong><span class="pi-info" title="'+escapeHtml(metricDescription(key,tooltipAnchorDate()))+'">ⓘ</span></td><td>'+metricCell(key,ref,ref,false)+'</td>';
+            dates.forEach(function(d){ const row=snapshotRows.get(d); html+='<td>'+metricCell(key,row,ref,true)+'</td>'; });
+            tr.innerHTML=html;
+            tbody.appendChild(tr);
+          });
+          table.appendChild(thead);
+          table.appendChild(tbody);
+          wrap.appendChild(table);
+          details.appendChild(wrap);
+          activitySections.appendChild(details);
+        });
+      }
+
+      async function fetchGroupRowsBatched(groupKey, dates, onProgress, tokenStillValid) {
+        const rows=[];
+        const batchSize=groupKey==='first_pvp' ? 1 : ((groupKey==='retention'||groupKey==='core') ? 2 : 4);
+        const batches=[];
+        for(let i=0;i<dates.length;i+=batchSize)batches.push(dates.slice(i,i+batchSize));
+        for(let i=0;i<batches.length;i+=1){
+          if(tokenStillValid && !tokenStillValid())return rows;
+          const batch=batches[i];
+          if(onProgress)onProgress(i,batches.length,batch);
+          const response=await fetch(groupUrl(groupKey,batch),{headers:{'Accept':'application/json'}});
+          if(!response.ok){
+            const body=await response.json().catch(function(){return {};});
+            throw new Error(body.error||('Erreur '+response.status));
+          }
+          const payload=await response.json();
+          (payload.rows||[]).forEach(function(row){rows.push(row);});
+        }
+        return rows;
+      }
+
+      async function loadActivitySnapshots() {
+        if (!referenceDate) return;
+        const token=++activityRequestToken;
+        const dates=activityDates();
+        snapshotRows=new Map(dates.map(function(d){return [d,{date:d}];}));
+        loadedActivityMetrics=new Set();
+        failedActivityMetrics=new Set();
+        activityError.hidden=true;
+        activityContent.hidden=false;
+        activityLoading.hidden=false;
+        activityLoading.textContent='Loading indicators progressively…';
+        renderActivityTable();
+
+        let loadedGroups=0;
+        for (const group of progressiveGroups) {
+          if(token!==activityRequestToken)return;
+          try {
+            const rows=await fetchGroupRowsBatched(
+              group.key,
+              dates,
+              function(done,total){
+                activityLoading.textContent='Loaded '+loadedGroups+'/'+progressiveGroups.length+' groups · '+group.label+' '+(done+1)+'/'+total+'…';
+              },
+              function(){return token===activityRequestToken;}
+            );
+            if(token!==activityRequestToken)return;
+            mergeActivityRows(rows);
+            group.metrics.forEach(function(key){loadedActivityMetrics.add(key);});
+          } catch(error) {
+            if(token!==activityRequestToken)return;
+            group.metrics.forEach(function(key){failedActivityMetrics.add(key);});
+            activityError.hidden=false;
+            const line=window.eveosintPublicError(error);
+            activityError.textContent=activityError.textContent ? activityError.textContent+' · '+line : line;
+          }
+          loadedGroups+=1;
+          renderActivityTable();
+        }
+        if(token!==activityRequestToken)return;
+        activityLoading.hidden=true;
+      }
+
+      function manualMetricCell(key,row,referenceRow,isReference){
+        if(manualFailedMetrics.has(key))return '<span class="pi-error">Error</span>';
+        if(!manualLoadedMetrics.has(key))return '<span class="pi-neutral">Loading…</span>';
+        const value=row?row[key]:null;
+        let html='<span class="pi-value">'+formatValue(key,value)+'</span>'+pilotListLink(key,row,value);
+        if(!isReference)html+='<br>'+formatComparisonDelta(key,value,referenceRow?referenceRow[key]:null);
+        return html;
+      }
+
+      function renderManualComparison(){
+        const ready=manualReferenceDate && manualCompareDates.length>0;
+        manualEmpty.hidden=!!ready;
+        manualContent.hidden=!ready;
+        if(!ready)return;
+        const dates=[manualReferenceDate].concat(manualCompareDates.filter(function(d){return d!==manualReferenceDate;}));
+        manualHead.innerHTML='<tr><th>Indicator</th>'+dates.map(function(d,index){return '<th>'+(index===0?'Reference ':'')+escapeHtml(d)+(index===0?'':' · Δ')+'</th>';}).join('')+'</tr>';
+        manualBody.innerHTML='';
+        let previousGroup=null;
+        Object.keys(metrics).forEach(function(key){
+          const meta=metrics[key];
+          if(meta.group!==previousGroup){
+            const groupRow=document.createElement('tr');
+            groupRow.innerHTML='<td colspan="'+(dates.length+1)+'" class="text-start"><strong>'+escapeHtml(meta.group)+'</strong></td>';
+            manualBody.appendChild(groupRow);
+            previousGroup=meta.group;
+          }
+          const tr=document.createElement('tr');
+          const ref=manualRows.get(manualReferenceDate);
+          let html='<td><strong>'+escapeHtml(meta.label)+'</strong><span class="pi-info" title="'+escapeHtml(metricDescription(key,manualReferenceDate))+'">ⓘ</span></td>';
+          dates.forEach(function(d,index){html+='<td>'+manualMetricCell(key,manualRows.get(d),ref,index===0)+'</td>';});
+          tr.innerHTML=html;
+          manualBody.appendChild(tr);
+        });
+        if(manualCsvPre.classList.contains('visible'))refreshManualCsv();
+      }
+
+      function manualCsv(){
+        if(!manualReferenceDate || !manualCompareDates.length)return '';
+        const dates=[manualReferenceDate].concat(manualCompareDates.filter(function(d){return d!==manualReferenceDate;}));
+        const keys=Object.keys(metrics);
+        const lines=[['date'].concat(keys).map(csvEscape).join(',')];
+        dates.forEach(function(d){
+          const row=manualRows.get(d)||{};
+          lines.push([d].concat(keys.map(function(key){return row[key];})).map(csvEscape).join(','));
+        });
+        return lines.join('\n');
+      }
+
+      function refreshManualCsv(){manualCsvPre.textContent=manualCsv();}
+
+      function downloadManualCsv(){
+        const csv=manualCsv();
+        if(!csv)return;
+        const blob=new Blob([csv+'\n'],{type:'text/csv;charset=utf-8'}),url=URL.createObjectURL(blob),a=document.createElement('a');
+        a.href=url;
+        a.download=entityFilePrefix+'_population_comparison_'+manualReferenceDate+'.csv';
+        document.body.appendChild(a);a.click();a.remove();URL.revokeObjectURL(url);
+      }
+
+      function seedManualOfficialRows(dates){
+        manualRows=new Map();
+        dates.forEach(function(d){
+          const official=rowAtOrBefore(d);
+          manualRows.set(d,{
+            date:d,
+            member_count:official?official.member_count:null,
+            corporation_count:official?official.corporation_count:null,
+            sovereignty_count:official?official.sovereignty_count:null
+          });
+        });
+        manualLoadedMetrics=new Set(officialMetricKeys);
+        manualFailedMetrics=new Set();
+      }
+
+      async function loadManualComparison(){
+        if(!manualReferenceDate || !manualCompareDates.length){renderManualComparison();return;}
+        const token=++manualRequestToken;
+        const dates=[manualReferenceDate].concat(manualCompareDates.filter(function(d){return d!==manualReferenceDate;}));
+        seedManualOfficialRows(dates);
+        manualError.hidden=true;
+        manualLoading.hidden=false;
+        renderManualComparison();
+        let loaded=0;
+        for(const group of progressiveGroups){
+          if(token!==manualRequestToken)return;
+          try{
+            const rows=await fetchGroupRowsBatched(
+              group.key,dates,
+              function(done,total){manualLoading.textContent='Date comparison · '+group.label+' '+(done+1)+'/'+total+' · groups '+loaded+'/'+progressiveGroups.length;},
+              function(){return token===manualRequestToken;}
+            );
+            if(token!==manualRequestToken)return;
+            rows.forEach(function(row){
+              const existing=manualRows.get(row.date)||{date:row.date};
+              Object.keys(row).forEach(function(key){existing[key]=row[key];});
+              manualRows.set(row.date,existing);
+            });
+            group.metrics.forEach(function(key){manualLoadedMetrics.add(key);});
+          }catch(error){
+            if(token!==manualRequestToken)return;
+            group.metrics.forEach(function(key){manualFailedMetrics.add(key);});
+            manualError.hidden=false;
+            const line=window.eveosintPublicError(error);
+            manualError.textContent=manualError.textContent?manualError.textContent+' · '+line:line;
+          }
+          loaded+=1;
+          renderManualComparison();
+        }
+        if(token!==manualRequestToken)return;
+        manualLoading.hidden=true;
+      }
+
+      function populateMetricSelect() {
+        const groups={};
+        Object.keys(metrics).forEach(function(key){ const group=metrics[key].group; if(!groups[group]) groups[group]=[]; groups[group].push(key); });
+        metricSelect.innerHTML='';
+        Object.keys(groups).forEach(function(group){
+          const optgroup=document.createElement('optgroup'); optgroup.label=group;
+          groups[group].forEach(function(key){ const option=document.createElement('option'); option.value=key; option.textContent=metrics[key].label; optgroup.appendChild(option); });
+          metricSelect.appendChild(optgroup);
+        });
+        metricSelect.value=chartMetric;
+      }
+
+      function setActiveButtons(attribute,value) {
+        document.querySelectorAll('[data-pi-'+attribute+']').forEach(function(button){button.classList.toggle('active',button.getAttribute('data-pi-'+attribute)===String(value));});
+      }
+
+      function applyRange(name) {
+        if (!officialRows.length) return;
+        rangeName=name; setActiveButtons('range',name); customRange.classList.toggle('visible',name==='custom');
+        if (name==='custom') return;
+        const end=officialRows[officialRows.length-1].date; let start=officialRows[0].date;
+        if (name!=='all') {
+          const d=parseDate(end);
+          if(name==='1m')d.setUTCMonth(d.getUTCMonth()-1); if(name==='3m')d.setUTCMonth(d.getUTCMonth()-3); if(name==='6m')d.setUTCMonth(d.getUTCMonth()-6); if(name==='1y')d.setUTCFullYear(d.getUTCFullYear()-1); if(name==='3y')d.setUTCFullYear(d.getUTCFullYear()-3);
+          start=isoDate(d); if(start<officialRows[0].date)start=officialRows[0].date;
+        }
+        rangeStartDate=start; rangeEndDate=end; rangeFrom.value=start; rangeTo.value=end; loadChartSeries();
+      }
+
+      function applyCustomRange() {
+        const from=rangeFrom.value||officialRows[0].date, to=rangeTo.value||officialRows[officialRows.length-1].date;
+        if(from>to)return; rangeName='custom'; setActiveButtons('range','custom'); customRange.classList.add('visible'); rangeStartDate=from; rangeEndDate=to; loadChartSeries();
+      }
+
+      function buildSeriesAnchors(startIso,endIso){
+        const start=parseDate(startIso),end=parseDate(endIso);
+        const span=Math.max(0,Math.round((end-start)/86400000));
+        const dates=[];
+        for(let offset=0;offset<=span;offset+=1){dates.push(shiftDays(startIso,offset));}
+        return dates;
+      }
+
+      function mergeChartRows(rows){
+        const map=new Map(chartRows.map(function(row){return [row.date,row];}));
+        (rows||[]).forEach(function(row){map.set(row.date,{date:row.date,value:row.value});});
+        chartRows=Array.from(map.values()).sort(function(a,b){return a.date.localeCompare(b.date);});
+      }
+
+      async function loadChartSeries() {
+        if (!rangeStartDate || !rangeEndDate) return;
+        const token=++seriesRequestToken;
+        seriesError.hidden=true;
+        csvPre.classList.remove('visible');
+        document.getElementById('pi-show-csv').textContent='Show CSV';
+        chartContext.textContent=officialMetricKeys.indexOf(chartMetric)>=0 ? 'absolute values' : pvpModeLabel()+' · '+activityWindow+'d · core '+coreMonths+'m';
+        chartCaption.textContent=metrics[chartMetric].label+' · '+rangeStartDate+' → '+rangeEndDate;
+
+        if (officialMetricKeys.indexOf(chartMetric)>=0) {
+          seriesLoading.hidden=true;
+          chartRows=officialRows.filter(function(row){return row.date>=rangeStartDate && row.date<=rangeEndDate;}).map(function(row){return {date:row.date,value:row[chartMetric]};});
+          csvNote.textContent='';
+          initializeChartView();
+          return;
+        }
+
+        const groupKey=metricGroupKey(chartMetric);
+        if(!groupKey){
+          seriesError.hidden=false;
+          seriesError.textContent='Erreur 500';
+          chartRows=[];renderChart();return;
+        }
+
+        const anchors=buildSeriesAnchors(rangeStartDate,rangeEndDate);
+        const batchSize=groupKey==='first_pvp'?1:((groupKey==='retention'||groupKey==='core')?2:3);
+        const batches=[];
+        for(let i=0;i<anchors.length;i+=batchSize)batches.push(anchors.slice(i,i+batchSize));
+        chartRows=[];
+        seriesLoading.hidden=false;
+        csvNote.textContent='';
+        let failedPoints=0;
+
+        for(let i=0;i<batches.length;i+=1){
+          if(token!==seriesRequestToken)return;
+          const batch=batches[i];
+          const doneBefore=Math.min(i*batchSize,anchors.length);
+          const pct=Math.round((doneBefore/anchors.length)*100);
+          seriesLoading.textContent='Loading chart '+doneBefore+'/'+anchors.length+' days · '+pct+'% · '+batch[0]+(batch.length>1?' → '+batch[batch.length-1]:'');
+          try{
+            const response=await fetch(groupUrl(groupKey,batch),{headers:{'Accept':'application/json'}});
+            if(!response.ok){
+              const body=await response.json().catch(function(){return {};});
+              throw new Error(body.error||('Erreur '+response.status));
+            }
+            const payload=await response.json();
+            if(token!==seriesRequestToken)return;
+            mergeChartRows((payload.rows||[]).map(function(row){return {date:row.date,value:row[chartMetric]};}));
+          }catch(error){
+            if(token!==seriesRequestToken)return;
+            // If a multi-date chunk is too heavy, retry each date separately so
+            // one slow point cannot kill the whole graph.
+            if(batch.length>1){
+              for(const singleDate of batch){
+                if(token!==seriesRequestToken)return;
+                seriesLoading.textContent='Retrying '+singleDate+'…';
+                try{
+                  const retry=await fetch(groupUrl(groupKey,[singleDate]),{headers:{'Accept':'application/json'}});
+                  if(!retry.ok){
+                    const body=await retry.json().catch(function(){return {};});
+                    throw new Error(body.error||('Erreur '+retry.status));
+                  }
+                  const retryPayload=await retry.json();
+                  if(token!==seriesRequestToken)return;
+                  mergeChartRows((retryPayload.rows||[]).map(function(row){return {date:row.date,value:row[chartMetric]};}));
+                }catch(singleError){
+                  failedPoints+=1;
+                }
+              }
+            }else{
+              failedPoints+=1;
+            }
+          }
+          if(chartRows.length)initializeChartView();
+        }
+
+        if(token!==seriesRequestToken)return;
+        seriesLoading.hidden=true;
+        if(failedPoints>0){
+          seriesError.hidden=false;
+          seriesError.textContent=failedPoints+' chart point'+(failedPoints===1?'':'s')+' could not be calculated. The rest of the graph is still available.';
+        }
+        if(!chartRows.length){renderChart();return;}
+        initializeChartView();
+      }
+
+      function initializeChartView() { baseStart=0; baseEnd=Math.max(0,chartRows.length-1); viewStart=baseStart; viewEnd=baseEnd; if(officialMetricKeys.indexOf(chartMetric)>=0)csvNote.textContent=''; renderChart(); }
+      function resetZoom(){viewStart=baseStart;viewEnd=baseEnd;renderChart();}
+
+      function renderChart() {
+        const width=1000,height=360,left=74,right=28,top=24,bottom=48,plotW=width-left-right,plotH=height-top-bottom;
+        if(!chartRows.length){chart.innerHTML='<text x="500" y="180" text-anchor="middle" fill="#94a3b8" font-size="14">No data for this range.</text>';return;}
+        viewStart=Math.max(0,Math.min(viewStart,chartRows.length-1)); viewEnd=Math.max(viewStart,Math.min(viewEnd,chartRows.length-1));
+        const visible=chartRows.slice(viewStart,viewEnd+1); const numeric=visible.map(function(r){return r.value==null?null:Number(r.value);}).filter(Number.isFinite);
+        if(!numeric.length){chart.innerHTML='<text x="500" y="180" text-anchor="middle" fill="#94a3b8" font-size="14">No numeric data for this range.</text>';return;}
+        let min=Math.min.apply(null,numeric), max=Math.max.apply(null,numeric); if(min===max){const pad=Math.max(1,Math.abs(min)*.05);min-=pad;max+=pad;} else {const pad=(max-min)*.08;min-=pad;max+=pad;}
+        const xFor=function(i){return visible.length<=1?left+plotW/2:left+(i/(visible.length-1))*plotW;};
+        const yFor=function(v){return top+((max-v)/(max-min))*plotH;};
+        let svg='';
+        for(let tick=0;tick<=4;tick+=1){const ratio=tick/4,y=top+ratio*plotH,value=max-ratio*(max-min);svg+='<line x1="'+left+'" y1="'+y+'" x2="'+(width-right)+'" y2="'+y+'" stroke="rgba(148,163,184,.12)"/><text x="'+(left-10)+'" y="'+(y+4)+'" text-anchor="end" fill="#64748b" font-size="11">'+escapeXml(formatValue(chartMetric,value))+'</text>';}
+        const xTicks=Math.min(6,visible.length); for(let t=0;t<xTicks;t+=1){const idx=xTicks===1?0:Math.round((t/(xTicks-1))*(visible.length-1)),x=xFor(idx);svg+='<text x="'+x+'" y="'+(height-18)+'" text-anchor="middle" fill="#64748b" font-size="11">'+escapeXml(visible[idx].date)+'</text>';}
+        let path='',started=false; visible.forEach(function(row,i){const v=row.value==null?null:Number(row.value);if(!Number.isFinite(v)){started=false;return;}const cmd=started?'L':'M';path+=cmd+xFor(i).toFixed(2)+' '+yFor(v).toFixed(2)+' ';started=true;});
+        svg+='<path d="'+path+'" fill="none" stroke="#38bdf8" stroke-width="2.2" vector-effect="non-scaling-stroke"/>';
+        svg+='<g id="pi-hover-marker" visibility="hidden"><line id="pi-hover-line" y1="'+top+'" y2="'+(height-bottom)+'" stroke="rgba(186,230,253,.5)" stroke-dasharray="4 4"/><circle id="pi-hover-dot" r="4.5" fill="#e0f2fe" stroke="#0284c7" stroke-width="2"/></g>';
+        chart.innerHTML=svg;
+        if(csvPre.classList.contains('visible'))refreshCsvPreview();
+      }
+
+      function nearestIndexForClientX(clientX){const rect=chart.getBoundingClientRect(),leftPx=(74/1000)*rect.width,rightPx=(28/1000)*rect.width,plotPx=Math.max(1,rect.width-leftPx-rightPx),ratio=Math.max(0,Math.min(1,(clientX-rect.left-leftPx)/plotPx)),span=Math.max(0,viewEnd-viewStart);return Math.round(viewStart+ratio*span);}
+      function showTooltip(event){if(!chartRows.length)return;const idx=nearestIndexForClientX(event.clientX),row=chartRows[idx];if(!row||row.value==null)return;const rect=chart.getBoundingClientRect(),visibleSpan=Math.max(1,viewEnd-viewStart),ratio=(idx-viewStart)/visibleSpan,x=(74+ratio*(1000-74-28)),visible=chartRows.slice(viewStart,viewEnd+1).map(function(r){return r.value==null?null:Number(r.value);}).filter(Number.isFinite);if(!visible.length)return;let min=Math.min.apply(null,visible),max=Math.max.apply(null,visible);if(min===max){const pad=Math.max(1,Math.abs(min)*.05);min-=pad;max+=pad;}else{const pad=(max-min)*.08;min-=pad;max+=pad;}const y=24+((max-Number(row.value))/(max-min))*(360-24-48);const marker=document.getElementById('pi-hover-marker'),line=document.getElementById('pi-hover-line'),dot=document.getElementById('pi-hover-dot');if(marker&&line&&dot){marker.setAttribute('visibility','visible');line.setAttribute('x1',x);line.setAttribute('x2',x);dot.setAttribute('cx',x);dot.setAttribute('cy',y);}tooltip.innerHTML='<strong>'+escapeHtml(row.date)+'</strong><br>'+escapeHtml(metrics[chartMetric].label)+': '+escapeHtml(formatValue(chartMetric,Number(row.value)));tooltip.style.display='block';const localX=event.clientX-rect.left,localY=event.clientY-rect.top,tw=tooltip.offsetWidth||170;tooltip.style.left=Math.max(8,Math.min(rect.width-tw-8,localX+14))+'px';tooltip.style.top=Math.max(8,localY-62)+'px';}
+      function hideTooltip(){tooltip.style.display='none';const marker=document.getElementById('pi-hover-marker');if(marker)marker.setAttribute('visibility','hidden');}
+      function zoomChart(event){event.preventDefault();const total=baseEnd-baseStart+1,current=viewEnd-viewStart+1;if(total<=2)return;const factor=event.deltaY<0?.80:1.25,newSpan=Math.max(Math.min(10,total),Math.min(total,Math.round(current*factor)));if(newSpan===current)return;const anchor=nearestIndexForClientX(event.clientX),ratio=current<=1?.5:(anchor-viewStart)/(current-1);let start=Math.round(anchor-ratio*(newSpan-1)),end=start+newSpan-1;if(start<baseStart){start=baseStart;end=start+newSpan-1;}if(end>baseEnd){end=baseEnd;start=end-newSpan+1;}viewStart=Math.max(baseStart,start);viewEnd=Math.min(baseEnd,end);hideTooltip();renderChart();}
+      function panChart(event){if(!dragging)return;const rect=chart.getBoundingClientRect(),span=viewEnd-viewStart+1,delta=Math.round(-((event.clientX-dragStartX)/rect.width)*span);let start=dragStartViewStart+delta,end=start+span-1;if(start<baseStart){start=baseStart;end=start+span-1;}if(end>baseEnd){end=baseEnd;start=end-span+1;}const ns=Math.max(baseStart,start),ne=Math.min(baseEnd,end);if(ns!==viewStart||ne!==viewEnd){viewStart=ns;viewEnd=ne;renderChart();}}
+
+      function csvEscape(value){if(value==null)return '';const text=String(value);return /[",\n\r]/.test(text)?'"'+text.replace(/"/g,'""')+'"':text;}
+      function currentCsv(){if(!chartRows.length)return '';const lines=['date,'+csvEscape(chartMetric)];for(let i=viewStart;i<=viewEnd;i+=1){const row=chartRows[i];lines.push(csvEscape(row.date)+','+csvEscape(row.value));}return lines.join('\n');}
+      function refreshCsvPreview(){csvPre.textContent=currentCsv();}
+      function downloadCsv(){const csv=currentCsv();if(!csv)return;const blob=new Blob([csv+'\n'],{type:'text/csv;charset=utf-8'}),url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download=entityFilePrefix+'_population_'+chartMetric+'_'+chartRows[viewStart].date+'_'+chartRows[viewEnd].date+'.csv';document.body.appendChild(a);a.click();a.remove();URL.revokeObjectURL(url);}
+
+      function activityConfigChanged(resetTimeline){
+        if(resetTimeline)resetComparisonDates();
+        else loadActivitySnapshots();
+        if(manualReferenceDate && manualCompareDates.length)loadManualComparison();
+        if(officialMetricKeys.indexOf(chartMetric)<0)loadChartSeries();
+      }
+
+      document.querySelectorAll('[data-pi-mode]').forEach(function(button){button.addEventListener('click',function(){
+        activityMode=button.getAttribute('data-pi-mode');
+        setActiveButtons('mode',activityMode);
+        activityConfigChanged(false);
+      });});
+      document.querySelectorAll('[data-pi-window]').forEach(function(button){button.addEventListener('click',function(){
+        const value=button.getAttribute('data-pi-window');
+        setActiveButtons('window',value);
+        document.getElementById('pi-window-custom').classList.toggle('visible',value==='custom');
+        if(value!=='custom'){
+          activityWindow=Number(value);
+          document.getElementById('pi-window-days').value=String(activityWindow);
+          activityConfigChanged(true);
+        }
+      });});
+      document.getElementById('pi-apply-window').addEventListener('click',function(){
+        const value=Math.max(1,Math.min(730,Number(document.getElementById('pi-window-days').value)||90));
+        activityWindow=value;
+        document.getElementById('pi-window-days').value=String(value);
+        activityConfigChanged(true);
+      });
+      document.getElementById('pi-apply-core').addEventListener('click',function(){
+        coreMonths=Math.max(1,Math.min(24,Number(document.getElementById('pi-core-months').value)||6));
+        document.getElementById('pi-core-months').value=String(coreMonths);
+        activityConfigChanged(false);
+      });
+
+      document.getElementById('pi-manual-set-reference').addEventListener('click',function(){
+        const value=manualReferenceInput.value;
+        if(!value)return;
+        manualReferenceDate=value;
+        manualCompareDates=manualCompareDates.filter(function(d){return d!==value;}).sort();
+        loadManualComparison();
+      });
+      document.getElementById('pi-manual-add-date').addEventListener('click',function(){
+        const value=manualCompareInput.value;
+        if(!value || !manualReferenceDate || value===manualReferenceDate || manualCompareDates.indexOf(value)>=0)return;
+        manualCompareDates.push(value);
+        manualCompareDates.sort();
+        loadManualComparison();
+      });
+      document.getElementById('pi-manual-clear').addEventListener('click',function(){
+        manualRequestToken+=1;
+        manualReferenceDate=null;
+        manualCompareDates=[];
+        manualReferenceInput.value='';
+        manualCompareInput.value='';
+        manualRows=new Map();
+        manualLoadedMetrics=new Set();
+        manualFailedMetrics=new Set();
+        manualLoading.hidden=true;
+        manualError.hidden=true;
+        manualCsvPre.classList.remove('visible');
+        manualShowCsv.textContent='Show comparison CSV';
+        renderManualComparison();
+      });
+
+      manualShowCsv.addEventListener('click',function(){
+        const visible=!manualCsvPre.classList.contains('visible');
+        manualCsvPre.classList.toggle('visible',visible);
+        manualShowCsv.textContent=visible?'Hide comparison CSV':'Show comparison CSV';
+        if(visible)refreshManualCsv();
+      });
+      document.getElementById('pi-manual-download-csv').addEventListener('click',downloadManualCsv);
+
+      metricSelect.addEventListener('change',function(){chartMetric=metricSelect.value;loadChartSeries();});
+      document.querySelectorAll('[data-pi-range]').forEach(function(button){button.addEventListener('click',function(){applyRange(button.getAttribute('data-pi-range'));});});
+      document.getElementById('pi-apply-range').addEventListener('click',applyCustomRange);
+      document.getElementById('pi-reset-zoom').addEventListener('click',resetZoom);
+      document.getElementById('pi-show-csv').addEventListener('click',function(event){const visible=!csvPre.classList.contains('visible');csvPre.classList.toggle('visible',visible);event.currentTarget.textContent=visible?'Hide CSV':'Show CSV';if(visible)refreshCsvPreview();});
+      document.getElementById('pi-download-csv').addEventListener('click',downloadCsv);
+
+      chart.addEventListener('wheel',zoomChart,{passive:false});
+      chart.addEventListener('dblclick',function(event){event.preventDefault();resetZoom();});
+      chart.addEventListener('pointerdown',function(event){dragging=true;dragStartX=event.clientX;dragStartViewStart=viewStart;chart.classList.add('dragging');chart.setPointerCapture(event.pointerId);hideTooltip();});
+      chart.addEventListener('pointermove',function(event){if(dragging)panChart(event);else showTooltip(event);});
+      chart.addEventListener('pointerup',function(event){dragging=false;chart.classList.remove('dragging');if(chart.hasPointerCapture(event.pointerId))chart.releasePointerCapture(event.pointerId);});
+      chart.addEventListener('pointercancel',function(){dragging=false;chart.classList.remove('dragging');});
+      chart.addEventListener('pointerleave',function(){if(!dragging)hideTooltip();});
+
+      document.addEventListener('click',function(event){
+        const link=event.target.closest && event.target.closest('a.pi-pilots-link');
+        if(!link)return;
+        savePopulationState();
+      });
+
+      populateMetricSelect();
+      if(restorePopulationState())return;
+      fetch(officialApi,{headers:{'Accept':'application/json'}})
+        .then(function(response){if(!response.ok)throw new Error('Erreur '+response.status);return response.json();})
+        .then(function(payload){
+          officialPayload=payload;
+          officialRows=Array.isArray(payload.rows)?payload.rows:[];
+          if(!officialRows.length){loadingEl.hidden=true;errorEl.hidden=false;errorEl.textContent='Population history is not available for this {{ profile.entity_type }} yet.';renderStatus(payload);return;}
+          officialByDate=new Map(officialRows.map(function(row){return [row.date,row];}));
+          loadingEl.hidden=true;contentEl.hidden=false;renderStatus(payload);renderOverview();
+          const first=officialRows[0].date,last=officialRows[officialRows.length-1].date;
+          [manualReferenceInput,manualCompareInput,rangeFrom,rangeTo].forEach(function(input){input.min=first;input.max=last;});
+          manualReferenceInput.value='';manualCompareInput.value='';rangeFrom.value=first;rangeTo.value=last;
+          renderManualComparison();resetComparisonDates();applyRange('all');
+        })
+        .catch(function(error){loadingEl.hidden=true;errorEl.hidden=false;errorEl.textContent=window.eveosintPublicError(error);});
+    })();
+  </script>
+</section>
+
+<section id="population-flows" class="content-card p-3 p-md-4 mb-4" hidden data-entity-type="{{ profile.entity_type }}" data-entity-id="{{ profile.entity_id }}">
+  <style>
+    #population-flows .pf-toolbar { display:flex; flex-wrap:wrap; gap:.5rem; align-items:center; }
+    #population-flows .pf-button {
+      border:1px solid rgba(148,163,184,.28); background:rgba(15,23,42,.72); color:#cbd5e1;
+      border-radius:.45rem; padding:.34rem .62rem; font-size:.83rem; font-weight:700; cursor:pointer;
+    }
+    #population-flows .pf-button:hover { border-color:rgba(125,211,252,.58); color:#e0f2fe; }
+    #population-flows .pf-button.active { border-color:rgba(56,189,248,.78); background:rgba(14,116,144,.24); color:#bae6fd; }
+    #population-flows .pf-input {
+      border:1px solid rgba(148,163,184,.28); background:rgba(15,23,42,.82); color:#e2e8f0;
+      border-radius:.45rem; padding:.31rem .48rem; font-size:.83rem;
+    }
+    #population-flows .pf-panel {
+      margin-top:1rem; border:1px solid rgba(148,163,184,.18); border-radius:.65rem; overflow:hidden;
+      background:rgba(15,23,42,.24);
+    }
+    #population-flows .pf-panel > summary {
+      cursor:pointer; list-style:none; user-select:none; padding:.78rem .9rem; font-weight:900; color:#f8fafc;
+      background:rgba(30,41,59,.55); border-bottom:1px solid rgba(148,163,184,.12);
+    }
+    #population-flows .pf-panel > summary::-webkit-details-marker { display:none; }
+    #population-flows .pf-panel > summary::before { content:'▾'; color:#7dd3fc; margin-right:.5rem; }
+    #population-flows .pf-panel:not([open]) > summary::before { content:'▸'; }
+    #population-flows .pf-panel:not([open]) > summary { border-bottom:0; }
+    #population-flows .pf-table { width:100%; border-collapse:collapse; font-size:.88rem; }
+    #population-flows .pf-table th, #population-flows .pf-table td {
+      padding:.55rem .7rem; border-bottom:1px solid rgba(148,163,184,.12); vertical-align:middle;
+    }
+    #population-flows .pf-table th { color:#cbd5e1; font-weight:800; text-align:left; }
+    #population-flows .pf-table th:nth-child(n+2), #population-flows .pf-table td:nth-child(n+2) { text-align:right; width:120px; }
+    #population-flows .pf-clickable { cursor:pointer; }
+    #population-flows .pf-clickable:hover td { background:rgba(96,165,250,.07); }
+    #population-flows .pf-caret { display:inline-block; width:1.15rem; color:#94a3b8; }
+    #population-flows .pf-org { display:inline-flex; align-items:center; gap:.48rem; color:#e2e8f0; }
+    #population-flows .pf-org img { width:28px; height:28px; object-fit:contain; border-radius:4px; background:rgba(255,255,255,.04); }
+    #population-flows .pf-badge {
+      display:inline-block; margin-left:.38rem; padding:.08rem .3rem; border-radius:.3rem; font-size:.68rem; font-weight:900;
+      border:1px solid rgba(148,163,184,.28); color:#cbd5e1; background:rgba(51,65,85,.5); vertical-align:middle;
+    }
+    #population-flows .pf-badge.npc { color:#fcd34d; border-color:rgba(245,158,11,.45); background:rgba(120,53,15,.25); }
+    #population-flows .pf-badge.gap { color:#f0abfc; border-color:rgba(217,70,239,.4); background:rgba(88,28,135,.24); }
+    #population-flows .pf-detail-row td { padding:0; background:rgba(2,6,23,.42); }
+    #population-flows .pf-detail { padding:.7rem 1rem .9rem 1.8rem; border-left:2px solid rgba(96,165,250,.24); }
+    #population-flows .pf-pilot-row { display:flex; align-items:center; justify-content:space-between; gap:1rem; padding:.38rem .2rem; border-bottom:1px solid rgba(148,163,184,.1); }
+    #population-flows .pf-pilot { display:inline-flex; align-items:center; gap:.5rem; color:#7cc7ff; text-decoration:none; font-weight:700; }
+    #population-flows .pf-pilot:hover { color:#b9e3ff; text-decoration:underline; }
+    #population-flows .pf-pilot img { width:32px; height:32px; border-radius:50%; object-fit:cover; background:rgba(255,255,255,.05); }
+    #population-flows .pf-muted { color:#94a3b8; }
+    #population-flows .pf-loading { color:#94a3b8; padding:.55rem 0; }
+    #population-flows .pf-error { color:#fda4af; padding:.55rem 0; }
+    #population-flows .pf-pagination { display:flex; justify-content:flex-end; align-items:center; gap:.45rem; padding-top:.55rem; }
+    #population-flows .pf-status-row { display:flex; flex-wrap:wrap; gap:.35rem 1.2rem; padding:.65rem .85rem 0; }
+    #population-flows .pf-sort { cursor:pointer; user-select:none; white-space:nowrap; }
+    #population-flows .pf-sort:hover { color:#e0f2fe; }
+    #population-flows .pf-sort-indicator { color:#7dd3fc; margin-left:.2rem; font-size:.72rem; }
+    #population-flows .pf-net-positive { color:#86efac; font-weight:900; }
+    #population-flows .pf-net-negative { color:#fda4af; font-weight:900; }
+    #population-flows .pf-net-zero { color:#94a3b8; font-weight:900; }
+    #population-flows .pf-detail-columns { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr); gap:1rem; }
+    #population-flows .pf-detail-title { color:#f8fafc; font-weight:900; margin-bottom:.45rem; }
+    #population-flows .pf-rate { color:#cbd5e1; white-space:nowrap; }
+    @media(max-width:1000px) {
+      #population-flows .pf-detail-columns { grid-template-columns:1fr; }
+    }
+  </style>
+
+  <div class="d-flex justify-content-between align-items-start gap-3 flex-wrap mb-3">
+    <div>
+      <h2 class="h5 fw-bold mb-1">PvP Population Flows</h2>
+      <div class="muted-line">Where PvP-known characters come from before joining the {{ profile.entity_type }}, and where they go after leaving.</div>
+    </div>
+    <div id="pf-period-label" class="muted-line"></div>
+  </div>
+
+  <div class="pf-toolbar mb-2">
+    <span class="muted-line">PvP definition</span>
+    <button class="pf-button active" type="button" data-pf-mode="any">Any involvement</button>
+    <button class="pf-button" type="button" data-pf-mode="attacker">Attacker only</button>
+    <button class="pf-button" type="button" data-pf-mode="loss">Loss only</button>
+  </div>
+
+  <div class="pf-toolbar mb-2">
+    <span class="muted-line">View</span>
+    <button class="pf-button active" type="button" data-pf-period="selected">Selected period</button>
+    <button class="pf-button" type="button" data-pf-period="1y">1 year</button>
+    <button class="pf-button" type="button" data-pf-period="since">Since creation</button>
+  </div>
+
+  <div id="pf-selected-period-controls" class="pf-toolbar mb-3">
+    <span class="muted-line">Selected period</span>
+    <button class="pf-button" type="button" data-pf-days="30">30d</button>
+    <button class="pf-button" type="button" data-pf-days="60">60d</button>
+    <button class="pf-button active" type="button" data-pf-days="90">90d</button>
+    <button class="pf-button" type="button" data-pf-days="180">180d</button>
+    <button class="pf-button" type="button" data-pf-days="custom">Custom</button>
+    <span id="pf-custom-days-wrap" hidden>
+      <input id="pf-custom-days" class="pf-input" type="number" min="1" max="3650" value="90" style="width:90px">
+      <button id="pf-apply-custom-days" class="pf-button" type="button">Apply</button>
+    </span>
+  </div>
+
+  <div class="pf-note muted-line mb-3">
+    Arrivals and departures are merged by origin/destination so every column can be sorted. <strong>Net</strong> = arrivals − departures. <strong>PvP after arrival</strong> and <strong>PvP before leaving</strong> follow the selected PvP definition. <strong>First join</strong> is the character's first known membership spell in this {{ profile.entity_type }}; later returns are <strong>Rejoin</strong>. {% if profile.entity_type == 'alliance' %}A move whose other side is still this alliance is marked <strong>Internal</strong>; the others are <strong>External</strong>.{% else %}A move to or from another corporation in the same alliance is marked <strong>Internal</strong>; the others are <strong>External</strong>.{% endif %} NPC corporations are crossed to find the nearest player corporation, with NPC gaps of at least 3 months flagged.
+  </div>
+
+  <div id="pf-global-error" class="pf-error" hidden></div>
+
+  <details class="pf-panel" open>
+    <summary>Flows <span id="pf-flow-counts" class="pf-muted"></span></summary>
+    <div class="pf-status-row">
+      <div id="pf-arrivals-status" class="pf-loading">Open Flows to load arrivals.</div>
+      <div id="pf-departures-status" class="pf-loading">Open Flows to load departures.</div>
+    </div>
+    <div id="pf-merged-content" class="p-3"></div>
+  </details>
+
+  <script>
+  (() => {
+    'use strict';
+    const entityType = '{{ profile.entity_type }}';
+    const entityId = {{ profile.entity_id|int }};
+    const globalPanel = document.getElementById('population-global-metrics');
+    const flowPanel = document.getElementById('population-flows');
+    const subtabButtons = Array.from(document.querySelectorAll('[data-population-subtab]'));
+    const metaApi = '/api/' + entityType + '/' + entityId + '/population';
+    const flowApi = '/api/' + entityType + '/' + entityId + '/population-flows/chunk';
+
+    let meta = null;
+    let activityMode = 'any';
+    let periodMode = 'selected';
+    let selectedDays = 90;
+    let requestToken = 0;
+    let hasLoadedFlows = false;
+    const directionEvents = {arrivals: [], departures: []};
+    const pilotPageState = new Map();
+    let flowSort = {key:'arrivals', dir:'desc'};
+
+    const periodLabel = document.getElementById('pf-period-label');
+    const globalError = document.getElementById('pf-global-error');
+    const selectedControls = document.getElementById('pf-selected-period-controls');
+    const customWrap = document.getElementById('pf-custom-days-wrap');
+
+    function escapeHtml(value) {
+      return String(value == null ? '' : value)
+        .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+    }
+    function addDays(iso, amount) {
+      const d = new Date(iso + 'T00:00:00Z');
+      d.setUTCDate(d.getUTCDate() + amount);
+      return d.toISOString().slice(0,10);
+    }
+    function dayDiff(start, end) {
+      return Math.round((new Date(end+'T00:00:00Z') - new Date(start+'T00:00:00Z')) / 86400000);
+    }
+    function setActive(selector, value, attr) {
+      document.querySelectorAll(selector).forEach(btn => btn.classList.toggle('active', btn.getAttribute(attr) === String(value)));
+    }
+    async function ensureMeta() {
+      if (meta) return meta;
+      const response = await fetch(metaApi, {headers:{'Accept':'application/json'}});
+      if (!response.ok) throw new Error('Erreur ' + response.status);
+      meta = await response.json();
+      if (!meta || !meta.last_synced_date) throw new Error('Population history unavailable');
+      return meta;
+    }
+    function resolvePeriod() {
+      const end = meta.last_synced_date;
+      let start;
+      if (periodMode === 'since') {
+        start = meta.first_available_date || meta.oldest_synced_date || (meta.rows && meta.rows.length ? meta.rows[0].date : end);
+      } else if (periodMode === '1y') {
+        start = addDays(end, -364);
+      } else {
+        start = addDays(end, -(selectedDays - 1));
+        const first = meta.first_available_date || meta.oldest_synced_date;
+        if (first && start < first) start = first;
+      }
+      return {start, end};
+    }
+    function buildChunks(start, end) {
+      const chunks = [];
+      let cursor = start;
+      while (cursor <= end) {
+        const chunkEnd = addDays(cursor, 89);
+        const boundedEnd = chunkEnd > end ? end : chunkEnd;
+        chunks.push({start:cursor, end:boundedEnd});
+        cursor = addDays(boundedEnd, 1);
+      }
+      return chunks;
+    }
+    function eventKey(event) { return event.event_key || [event.character_id,event.movement_date].join(':'); }
+    function mergeEvents(existing, incoming) {
+      const map = new Map(existing.map(event => [eventKey(event), event]));
+      (incoming || []).forEach(event => map.set(eventKey(event), event));
+      return Array.from(map.values()).sort((a,b) => (a.movement_date || '').localeCompare(b.movement_date || '') || (a.character_name || '').localeCompare(b.character_name || ''));
+    }
+
+    function badgesFor(events, corporation, standalone) {
+      let html = '';
+      if (standalone) html += '<span class="pf-badge">Corporation</span>';
+      if (corporation && corporation.is_npc) html += '<span class="pf-badge npc">NPC</span>';
+      const gapCount = events.filter(event => event.npc_gap).length;
+      if (gapCount) html += '<span class="pf-badge gap">NPC gap' + (gapCount > 1 ? ' ×'+gapCount : '') + '</span>';
+      return html;
+    }
+    function corpLabel(corp) {
+      if (!corp) return 'Unknown corporation';
+      return escapeHtml(corp.name || 'Unknown') + (corp.ticker ? ' [' + escapeHtml(corp.ticker) + ']' : '');
+    }
+    function allianceLabel(alliance) {
+      return escapeHtml(alliance.name || 'Unknown') + (alliance.ticker ? ' [' + escapeHtml(alliance.ticker) + ']' : '');
+    }
+    function detailId(prefix, value) { return 'pf-' + prefix + '-' + String(value).replace(/[^a-zA-Z0-9_-]/g,'_'); }
+
+    function renderPilotPage(container, events, stateKey, page) {
+      const perPage = 50;
+      const sorted = events.slice().sort((a,b) => (a.character_name||'').localeCompare(b.character_name||'') || (a.movement_date||'').localeCompare(b.movement_date||''));
+      const pages = Math.max(1, Math.ceil(sorted.length / perPage));
+      page = Math.max(1, Math.min(page || 1, pages));
+      pilotPageState.set(stateKey, page);
+      const rows = sorted.slice((page-1)*perPage, page*perPage);
+      let html = '';
+      for (const event of rows) {
+        const joinBadge = event.first_join ? '<span class="pf-badge">First join</span>' : (event.rejoin ? '<span class="pf-badge">Rejoin</span>' : '');
+        html += '<div class="pf-pilot-row"><div>' +
+          '<a class="pf-pilot" href="/character/' + Number(event.character_id) + '">' +
+          '<img src="https://images.evetech.net/characters/' + Number(event.character_id) + '/portrait?size=64" alt="" loading="lazy" onerror="this.style.display=\'none\'">' +
+          '<span>' + escapeHtml(event.character_name || 'Unknown') + '</span></a>' +
+          joinBadge +
+          (event.npc_gap ? '<span class="pf-badge gap">NPC gap</span>' : '') +
+          (event.npc_final ? '<span class="pf-badge npc">NPC</span>' : '') +
+          '</div><div class="pf-muted">' + escapeHtml(event.movement_date || '') + '</div></div>';
+      }
+      if (!rows.length) html = '<div class="pf-muted">No characters.</div>';
+      if (pages > 1) {
+        html += '<div class="pf-pagination"><span class="pf-muted">Page ' + page + ' / ' + pages + '</span>' +
+          '<button class="pf-button" type="button" data-pf-page-action="prev" data-pf-state="' + escapeHtml(stateKey) + '"' + (page<=1?' disabled':'') + '>Previous</button>' +
+          '<button class="pf-button" type="button" data-pf-page-action="next" data-pf-state="' + escapeHtml(stateKey) + '"' + (page>=pages?' disabled':'') + '>Next</button></div>';
+      }
+      container.innerHTML = html;
+    }
+
+    const corpEventStore = new Map();
+    function periodPvpCount(events) {
+      return (events || []).reduce((total, event) => total + (event.period_pvp ? 1 : 0), 0);
+    }
+    function firstJoinCount(events) {
+      return (events || []).reduce((total, event) => total + (event.first_join ? 1 : 0), 0);
+    }
+    function rejoinCount(events) {
+      return (events || []).reduce((total, event) => total + (event.rejoin ? 1 : 0), 0);
+    }
+    function formatPct(numerator, denominator) {
+      if (!denominator) return '—';
+      const value = (Number(numerator) * 100) / Number(denominator);
+      return (Math.abs(value - Math.round(value)) < 0.05 ? Math.round(value).toString() : value.toFixed(1)) + '%';
+    }
+    function entityKeyForEvent(event) {
+      if (entityType === 'corporation') {
+        if (event.corporation && event.corporation.corporation_id != null) return 'c:' + String(event.corporation.corporation_id);
+        return 'unknown';
+      }
+      if (event.alliance && event.alliance.alliance_id != null) return 'a:' + String(event.alliance.alliance_id);
+      if (event.corporation && event.corporation.corporation_id != null) return 'c:' + String(event.corporation.corporation_id);
+      return 'unknown';
+    }
+    function buildMergedGroups() {
+      const groups = new Map();
+      function add(direction, event) {
+        const key = entityKeyForEvent(event);
+        if (!groups.has(key)) {
+          groups.set(key, {
+            key,
+            alliance:entityType === 'corporation' ? null : (event.alliance || null),
+            corporation:entityType === 'corporation' ? (event.corporation || null) : (event.alliance ? null : (event.corporation || null)),
+            arrivals:[],
+            departures:[],
+            internal:false,
+          });
+        }
+        const group = groups.get(key);
+        group[direction].push(event);
+        if (event.internal_move) group.internal = true;
+      }
+      directionEvents.arrivals.forEach(event => add('arrivals', event));
+      directionEvents.departures.forEach(event => add('departures', event));
+      return Array.from(groups.values());
+    }
+    function groupName(group) {
+      if (group.alliance) return group.alliance.name || 'Unknown';
+      if (group.corporation) return group.corporation.name || 'Unknown';
+      return 'Unknown';
+    }
+    function groupSortValue(group, key) {
+      const arrivals = group.arrivals.length;
+      const departures = group.departures.length;
+      const after = periodPvpCount(group.arrivals);
+      const before = periodPvpCount(group.departures);
+      if (key === 'entity') return groupName(group).toLowerCase();
+      if (key === 'type') return group.internal ? 'internal' : 'external';
+      if (key === 'arrivals') return arrivals;
+      if (key === 'pvp_after') return after;
+      if (key === 'after_rate') return arrivals ? after / arrivals : -1;
+      if (key === 'first_join') return firstJoinCount(group.arrivals);
+      if (key === 'rejoin') return rejoinCount(group.arrivals);
+      if (key === 'departures') return departures;
+      if (key === 'pvp_before') return before;
+      if (key === 'before_rate') return departures ? before / departures : -1;
+      if (key === 'net') return arrivals - departures;
+      return arrivals + departures;
+    }
+    function sortMergedGroups(groups) {
+      const factor = flowSort.dir === 'asc' ? 1 : -1;
+      return groups.slice().sort((a,b) => {
+        const av = groupSortValue(a, flowSort.key);
+        const bv = groupSortValue(b, flowSort.key);
+        let cmp;
+        if (typeof av === 'string' || typeof bv === 'string') cmp = String(av).localeCompare(String(bv));
+        else cmp = av === bv ? 0 : (av < bv ? -1 : 1);
+        if (!cmp) cmp = groupName(a).localeCompare(groupName(b));
+        return cmp * factor;
+      });
+    }
+    function sortHeader(label, key) {
+      const active = flowSort.key === key;
+      const arrow = active ? (flowSort.dir === 'asc' ? '▲' : '▼') : '';
+      return '<th class="pf-sort" data-pf-sort="' + key + '">' + label + (arrow ? '<span class="pf-sort-indicator">' + arrow + '</span>' : '') + '</th>';
+    }
+    function entityHtml(group) {
+      if (group.alliance) {
+        const aid = Number(group.alliance.alliance_id);
+        return '<span class="pf-org"><img src="https://images.evetech.net/alliances/' + aid + '/logo?size=64" alt="" loading="lazy" onerror="this.style.display=\'none\'"><strong>' + allianceLabel(group.alliance) + '</strong></span>';
+      }
+      if (group.corporation) {
+        const cid = Number(group.corporation.corporation_id);
+        return '<span class="pf-org"><img src="https://images.evetech.net/corporations/' + cid + '/logo?size=64" alt="" loading="lazy" onerror="this.style.display=\'none\'"><strong>' + corpLabel(group.corporation) + '</strong></span>' + badgesFor(group.arrivals.concat(group.departures), group.corporation, true);
+      }
+      return '<strong>Unknown</strong>';
+    }
+    function groupCorporations(events) {
+      const groups = new Map();
+      for (const event of events || []) {
+        const corp = event.corporation;
+        const key = corp && corp.corporation_id != null ? String(corp.corporation_id) : 'unknown';
+        if (!groups.has(key)) groups.set(key, {corporation:corp || null, events:[]});
+        groups.get(key).events.push(event);
+      }
+      return Array.from(groups.values()).sort((a,b) => b.events.length-a.events.length || ((a.corporation&&a.corporation.name)||'Unknown').localeCompare((b.corporation&&b.corporation.name)||'Unknown'));
+    }
+    function renderDirectionDetail(direction, events, parentKey) {
+      if (!events.length) return '<div class="pf-muted">No ' + direction + '.</div>';
+      const arrivals = direction === 'arrivals';
+      const activityHeader = arrivals ? 'PvP after' : 'PvP before';
+      if (entityType === 'corporation') {
+        const stateKey = direction + ':merged:' + parentKey + ':pilots';
+        const pilotDetail = detailId(direction + '-merged-pilots', parentKey);
+        corpEventStore.set(stateKey, {events:events, detailId:pilotDetail});
+        const active = periodPvpCount(events);
+        let html = '<div class="table-responsive"><table class="pf-table"><thead><tr><th>Pilots</th><th>Movements</th><th>' + activityHeader + '</th><th>%</th>' + (arrivals ? '<th>First join</th><th>Rejoin</th>' : '') + '</tr></thead><tbody>';
+        html += '<tr class="pf-clickable" data-pf-pilots="' + escapeHtml(stateKey) + '"><td><span class="pf-caret">▶</span><strong>View pilots</strong></td>' +
+          '<td><strong>' + events.length.toLocaleString('en-US') + '</strong></td><td><strong>' + active.toLocaleString('en-US') + '</strong></td><td class="pf-rate">' + formatPct(active,events.length) + '</td>' +
+          (arrivals ? '<td><strong>' + firstJoinCount(events).toLocaleString('en-US') + '</strong></td><td><strong>' + rejoinCount(events).toLocaleString('en-US') + '</strong></td>' : '') + '</tr>' +
+          '<tr id="' + pilotDetail + '" class="pf-detail-row" hidden><td colspan="' + (arrivals ? '6' : '4') + '"><div class="pf-detail" data-pf-pilot-container="' + escapeHtml(stateKey) + '"></div></td></tr>';
+        html += '</tbody></table></div>';
+        return html;
+      }
+      const corps = groupCorporations(events);
+      let html = '<div class="table-responsive"><table class="pf-table"><thead><tr><th>Corporation</th><th>Movements</th><th>' + activityHeader + '</th><th>%</th>' + (arrivals ? '<th>First join</th><th>Rejoin</th>' : '') + '</tr></thead><tbody>';
+      for (const cg of corps) {
+        const cid = cg.corporation ? cg.corporation.corporation_id : 'unknown';
+        const stateKey = direction + ':merged:' + parentKey + ':c:' + cid;
+        const corpDetail = detailId(direction+'-merged-corp', parentKey+'-'+cid);
+        corpEventStore.set(stateKey, {events:cg.events, detailId:corpDetail});
+        const active = periodPvpCount(cg.events);
+        html += '<tr class="pf-clickable" data-pf-pilots="' + escapeHtml(stateKey) + '"><td><span class="pf-caret">▶</span>' +
+          (cg.corporation ? '<span class="pf-org"><img src="https://images.evetech.net/corporations/' + Number(cg.corporation.corporation_id) + '/logo?size=64" alt="" loading="lazy" onerror="this.style.display=\'none\'"><strong>' + corpLabel(cg.corporation) + '</strong></span>' : '<strong>Unknown corporation</strong>') +
+          badgesFor(cg.events,cg.corporation,false) + '</td><td><strong>' + cg.events.length.toLocaleString('en-US') + '</strong></td><td><strong>' + active.toLocaleString('en-US') + '</strong></td><td class="pf-rate">' + formatPct(active,cg.events.length) + '</td>' +
+          (arrivals ? '<td><strong>' + firstJoinCount(cg.events).toLocaleString('en-US') + '</strong></td><td><strong>' + rejoinCount(cg.events).toLocaleString('en-US') + '</strong></td>' : '') + '</tr>' +
+          '<tr id="' + corpDetail + '" class="pf-detail-row" hidden><td colspan="' + (arrivals ? '6' : '4') + '"><div class="pf-detail" data-pf-pilot-container="' + escapeHtml(stateKey) + '"></div></td></tr>';
+      }
+      html += '</tbody></table></div>';
+      return html;
+    }
+    function renderMergedFlows() {
+      const content = document.getElementById('pf-merged-content');
+      const counts = document.getElementById('pf-flow-counts');
+      const arrivalsTotal = directionEvents.arrivals.length;
+      const departuresTotal = directionEvents.departures.length;
+      counts.textContent = '· ' + arrivalsTotal.toLocaleString('en-US') + ' arrivals · ' + departuresTotal.toLocaleString('en-US') + ' departures';
+      const groups = sortMergedGroups(buildMergedGroups());
+      corpEventStore.clear();
+      if (!groups.length) {
+        content.innerHTML = '<div class="pf-muted">No matching movements in this period.</div>';
+        return;
+      }
+      let html = '<div class="table-responsive"><table class="pf-table"><thead><tr>' +
+        sortHeader('Origin / destination','entity') + sortHeader('Type','type') + sortHeader('Arrivals','arrivals') + sortHeader('PvP after','pvp_after') + sortHeader('After %','after_rate') + sortHeader('First join','first_join') + sortHeader('Rejoin','rejoin') + sortHeader('Departures','departures') + sortHeader('PvP before','pvp_before') + sortHeader('Before %','before_rate') + sortHeader('Net','net') +
+        '</tr></thead><tbody>';
+      for (const group of groups) {
+        const arrivals = group.arrivals.length;
+        const departures = group.departures.length;
+        const after = periodPvpCount(group.arrivals);
+        const before = periodPvpCount(group.departures);
+        const net = arrivals - departures;
+        const netClass = net > 0 ? 'pf-net-positive' : (net < 0 ? 'pf-net-negative' : 'pf-net-zero');
+        const netText = net > 0 ? '+' + net.toLocaleString('en-US') : net.toLocaleString('en-US');
+        const rowDetail = detailId('merged-entity', group.key);
+        html += '<tr class="pf-clickable" data-pf-toggle="' + rowDetail + '"><td><span class="pf-caret">▶</span>' + entityHtml(group) + '</td>' +
+          '<td><span class="pf-badge">' + (group.internal ? 'Internal' : 'External') + '</span></td>' +
+          '<td><strong>' + arrivals.toLocaleString('en-US') + '</strong></td>' +
+          '<td><strong>' + after.toLocaleString('en-US') + '</strong></td><td class="pf-rate">' + formatPct(after,arrivals) + '</td>' +
+          '<td><strong>' + firstJoinCount(group.arrivals).toLocaleString('en-US') + '</strong></td><td><strong>' + rejoinCount(group.arrivals).toLocaleString('en-US') + '</strong></td>' +
+          '<td><strong>' + departures.toLocaleString('en-US') + '</strong></td>' +
+          '<td><strong>' + before.toLocaleString('en-US') + '</strong></td><td class="pf-rate">' + formatPct(before,departures) + '</td>' +
+          '<td class="' + netClass + '">' + netText + '</td></tr>';
+        html += '<tr id="' + rowDetail + '" class="pf-detail-row" hidden><td colspan="11"><div class="pf-detail"><div class="pf-detail-columns">' +
+          '<div><div class="pf-detail-title">Arrivals · ' + arrivals.toLocaleString('en-US') + '</div>' + renderDirectionDetail('arrivals', group.arrivals, group.key) + '</div>' +
+          '<div><div class="pf-detail-title">Departures · ' + departures.toLocaleString('en-US') + '</div>' + renderDirectionDetail('departures', group.departures, group.key) + '</div>' +
+          '</div></div></td></tr>';
+      }
+      html += '</tbody></table></div>';
+      content.innerHTML = html;
+    }
+
+    function resetDirection(direction, period, chunks) {
+      directionEvents[direction] = [];
+      renderMergedFlows();
+      const status = document.getElementById('pf-' + direction + '-status');
+      status.hidden = false;
+      status.textContent = 'Queued ' + direction + ' · 0/' + chunks.length + ' · ' + period.start + ' → ' + period.end + '…';
+    }
+
+    async function loadDirectionChunk(direction, period, chunk, index, chunks, token) {
+      if (token !== requestToken) return false;
+      const status = document.getElementById('pf-' + direction + '-status');
+      status.hidden = false;
+      status.textContent = 'Loading ' + direction + ' ' + (index+1) + '/' + chunks.length + ' · ' + chunk.start + ' → ' + chunk.end + '…';
+      const params = new URLSearchParams({
+        direction: direction,
+        start: chunk.start,
+        end: chunk.end,
+        analysis_start: period.start,
+        analysis_end: period.end,
+        mode: activityMode,
+      });
+      try {
+        const response = await fetch(flowApi + '?' + params.toString(), {headers:{'Accept':'application/json'}});
+        if (!response.ok) {
+          const body = await response.json().catch(()=>({}));
+          throw new Error(body.error || ('Erreur ' + response.status));
+        }
+        const payload = await response.json();
+        directionEvents[direction] = mergeEvents(directionEvents[direction], payload.events || []);
+        renderMergedFlows();
+        return true;
+      } catch (error) {
+        return false;
+      }
+    }
+
+    async function loadFlows() {
+      const token = ++requestToken;
+      globalError.hidden = true;
+      try {
+        await ensureMeta();
+        if (token !== requestToken) return;
+        const period = resolvePeriod();
+        const chunks = buildChunks(period.start, period.end);
+        periodLabel.textContent = period.start + ' → ' + period.end;
+        pilotPageState.clear();
+        corpEventStore.clear();
+
+        // Clear both columns immediately so an old period can never remain visible
+        // while the newly selected period is being calculated.
+        resetDirection('arrivals', period, chunks);
+        resetDirection('departures', period, chunks);
+
+        const failures = {arrivals:0, departures:0};
+        // Process the same date chunk on both sides before moving forward. This
+        // keeps Arrivals and Departures temporally aligned without running two
+        // heavy PostgreSQL queries concurrently.
+        for (let i=0; i<chunks.length; i+=1) {
+          if (token !== requestToken) return;
+          const chunk = chunks[i];
+          for (const direction of ['arrivals','departures']) {
+            if (token !== requestToken) return;
+            const ok = await loadDirectionChunk(direction, period, chunk, i, chunks, token);
+            if (!ok) failures[direction] += 1;
+          }
+        }
+
+        if (token !== requestToken) return;
+        for (const direction of ['arrivals','departures']) {
+          const status = document.getElementById('pf-' + direction + '-status');
+          const failed = failures[direction];
+          status.textContent = failed ? (failed + ' chunk' + (failed===1?'':'s') + ' failed. Loaded results remain available.') : '';
+          status.hidden = !failed;
+        }
+        hasLoadedFlows = true;
+      } catch (error) {
+        globalError.hidden = false;
+        globalError.textContent = '' + window.eveosintPublicError(error);
+      }
+    }
+
+    function switchSubtab(view) {
+      const flows = view === 'flows';
+      globalPanel.hidden = flows;
+      flowPanel.hidden = !flows;
+      subtabButtons.forEach(btn => btn.classList.toggle('active', btn.dataset.populationSubtab === view));
+      const url = new URL(window.location.href);
+      if (flows) url.searchParams.set('population_view','flows');
+      else url.searchParams.delete('population_view');
+      history.replaceState(history.state, '', url.pathname + '?' + url.searchParams.toString());
+      if (flows && !hasLoadedFlows) loadFlows();
+    }
+
+    subtabButtons.forEach(btn => btn.addEventListener('click', () => switchSubtab(btn.dataset.populationSubtab)));
+    document.querySelectorAll('[data-pf-mode]').forEach(btn => btn.addEventListener('click', () => {
+      activityMode = btn.dataset.pfMode;
+      setActive('[data-pf-mode]', activityMode, 'data-pf-mode');
+      if (!flowPanel.hidden) loadFlows();
+    }));
+    document.querySelectorAll('[data-pf-period]').forEach(btn => btn.addEventListener('click', () => {
+      periodMode = btn.dataset.pfPeriod;
+      setActive('[data-pf-period]', periodMode, 'data-pf-period');
+      selectedControls.style.display = periodMode === 'selected' ? '' : 'none';
+      if (!flowPanel.hidden) loadFlows();
+    }));
+    document.querySelectorAll('[data-pf-days]').forEach(btn => btn.addEventListener('click', () => {
+      const value = btn.dataset.pfDays;
+      setActive('[data-pf-days]', value, 'data-pf-days');
+      customWrap.hidden = value !== 'custom';
+      if (value !== 'custom') {
+        selectedDays = Number(value);
+        document.getElementById('pf-custom-days').value = String(selectedDays);
+        if (!flowPanel.hidden) loadFlows();
+      }
+    }));
+    document.getElementById('pf-apply-custom-days').addEventListener('click', () => {
+      selectedDays = Math.max(1, Math.min(3650, Number(document.getElementById('pf-custom-days').value) || 90));
+      document.getElementById('pf-custom-days').value = String(selectedDays);
+      if (!flowPanel.hidden) loadFlows();
+    });
+
+    flowPanel.addEventListener('click', event => {
+      const sortButton = event.target.closest('[data-pf-sort]');
+      if (sortButton) {
+        const key = sortButton.dataset.pfSort;
+        if (flowSort.key === key) {
+          flowSort.dir = flowSort.dir === 'asc' ? 'desc' : 'asc';
+        } else {
+          flowSort.key = key;
+          flowSort.dir = (key === 'entity' || key === 'type') ? 'asc' : 'desc';
+        }
+        renderMergedFlows();
+        return;
+      }
+      const pageButton = event.target.closest('[data-pf-page-action]');
+      if (pageButton) {
+        const stateKey = pageButton.dataset.pfState;
+        const stored = corpEventStore.get(stateKey);
+        if (!stored) return;
+        const current = pilotPageState.get(stateKey) || 1;
+        const next = pageButton.dataset.pfPageAction === 'next' ? current + 1 : current - 1;
+        const container = flowPanel.querySelector('[data-pf-pilot-container="' + CSS.escape(stateKey) + '"]');
+        if (container) renderPilotPage(container, stored.events, stateKey, next);
+        return;
+      }
+      const pilotRow = event.target.closest('[data-pf-pilots]');
+      if (pilotRow) {
+        const stateKey = pilotRow.dataset.pfPilots;
+        const stored = corpEventStore.get(stateKey);
+        if (!stored) return;
+        const detail = document.getElementById(stored.detailId);
+        if (!detail) return;
+        const opening = detail.hidden;
+        detail.hidden = !opening;
+        const caret = pilotRow.querySelector('.pf-caret');
+        if (caret) caret.textContent = opening ? '▼' : '▶';
+        if (opening) {
+          const container = detail.querySelector('[data-pf-pilot-container]');
+          if (container && !container.dataset.loaded) {
+            renderPilotPage(container, stored.events, stateKey, 1);
+            container.dataset.loaded = '1';
+          }
+        }
+        return;
+      }
+      const toggle = event.target.closest('[data-pf-toggle]');
+      if (toggle) {
+        const detail = document.getElementById(toggle.dataset.pfToggle);
+        if (!detail) return;
+        const opening = detail.hidden;
+        detail.hidden = !opening;
+        const caret = toggle.querySelector('.pf-caret');
+        if (caret) caret.textContent = opening ? '▼' : '▶';
+      }
+    });
+
+    const initialView = new URL(window.location.href).searchParams.get('population_view') === 'flows' ? 'flows' : 'metrics';
+    switchSubtab(initialView);
+  })();
+  </script>
+</section>

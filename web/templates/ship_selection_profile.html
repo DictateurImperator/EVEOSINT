@@ -1,0 +1,898 @@
+{% extends "base.html" %}
+
+{% block content %}
+<style>
+  .ship-selection-header {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+  }
+  .ship-selection-image {
+    width: 72px;
+    height: 72px;
+    border-radius: 0.75rem;
+    object-fit: cover;
+    background: rgba(255,255,255,0.06);
+    flex: 0 0 auto;
+  }
+  .ship-selection-tabs .nav-link {
+    color: #cbd5e1;
+  }
+  .ship-selection-tabs .nav-link.active {
+    color: #fff;
+    background: rgba(13, 110, 253, 0.22);
+    border-color: rgba(13, 110, 253, 0.35);
+  }
+  .ship-ranking-search {
+    max-width: 360px;
+  }
+  .ship-sde-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+    gap: 0.75rem;
+  }
+  .ship-sde-field {
+    border: 1px solid rgba(148,163,184,0.18);
+    background: rgba(15,23,42,0.45);
+    border-radius: 0.65rem;
+    padding: 0.75rem 0.85rem;
+    min-width: 0;
+  }
+  .ship-sde-field-label {
+    color: #94a3b8;
+    font-size: 0.76rem;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    margin-bottom: 0.2rem;
+  }
+  .ship-sde-field-value {
+    color: #f8fafc;
+    font-size: 0.95rem;
+    font-weight: 700;
+    overflow-wrap: anywhere;
+  }
+  .ship-sde-raw-id {
+    color: #64748b;
+    font-size: 0.74rem;
+    font-weight: 500;
+    margin-left: 0.35rem;
+  }
+  .ship-sde-description {
+    color: #cbd5e1;
+    line-height: 1.55;
+  }
+  .ship-sde-description p:last-child {
+    margin-bottom: 0;
+  }
+  .ship-sde-section {
+    border-top: 1px solid rgba(148,163,184,0.16);
+    padding-top: 1rem;
+    margin-top: 1.25rem;
+  }
+  .ship-sde-trait {
+    border-left: 3px solid rgba(59,130,246,0.7);
+    padding-left: 0.85rem;
+    margin-bottom: 1rem;
+  }
+  .ship-sde-trait:last-child {
+    margin-bottom: 0;
+  }
+  .ship-sde-trait-title {
+    color: #bfdbfe;
+    font-weight: 800;
+    margin-bottom: 0.35rem;
+  }
+  .ship-sde-bonus {
+    color: #cbd5e1;
+    margin: 0.2rem 0;
+  }
+  .ship-sde-bonus-value {
+    color: #22d3ee;
+    font-weight: 800;
+    margin-right: 0.3rem;
+  }
+  .sde-type-link {
+    color: #7dd3fc;
+    text-decoration: none;
+    font-weight: 700;
+  }
+  .sde-type-link:hover {
+    color: #bae6fd;
+    text-decoration: underline;
+  }
+  .ship-sde-table-wrap {
+    overflow-x: auto;
+  }
+  .ship-sde-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.9rem;
+  }
+  .ship-sde-table th {
+    color: #94a3b8;
+    font-size: 0.76rem;
+    font-weight: 800;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    text-align: left;
+    border-bottom: 1px solid rgba(148,163,184,0.22);
+    padding: 0.55rem 0.65rem;
+    white-space: nowrap;
+  }
+  .ship-sde-table td {
+    border-bottom: 1px solid rgba(148,163,184,0.10);
+    padding: 0.5rem 0.65rem;
+    vertical-align: middle;
+  }
+  .ship-sde-table tbody tr:hover {
+    background: rgba(30,41,59,0.45);
+  }
+  .ship-sde-category {
+    border: 1px solid rgba(148,163,184,0.16);
+    border-radius: 0.75rem;
+    overflow: hidden;
+    margin-top: 0.9rem;
+    background: rgba(15,23,42,0.26);
+  }
+  .ship-sde-category:first-child {
+    margin-top: 0;
+  }
+  .ship-sde-category-header {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 0.5rem 1rem;
+    padding: 0.65rem 0.8rem;
+    border-bottom: 1px solid rgba(148,163,184,0.16);
+    background: rgba(30,41,59,0.48);
+  }
+  .ship-sde-category-title {
+    color: #bfdbfe;
+    font-weight: 800;
+  }
+  .ship-sde-category-count {
+    color: #64748b;
+    font-size: 0.76rem;
+  }
+  .ship-sde-attribute-cell {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    min-width: 250px;
+  }
+  .ship-sde-attribute-icon {
+    width: 32px;
+    height: 32px;
+    flex: 0 0 32px;
+    object-fit: contain;
+    border-radius: 0.25rem;
+    background: rgba(255,255,255,0.04);
+  }
+  .ship-sde-attribute-name {
+    color: #f8fafc;
+    font-weight: 700;
+  }
+  .ship-sde-attribute-meta {
+    color: #64748b;
+    font-size: 0.74rem;
+    margin-top: 0.1rem;
+  }
+  .ship-sde-value {
+    color: #22d3ee;
+    font-weight: 800;
+    white-space: nowrap;
+  }
+  .ship-sde-unit {
+    color: #94a3b8;
+    white-space: nowrap;
+  }
+  .killmail-table-wrap { overflow-x: auto; }
+  .killmail-table { width: 100%; border-collapse: collapse; font-size: 0.92rem; }
+  .killmail-table th { color: rgba(255,255,255,0.78); font-weight: 700; text-align: left; border-bottom: 1px solid rgba(255,255,255,0.18); padding: 0.45rem 0.55rem; white-space: nowrap; }
+  .killmail-table td { border-bottom: 1px solid rgba(255,255,255,0.10); padding: 0.35rem 0.55rem; vertical-align: middle; }
+  .killmail-date-row td { background: rgba(0,0,0,0.55); color: rgba(255,255,255,0.78); font-weight: 800; font-style: italic; padding: 0.45rem 0.55rem; }
+  .killmail-row-kill { background: rgba(0, 90, 20, 0.34); }
+  .killmail-row-loss { background: rgba(120, 0, 0, 0.42); }
+  .killmail-time-cell { white-space: nowrap; width: 86px; }
+  .killmail-status { display: inline-block; width: 1.1rem; font-weight: 900; }
+  .killmail-status-kill { color: #9fd49f; }
+  .killmail-status-loss { color: #fca5a5; }
+  .killmail-isk { color: #22d3ee; display: block; margin-left: 1.1rem; margin-top: 0.1rem; }
+  .killmail-ship-cell { width: 84px; min-width: 84px; }
+  .killmail-ship-box { display: inline-flex; align-items: center; justify-content: center; }
+  .killmail-type-icon { width: 64px; height: 64px; border-radius: 0.45rem; object-fit: cover; background: rgba(255,255,255,0.08); flex: 0 0 auto; }
+  .killmail-pilot-icons { display: flex; align-items: center; gap: 0.35rem; }
+  .killmail-pilot-icon { width: 44px; height: 44px; border-radius: 0.45rem; object-fit: cover; background: rgba(255,255,255,0.08); flex: 0 0 auto; }
+  .killmail-pilot-cell { min-width: 155px; }
+  .killmail-pilot-box { display: flex; align-items: center; gap: 0.55rem; }
+  .killmail-damage { white-space: nowrap; line-height: 1.2; }
+  .killmail-damage-main { font-weight: 800; color: #f8fafc; }
+  .killmail-damage-percent { color: #22d3ee; font-size: 0.86rem; }
+  .killmail-entity-box { display: flex; align-items: center; gap: 0.55rem; min-width: 260px; }
+  .killmail-entity-icon { width: 56px; height: 56px; border-radius: 0.45rem; object-fit: cover; background: rgba(255,255,255,0.08); flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center; }
+  .killmail-main-icon-stack { position: relative; width: 64px; height: 56px; flex: 0 0 auto; }
+  .killmail-main-icon-stack > .text-decoration-none:first-child .killmail-entity-icon,
+  .killmail-main-icon-stack > .killmail-entity-icon:first-child { position: absolute; left: 0; top: 0; }
+  .killmail-secondary-entity-icon { position: absolute; right: 0; bottom: -3px; width: 24px; height: 24px; border-radius: 0.3rem; object-fit: cover; background: rgba(2,6,23,0.92); border: 1px solid rgba(148,163,184,0.45); }
+  .killmail-stack-portrait-icon { position: absolute; left: 0; bottom: -3px; width: 24px; height: 24px; border-radius: 0.3rem; object-fit: cover; background: rgba(2,6,23,0.92); border: 1px solid rgba(148,163,184,0.45); }
+  .killmail-character-line { display: flex; align-items: center; gap: 0.35rem; }
+  .killmail-empty-icon { background: rgba(255,255,255,0.06); }
+  .killmail-entity-lines { line-height: 1.35; min-width: 0; }
+  .killmail-entity { color: #22d3ee; font-weight: 600; }
+  .killmail-entity:hover { color: #7dd3fc; text-decoration: underline !important; }
+  .killmail-location { color: #22d3ee; min-width: 210px; line-height: 1.28; }
+  .killmail-location-row { display: flex; align-items: center; gap: 0.35rem; margin: 0.08rem 0; }
+  .killmail-location-icon { width: 20px; height: 20px; border-radius: 0.3rem; display: inline-flex; align-items: center; justify-content: center; flex: 0 0 auto; background: rgba(255,255,255,0.08); color: #bae6fd; font-weight: 800; font-size: 0.7rem; }
+  .killmail-location-icon img { width: 20px; height: 20px; border-radius: 0.3rem; object-fit: cover; }
+</style>
+
+{% if error %}
+  <div class="alert alert-danger py-2">{{ error }}</div>
+{% endif %}
+
+{% if selection and not error %}
+  <section class="content-card p-3 p-md-4 mb-4">
+    <div class="ship-selection-header">
+      {% if selection.image_url %}
+        <img class="ship-selection-image" src="{{ selection.image_url }}" alt="" loading="lazy" onerror="this.style.display='none'">
+      {% else %}
+        <span class="ship-selection-image d-inline-flex align-items-center justify-content-center fw-bold">S</span>
+      {% endif %}
+      <div>
+        <div class="muted-line mb-1">{{ selection.subtitle }}</div>
+        <h1 class="h3 fw-bold mb-1">{{ selection.title }}</h1>
+        <div class="muted-line">{{ selection.ships_count }} ship{% if selection.ships_count != 1 %}s{% endif %} in selection.</div>
+      </div>
+    </div>
+  </section>
+
+  <section class="content-card p-3 p-md-4">
+    <ul class="nav nav-tabs ship-selection-tabs mb-4" role="tablist">
+      <li class="nav-item" role="presentation">
+        <button class="nav-link" type="button" data-ship-tab="attributes">Attributes</button>
+      </li>
+      <li class="nav-item" role="presentation">
+        <button class="nav-link active" type="button" data-ship-tab="ranking">Ranking</button>
+      </li>
+      <li class="nav-item" role="presentation">
+        <button class="nav-link" type="button" data-ship-tab="killboard">Killboard</button>
+      </li>
+      <li class="nav-item ms-auto" role="presentation">
+        <button class="nav-link border-warning-subtle text-warning" type="button" data-ship-tab="analysis">Analysis</button>
+      </li>
+    </ul>
+
+    <div data-ship-panel="attributes" class="d-none">
+      <h2 class="h5 mb-2">Attributes</h2>
+
+      {% if selection.selection_type == 'ship' and selection.sde_details %}
+        {% set sde = selection.sde_details %}
+
+        {% if sde.description %}
+          <div class="ship-sde-description mb-4">{{ sde.description | safe }}</div>
+        {% endif %}
+
+        {% if sde.info %}
+          <div class="ship-sde-grid">
+            {% for item in sde.info %}
+              <div class="ship-sde-field">
+                <div class="ship-sde-field-label">{{ item.label }}</div>
+                <div class="ship-sde-field-value">
+                  {{ item.value }}{% if item.unit %} {{ item.unit }}{% endif %}
+                  {% if item.raw_id and item.label != 'Type ID' %}
+                    <span class="ship-sde-raw-id">#{{ item.raw_id }}</span>
+                  {% endif %}
+                </div>
+              </div>
+            {% endfor %}
+          </div>
+        {% endif %}
+
+        {% if sde.traits %}
+          <div class="ship-sde-section">
+            <h3 class="h6 fw-bold mb-3">Bonuses</h3>
+            {% for trait in sde.traits %}
+              <div class="ship-sde-trait">
+                <div class="ship-sde-trait-title">
+                  {% if trait.skill_url %}<a class="sde-type-link" href="{{ trait.skill_url }}">{{ trait.label }}</a>{% else %}{{ trait.label }}{% endif %}
+                  {% if trait.skill_type_id %}<span class="ship-sde-raw-id">#{{ trait.skill_type_id }}</span>{% endif %}
+                </div>
+                {% for bonus in trait.bonuses %}
+                  <div class="ship-sde-bonus">
+                    {% if bonus.bonus_value_text is not none %}
+                      <span class="ship-sde-bonus-value">{{ bonus.bonus_value_text }}{% if bonus.unit_name %} {{ bonus.unit_name }}{% endif %}</span>
+                    {% endif %}
+                    {{ bonus.bonus_text_html | safe if bonus.bonus_text_html else bonus.bonus_text }}
+                  </div>
+                {% endfor %}
+              </div>
+            {% endfor %}
+          </div>
+        {% endif %}
+
+        <div class="ship-sde-section">
+          <div class="d-flex flex-wrap justify-content-between align-items-end gap-2 mb-2">
+            <h3 class="h6 fw-bold mb-0">Dogma attributes</h3>
+            <div class="muted-line">{{ sde.dogma_attributes_count }} attribute{% if sde.dogma_attributes_count != 1 %}s{% endif %} from SDE.</div>
+          </div>
+
+          {% if sde.attribute_categories %}
+            {% for category in sde.attribute_categories %}
+              <div class="ship-sde-category">
+                <div class="ship-sde-category-header"{% if category.description %} title="{{ category.description }}"{% endif %}>
+                  <div class="ship-sde-category-title">
+                    {{ category.name }}
+                    {% if category.category_id is not none %}<span class="ship-sde-raw-id">#{{ category.category_id }}</span>{% endif %}
+                  </div>
+                  <div class="ship-sde-category-count">
+                    {{ category.attributes | length }} attribute{% if category.attributes | length != 1 %}s{% endif %}
+                  </div>
+                </div>
+                <div class="ship-sde-table-wrap">
+                  <table class="ship-sde-table">
+                    <thead>
+                      <tr>
+                        <th>Attribute</th>
+                        <th>Value</th>
+                        <th>Unit</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {% for attr in category.attributes %}
+                        <tr{% if attr.description %} title="{{ attr.description }}"{% endif %}>
+                          <td>
+                            <div class="ship-sde-attribute-cell">
+                              {% if attr.icon_url %}
+                                <img
+                                  class="ship-sde-attribute-icon"
+                                  src="{{ attr.icon_url }}"
+                                  alt=""
+                                  loading="lazy"
+                                  referrerpolicy="no-referrer"
+                                  onerror="this.style.display='none'"
+                                >
+                              {% endif %}
+                              <div>
+                                <div class="ship-sde-attribute-name">{{ attr.display_name }}</div>
+                                <div class="ship-sde-attribute-meta">
+                                  {% if attr.internal_name and attr.internal_name != attr.display_name %}{{ attr.internal_name }} · {% endif %}#{{ attr.attribute_id }}
+                                  {% if attr.icon_id %} · icon #{{ attr.icon_id }}{% endif %}
+                                  {% if attr.published %} · published{% endif %}
+                                </div>
+                              </div>
+                            </div>
+                          </td>
+                          <td class="ship-sde-value">{{ attr.value_text if attr.value_text is not none else attr.value }}</td>
+                          <td class="ship-sde-unit">{{ attr.unit_name or '—' }}</td>
+                        </tr>
+                      {% endfor %}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            {% endfor %}
+          {% else %}
+            <div class="muted-line">No Dogma attributes found in SDE for this type.</div>
+          {% endif %}
+        </div>
+      {% elif selection.selection_type == 'ship' %}
+        <div class="muted-line">No SDE details found for this type.</div>
+      {% else %}
+        <div class="muted-line">Open an individual ship to view its SDE information and Dogma attributes.</div>
+      {% endif %}
+    </div>
+
+    <div data-ship-panel="ranking">
+      <div class="d-flex flex-wrap justify-content-between align-items-end gap-3 mb-3">
+        <div>
+          <h2 class="h5 mb-1">Ranking</h2>
+          <div class="muted-line">Distinct pilots able to fly at least one ship in this selection.</div>
+        </div>
+        <input id="shipRankingSearch" class="form-control ship-ranking-search" type="search" placeholder="Search alliance / corporation..." autocomplete="off">
+      </div>
+
+      <div class="d-flex flex-wrap align-items-center gap-3 mb-3">
+        <div class="btn-group btn-group-sm" role="group" aria-label="Ranking type">
+          <button class="btn btn-primary" type="button" data-ranking-type="alliance">Alliances</button>
+          <button class="btn btn-outline-primary" type="button" data-ranking-type="corporation">Corporations</button>
+        </div>
+
+        <label class="form-check form-check-inline m-0 d-none" id="hideNpcCorpWrap">
+          <input class="form-check-input" type="checkbox" id="hideNpcCorps" checked>
+          <span class="form-check-label">Hide NPC corps</span>
+        </label>
+      </div>
+
+      <div
+        id="shipRankingRoot"
+        data-type-id="{{ selection.active_filter.type_id if selection.active_filter.type_id is defined else '' }}"
+        data-tier="{{ selection.active_filter.tier if selection.active_filter.tier is defined else '' }}"
+        data-group="{{ selection.active_filter.group if selection.active_filter.group is defined else '' }}"
+        data-size="{{ selection.active_filter.size if selection.active_filter.size is defined else '' }}"
+        data-faction="{{ selection.active_filter.faction if selection.active_filter.faction is defined else '' }}">
+        <div class="muted-line">Loading ranking…</div>
+      </div>
+    </div>
+
+    <div data-ship-panel="killboard" class="d-none">
+      <h2 class="h5 mb-2">Killboard</h2>
+      {% if selection.selection_type == 'ship' and selection.active_filter.type_id is defined %}
+        {% set killboard_context_family = 'ship' %}
+        {% set killboard_context_type = 'ship' %}
+        {% set killboard_context_id = selection.active_filter.type_id %}
+      {% endif %}
+      {% include "killboard_filters.html" %}
+      {% if selection.ship_ids %}
+      <div
+        id="shipKillboardRoot"
+        data-killmail-url="{% if selection.selection_type == 'ship' and selection.active_filter.type_id is defined %}/api/ship/{{ selection.active_filter.type_id }}/killmails{% else %}/api/ship-selection/killmails{% endif %}"
+        data-type-id="{{ selection.active_filter.type_id if selection.active_filter.type_id is defined else '' }}"
+        data-tier="{{ selection.active_filter.tier if selection.active_filter.tier is defined else '' }}"
+        data-group="{{ selection.active_filter.group if selection.active_filter.group is defined else '' }}"
+        data-size="{{ selection.active_filter.size if selection.active_filter.size is defined else '' }}"
+        data-faction="{{ selection.active_filter.faction if selection.active_filter.faction is defined else '' }}">
+        <div class="muted-line">Open the Killboard tab to load killmails.</div>
+      </div>
+      {% else %}
+      <div class="muted-line">No ships in this selection.</div>
+      {% endif %}
+    </div>
+
+    {% include "ship_analysis.html" %}
+  </section>
+
+  <script>
+    (() => {
+      const tabs = document.querySelectorAll("[data-ship-tab]");
+      const panels = document.querySelectorAll("[data-ship-panel]");
+      tabs.forEach((tab) => {
+        tab.addEventListener("click", () => {
+          const target = tab.dataset.shipTab;
+          tabs.forEach((item) => item.classList.toggle("active", item === tab));
+          panels.forEach((panel) => panel.classList.toggle("d-none", panel.dataset.shipPanel !== target));
+        });
+      });
+
+      const root = document.getElementById("shipRankingRoot");
+      const searchInput = document.getElementById("shipRankingSearch");
+      const typeButtons = document.querySelectorAll("[data-ranking-type]");
+      const hideNpcWrap = document.getElementById("hideNpcCorpWrap");
+      const hideNpcCheckbox = document.getElementById("hideNpcCorps");
+      if (!root || !searchInput || !typeButtons.length) return;
+
+      let rankingType = "alliance";
+      let nextOffset = 0;
+      let loading = false;
+      let searchTimer = null;
+
+      const baseParams = () => {
+        const params = new URLSearchParams();
+        if (root.dataset.typeId) params.set("type_id", root.dataset.typeId);
+        if (root.dataset.tier) params.set("tier", root.dataset.tier);
+        if (root.dataset.group) params.set("group", root.dataset.group);
+        if (root.dataset.size) params.set("size", root.dataset.size);
+        if (root.dataset.faction) params.set("faction", root.dataset.faction);
+        return params;
+      };
+
+      const loadRankingChunk = async (offset, limit, append) => {
+        if (loading) return;
+        loading = true;
+        const params = baseParams();
+        params.set("ranking_type", rankingType);
+        if (rankingType === "corporation" && hideNpcCheckbox && hideNpcCheckbox.checked) {
+          params.set("hide_npc_corps", "1");
+        } else if (rankingType === "corporation") {
+          params.set("hide_npc_corps", "0");
+        }
+        params.set("offset", String(offset));
+        params.set("per_page", String(limit));
+        const q = searchInput.value.trim();
+        if (q) params.set("q", q);
+        if (!append) root.innerHTML = '<div class="muted-line">Loading ranking…</div>';
+
+        try {
+          const response = await fetch("/api/ship-selection-ranking?" + params.toString(), {
+            method: "GET",
+            credentials: "same-origin",
+            cache: "no-store",
+          });
+          const html = await response.text();
+          if (!response.ok) throw new Error("Erreur " + response.status);
+          if (append) {
+            const holder = document.createElement("div");
+            holder.innerHTML = html;
+            const newRows = holder.querySelectorAll("[data-ranking-row]");
+            const tbody = root.querySelector("[data-ranking-body]");
+            if (tbody && newRows.length) {
+              newRows.forEach((row) => tbody.appendChild(row));
+            }
+            const oldMore = root.querySelector("[data-ranking-more-wrap]");
+            const newMore = holder.querySelector("[data-ranking-more-wrap]");
+            if (oldMore) oldMore.remove();
+            if (newMore) root.appendChild(newMore);
+          } else {
+            root.innerHTML = html;
+          }
+          const more = root.querySelector("[data-ranking-more]");
+          nextOffset = more ? Number(more.dataset.nextOffset || "0") : 0;
+        } catch (error) {
+          const message = window.eveosintPublicError(error);
+          const escapedUrl = '/api/ship-selection-ranking?' + params.toString();
+          const errorHtml = '<div class="alert alert-danger py-2">'
+            + message.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+            + ' on '
+            + escapedUrl.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+            + '</div>';
+          if (!append) {
+            root.innerHTML = errorHtml;
+          } else {
+            const oldMore = root.querySelector('[data-ranking-more-wrap]');
+            if (oldMore) oldMore.insertAdjacentHTML('beforebegin', errorHtml);
+          }
+        } finally {
+          loading = false;
+        }
+      };
+
+      root.addEventListener("click", (event) => {
+        const more = event.target.closest("[data-ranking-more]");
+        if (!more) return;
+        event.preventDefault();
+        if (nextOffset) loadRankingChunk(nextOffset, 50, true);
+      });
+
+      const refreshHideNpcVisibility = () => {
+        if (!hideNpcWrap) return;
+        hideNpcWrap.classList.toggle("d-none", rankingType !== "corporation");
+      };
+
+      typeButtons.forEach((button) => {
+        button.addEventListener("click", () => {
+          rankingType = button.dataset.rankingType || "alliance";
+          typeButtons.forEach((item) => {
+            item.classList.toggle("btn-primary", item === button);
+            item.classList.toggle("btn-outline-primary", item !== button);
+          });
+          refreshHideNpcVisibility();
+          nextOffset = 0;
+          loadRankingChunk(0, 10, false);
+        });
+      });
+
+      if (hideNpcCheckbox) {
+        hideNpcCheckbox.addEventListener("change", () => {
+          if (rankingType !== "corporation") return;
+          nextOffset = 0;
+          loadRankingChunk(0, 10, false);
+        });
+      }
+
+      searchInput.addEventListener("input", () => {
+        window.clearTimeout(searchTimer);
+        searchTimer = window.setTimeout(() => {
+          nextOffset = 0;
+          loadRankingChunk(0, 10, false);
+        }, 300);
+      });
+
+      refreshHideNpcVisibility();
+      loadRankingChunk(0, 10, false);
+    })();
+  </script>
+
+  <script>
+    (() => {
+      const root = document.getElementById("shipKillboardRoot");
+      if (!root) return;
+
+      const urlBase = root.dataset.killmailUrl;
+      let mode = "api";
+      let participation = "both";
+      let loaded = false;
+      let activeRequest = null;
+      let searchGeneration = 0;
+      let builderParams = new URLSearchParams();
+
+      const escapeHtml = (value) => String(value || "")
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#039;");
+
+      function currentMonthIso() {
+        var now = new Date();
+        return now.getFullYear() + '-' + String(now.getMonth() + 1).padStart(2, '0') + '-01';
+      }
+
+      function progressiveFilterActive(params, participation) {
+        if (participation && participation !== 'both') return true;
+        var active = false;
+        params.forEach(function(value, key) {
+          if ([
+            'date_from','date_to',
+            'affiliation_corporation_ids','affiliation_alliance_ids',
+            'involved_corporation_ids','involved_alliance_ids','involved_role',
+            'type_ids','type_role','module_type_ids',
+            'builder_ship_include','builder_ship_exclude',
+            'builder_entity_include','builder_entity_exclude',
+            'builder_zone_include','builder_zone_exclude'
+          ].includes(key)) {
+            if (value !== '' && !(key === 'involved_role' && value === 'both') && !(key === 'type_role' && value === 'both')) {
+              active = true;
+            }
+          }
+        });
+        return active;
+      }
+
+      function monthLabel(isoMonth) {
+        if (!isoMonth) return 'unknown month';
+        var parts = String(isoMonth).split('-');
+        var value = new Date(Number(parts[0]), Number(parts[1]) - 1, 1);
+        try {
+          return new Intl.DateTimeFormat(undefined, {month:'long', year:'numeric'}).format(value);
+        } catch (_) {
+          return isoMonth;
+        }
+      }
+
+      function rowCount(container) {
+        return container.querySelectorAll('.killmail-row-kill, .killmail-row-loss').length;
+      }
+
+      function progressiveMeta(container) {
+        var status = container.querySelector('[data-killmail-progressive-status]');
+        var more = container.querySelector('[data-killmail-load-more]');
+        return {
+          status: status,
+          more: more,
+          scanned: status ? Number(status.dataset.kbScannedEstimate || '0') : 0,
+          scannedMonth: status ? (status.dataset.kbScannedMonth || '') : '',
+          complete: status ? status.dataset.kbScanComplete === '1' : !more,
+          next: more ? {
+            before: more.getAttribute('data-scan-before') || '',
+            month: more.getAttribute('data-scan-month') || '',
+            row: more.getAttribute('data-scan-row') || ''
+          } : null
+        };
+      }
+
+      function writeProgress(totalScanned, totalFound, meta) {
+        var status = root.querySelector('[data-killmail-progressive-status]');
+        if (!status) return;
+        var text = status.querySelector('[data-killmail-scan-text]');
+        if (!text) return;
+        var label = '≈ ' + Number(totalScanned || 0).toLocaleString()
+          + ' KM scanned · ' + Number(totalFound || 0).toLocaleString()
+          + ' result' + (Number(totalFound || 0) === 1 ? '' : 's');
+        if (meta && meta.scannedMonth) label += ' · reached ' + monthLabel(meta.scannedMonth);
+        if (meta && meta.complete) label += ' · end of search';
+        text.textContent = label;
+      }
+
+
+      const buildBaseParams = () => {
+        const params = new URLSearchParams();
+        params.set("mode", mode);
+        params.set("participation", participation);
+        builderParams.forEach((value, key) => params.append(key, value));
+
+        if (urlBase === "/api/ship-selection/killmails") {
+          if (root.dataset.typeId) params.set("type_id", root.dataset.typeId);
+          if (root.dataset.tier) params.set("tier", root.dataset.tier);
+          if (root.dataset.group) params.set("group", root.dataset.group);
+          if (root.dataset.size) params.set("size", root.dataset.size);
+          if (root.dataset.faction) params.set("faction", root.dataset.faction);
+        }
+        return params;
+      };
+
+      const appendProgressiveChunk = (html) => {
+        const wrapper = document.createElement("div");
+        wrapper.innerHTML = html;
+        const currentBody = root.querySelector(".killmail-table tbody");
+        const newBody = wrapper.querySelector(".killmail-table tbody");
+        if (!currentBody || !newBody) {
+          root.innerHTML = html;
+          return;
+        }
+
+        const hadKillRows = !!currentBody.querySelector(".killmail-row-kill, .killmail-row-loss");
+        const emptyRow = currentBody.querySelector(".killmail-empty-result");
+        if (emptyRow) emptyRow.remove();
+        if (hadKillRows) {
+          const newEmptyRow = newBody.querySelector(".killmail-empty-result");
+          if (newEmptyRow) newEmptyRow.remove();
+        }
+
+        const oldDates = currentBody.querySelectorAll(".killmail-date-row");
+        const lastOldDate = oldDates.length ? oldDates[oldDates.length - 1].dataset.killmailDate : null;
+        const firstNewDate = newBody.querySelector(".killmail-date-row");
+        if (firstNewDate && lastOldDate && firstNewDate.dataset.killmailDate === lastOldDate) {
+          firstNewDate.remove();
+        }
+
+        while (newBody.firstChild) currentBody.appendChild(newBody.firstChild);
+
+        const oldStatus = root.querySelector("[data-killmail-progressive-status]");
+        const newStatus = wrapper.querySelector("[data-killmail-progressive-status]");
+        if (oldStatus && newStatus) oldStatus.replaceWith(newStatus);
+        else if (newStatus) root.appendChild(newStatus);
+      };
+
+      const abortActive = () => {
+        if (activeRequest) {
+          activeRequest.abort();
+          activeRequest = null;
+        }
+      };
+
+      const normalLoad = (page = 1) => {
+        searchGeneration += 1;
+        abortActive();
+
+        const params = buildBaseParams();
+        params.set("page", String(page));
+        const url = urlBase + "?" + params.toString();
+        root.innerHTML = '<div class="muted-line">Loading killmails…</div>';
+
+        const request = new XMLHttpRequest();
+        activeRequest = request;
+        request.open("GET", url, true);
+        request.withCredentials = true;
+        request.onreadystatechange = () => {
+          if (request.readyState !== 4) return;
+          if (activeRequest === request) activeRequest = null;
+
+          if (request.status >= 200 && request.status < 300) {
+            root.innerHTML = request.responseText;
+            loaded = true;
+            return;
+          }
+
+          root.innerHTML = '<div class="alert alert-danger py-2">Erreur '
+            + escapeHtml(request.status) + '</div>';
+        };
+        request.onerror = () => {
+          if (activeRequest === request) activeRequest = null;
+          root.innerHTML = '<div class="alert alert-danger py-2">Erreur réseau</div>';
+        };
+        request.send();
+      };
+
+      const progressiveLoad = (cursor = null) => {
+        searchGeneration += 1;
+        const generation = searchGeneration;
+        abortActive();
+
+        root.innerHTML = '<div class="muted-line">Preparing monthly search…</div>';
+
+        let found = 0;
+        let scanned = 0;
+        let nextCursor = cursor || {month: currentMonthIso(), before:"", row:""};
+
+        const requestSlice = () => {
+          if (generation !== searchGeneration || !nextCursor) return;
+
+          const params = buildBaseParams();
+          params.set("remaining", String(Math.max(1, 100 - found)));
+          params.set("scan_month", nextCursor.month || currentMonthIso());
+          if (nextCursor.before) params.set("scan_before", nextCursor.before);
+          if (nextCursor.row) params.set("scan_row", nextCursor.row);
+
+          const url = urlBase + "?" + params.toString();
+          const request = new XMLHttpRequest();
+          activeRequest = request;
+          request.open("GET", url, true);
+          request.withCredentials = true;
+
+          request.onreadystatechange = () => {
+            if (request.readyState !== 4) return;
+            if (generation !== searchGeneration) return;
+            if (activeRequest === request) activeRequest = null;
+
+            if (!(request.status >= 200 && request.status < 300)) {
+              root.insertAdjacentHTML("beforeend",
+                '<div class="alert alert-danger py-2">Erreur '
+                + escapeHtml(request.status) + '</div>');
+              return;
+            }
+
+            const wrapper = document.createElement("div");
+            wrapper.innerHTML = request.responseText;
+            const beforeCount = rowCount(root);
+
+            if (!root.querySelector(".killmail-table")) root.innerHTML = request.responseText;
+            else appendProgressiveChunk(request.responseText);
+
+            const afterCount = rowCount(root);
+            found += Math.max(0, afterCount - beforeCount);
+
+            const meta = progressiveMeta(wrapper);
+            scanned += Number(meta.scanned || 0);
+            nextCursor = meta.next;
+            writeProgress(scanned, found, meta);
+
+            loaded = true;
+            if (found >= 100 || meta.complete || !nextCursor) return;
+            window.setTimeout(requestSlice, 0);
+          };
+
+          request.onerror = () => {
+            if (generation !== searchGeneration) return;
+            root.insertAdjacentHTML("beforeend",
+              '<div class="alert alert-danger py-2">Erreur réseau</div>');
+          };
+          request.send();
+        };
+
+        requestSlice();
+      };
+
+      const reloadKillboard = () => {
+        const active = progressiveFilterActive(builderParams, participation);
+        if (mode === "api" && active) progressiveLoad(null);
+        else normalLoad(1);
+      };
+
+      const filterRoot = document.querySelector('[data-ship-panel="killboard"] [data-killboard-filters]');
+      if (filterRoot) {
+        filterRoot.addEventListener('killboard:apply', (event) => {
+          builderParams = new URLSearchParams(
+            event.detail && event.detail.params ? event.detail.params.toString() : ''
+          );
+          loaded = false;
+          reloadKillboard();
+        });
+      }
+
+      document.querySelectorAll('[data-ship-tab="killboard"]').forEach((tab) => {
+        tab.addEventListener("click", () => {
+          if (!loaded && !activeRequest) reloadKillboard();
+        });
+      });
+
+      root.addEventListener("click", (event) => {
+        const modeTarget = event.target.closest("[data-killmail-mode]");
+        if (modeTarget) {
+          event.preventDefault();
+          mode = modeTarget.dataset.killmailMode || "api";
+          loaded = false;
+          reloadKillboard();
+          return;
+        }
+
+        const participationTarget = event.target.closest("[data-killmail-participation]");
+        if (participationTarget) {
+          event.preventDefault();
+          participation = participationTarget.dataset.killmailParticipation || "both";
+          loaded = false;
+          reloadKillboard();
+          return;
+        }
+
+        const moreTarget = event.target.closest("[data-killmail-load-more]");
+        if (moreTarget) {
+          event.preventDefault();
+          progressiveLoad({
+            before: moreTarget.dataset.scanBefore || "",
+            month: moreTarget.dataset.scanMonth || currentMonthIso(),
+            row: moreTarget.dataset.scanRow || "",
+          });
+          return;
+        }
+
+        const pageTarget = event.target.closest("[data-killmail-page]");
+        if (pageTarget) {
+          event.preventDefault();
+          normalLoad(pageTarget.dataset.killmailPage || "1");
+        }
+      });
+    })();
+  </script>
+{% endif %}
+{% endblock %}

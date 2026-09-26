@@ -1,0 +1,273 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-start mb-4">
+  <div>
+    <h1 class="h3 fw-bold mb-1">Monthly Economic Reports</h1>
+    <div class="muted-line">Catalog of MER archives published by CCP.</div>
+  </div>
+
+  <div class="d-flex gap-2 flex-wrap justify-content-end">
+    <form method="post" action="/admin/mer/scan">
+      <button type="submit" class="btn btn-outline-primary">
+        Scan CCP MER
+      </button>
+    </form>
+
+    <form method="post" action="/admin/mer/download">
+      <button type="submit" class="btn btn-primary">
+        Download missing ZIPs
+      </button>
+    </form>
+
+    <form method="post" action="/admin/mer/analyze">
+      <button type="submit" class="btn btn-success">
+        Analyze archives
+      </button>
+    </form>
+
+    <form method="post" action="/admin/mer/import-kills">
+      <button type="submit" class="btn btn-warning">
+        Import kill dumps
+      </button>
+    </form>
+
+    <form method="post" action="/admin/mer/resolve-entity-ids">
+      <button type="submit" class="btn btn-outline-warning">
+        Resolve entity IDs
+      </button>
+    </form>
+
+    <form method="post" action="/admin/mer/match-killmails">
+      <button type="submit" class="btn btn-outline-info">
+        Match existing killmails
+      </button>
+    </form>
+  </div>
+</div>
+
+{% if success == "scan_done" %}
+<div class="alert alert-success py-2">
+  Scan complete:
+  {{ scan_months or "?" }} months checked,
+  {{ scan_articles or "?" }} articles found,
+  {{ scan_zips or "?" }} ZIPs found.
+</div>
+{% endif %}
+
+{% if error == "scan_failed" %}
+<div class="alert alert-danger py-2">
+  MER scan failed. Check the server audit/log for details.
+</div>
+{% endif %}
+
+{% if download_started %}
+<div class="alert alert-info py-2">
+  {% if download_started == "one" %}
+    Download of {{ download_month }} started in the background.
+  {% else %}
+    MER archive download started in the background.
+  {% endif %}
+  Reload this page to see ZIPs appear in the Local column.
+</div>
+{% endif %}
+
+{% if analyze_started %}
+<div class="alert alert-info py-2">
+  {% if analyze_started == "one" %}
+    Analysis of {{ analyze_month }} started in the background.
+  {% else %}
+    MER archive analysis started in the background.
+  {% endif %}
+  Reload this page to see detected dumps and structures.
+</div>
+{% endif %}
+
+{% if kill_import_started %}
+<div class="alert alert-info py-2">
+  MER kill dump import started in the background. Already imported files are skipped.
+</div>
+{% endif %}
+
+{% if entity_enrich_started %}
+<div class="alert alert-info py-2">
+  MER alliance resolution started in the background using the existing local corporation alliance history.
+</div>
+{% endif %}
+
+{% if kill_match_started %}
+<div class="alert alert-info py-2">
+  MER matching against existing raw killmails started in the background.
+</div>
+{% endif %}
+
+<section class="content-card p-3 p-md-4 mb-3">
+  <div class="row g-3">
+    <div class="col-6 col-md-3">
+      <div class="muted-line small">Cataloged months</div>
+      <div class="fs-5 fw-semibold">{{ mer_summary.total }}</div>
+    </div>
+    <div class="col-6 col-md-3">
+      <div class="muted-line small">CCP articles</div>
+      <div class="fs-5 fw-semibold">{{ mer_summary.articles }}</div>
+    </div>
+    <div class="col-6 col-md-3">
+      <div class="muted-line small">ZIP archives</div>
+      <div class="fs-5 fw-semibold">{{ mer_summary.zips }}</div>
+    </div>
+    <div class="col-6 col-md-3">
+      <div class="muted-line small">Last scan</div>
+      <div class="fw-semibold">
+        {% if mer_summary.last_scan_at %}
+          {{ mer_summary.last_scan_at.strftime("%Y-%m-%d %H:%M") }}
+        {% else %}
+          —
+        {% endif %}
+      </div>
+    </div>
+  </div>
+
+  <hr class="border-secondary my-3">
+
+  <div class="row g-3">
+    <div class="col-6 col-md-4">
+      <div class="muted-line small">Kill dumps detected</div>
+      <div class="fs-5 fw-semibold">{{ mer_summary.kill_present }}</div>
+    </div>
+    <div class="col-6 col-md-4">
+      <div class="muted-line small">Kill dumps missing</div>
+      <div class="fs-5 fw-semibold">{{ mer_summary.kill_absent }}</div>
+    </div>
+    <div class="col-6 col-md-4">
+      <div class="muted-line small">Distinct kill schemas</div>
+      <div class="fs-5 fw-semibold">{{ mer_summary.kill_schema_count }}</div>
+    </div>
+  </div>
+</section>
+
+<section class="content-card p-3 p-md-4">
+  <div class="d-flex justify-content-between align-items-start mb-3">
+    <div>
+      <h2 class="h5 mb-1">MER archives</h2>
+      <div class="muted-line small">
+        Detected kill dumps are extracted to ~/eveosint/data/mer/dumps/kill/YYYY/YYYY-MM.csv. Economic dumps are intentionally not analyzed yet.
+      </div>
+    </div>
+  </div>
+
+  <div class="table-responsive">
+    <table class="table table-dark table-hover align-middle mb-0">
+      <thead>
+        <tr>
+          <th>Month</th>
+          <th>CCP article</th>
+          <th>ZIP archive</th>
+          <th>Local</th>
+          <th>Kill dump</th>
+          <th>Economic dump</th>
+          <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for mer in mer_rows %}
+          <tr>
+            <td class="fw-semibold">
+              {{ mer.month }}
+              {% if mer.scan_status not in ["ok", "ok_unverified_head"] %}
+                <div class="small text-warning">{{ mer.scan_status }}</div>
+              {% endif %}
+            </td>
+
+            <td>
+              {% if mer.article_url %}
+                <a href="{{ mer.article_url }}" target="_blank" rel="noopener noreferrer">View</a>
+              {% else %}
+                <span class="badge text-bg-secondary">missing</span>
+              {% endif %}
+            </td>
+
+            <td>
+              {% if mer.zip_url %}
+                <a href="{{ mer.zip_url }}" target="_blank" rel="noopener noreferrer">ZIP</a>
+                {% if mer.zip_http_status and mer.zip_http_status >= 400 %}
+                  <span class="badge text-bg-warning ms-1">HTTP {{ mer.zip_http_status }}</span>
+                {% endif %}
+              {% else %}
+                <span class="badge text-bg-secondary">missing</span>
+              {% endif %}
+            </td>
+
+            <td>
+              {% if mer.local %}
+                <span class="badge text-bg-success">present</span>
+              {% else %}
+                <span class="badge text-bg-secondary">missing</span>
+              {% endif %}
+            </td>
+
+            <td>
+              {% if mer.kill_dump_state == "present" %}
+                <span class="badge text-bg-success">present</span>
+                {% if mer.kill_schema_group %}
+                  <span class="badge text-bg-info ms-1">schema {{ mer.kill_schema_group }}</span>
+                {% endif %}
+                <div class="small mt-1">
+                  {{ mer.kill_dump_member }}
+                </div>
+                <div class="muted-line small">
+                  {{ mer.kill_dump_column_count or 0 }} columns
+                  {% if mer.kill_dump_size_bytes %}
+                    · {{ "%.1f"|format(mer.kill_dump_size_bytes / 1024 / 1024) }} MiB
+                  {% endif %}
+                </div>
+              {% elif mer.kill_dump_state == "absent" %}
+                <span class="badge text-bg-danger">missing</span>
+              {% elif mer.kill_dump_state == "multiple" %}
+                <span class="badge text-bg-warning">multiple</span>
+              {% elif mer.kill_dump_state == "error" %}
+                <span class="badge text-bg-danger">error</span>
+              {% else %}
+                <span class="badge text-bg-secondary">unknown</span>
+              {% endif %}
+            </td>
+
+            <td>
+              {% if mer.economic_dump_state == "present" %}
+                <span class="badge text-bg-success">present</span>
+              {% elif mer.economic_dump_state == "absent" %}
+                <span class="badge text-bg-danger">missing</span>
+              {% else %}
+                <span class="badge text-bg-secondary">unknown</span>
+              {% endif %}
+            </td>
+
+            <td>
+              {% if mer.zip_url and not mer.local %}
+                <form method="post" action="/admin/mer/{{ mer.month }}/download" class="d-inline">
+                  <button type="submit" class="btn btn-sm btn-outline-primary">
+                    Download
+                  </button>
+                </form>
+              {% elif mer.local %}
+                <form method="post" action="/admin/mer/{{ mer.month }}/analyze" class="d-inline">
+                  <button type="submit" class="btn btn-sm btn-outline-success">
+                    Analyze
+                  </button>
+                </form>
+              {% else %}
+                <span class="muted-line">—</span>
+              {% endif %}
+            </td>
+          </tr>
+        {% else %}
+          <tr>
+            <td colspan="7" class="text-center muted-line py-4">
+              No MER cataloged. Click “Scan CCP MER”.
+            </td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endblock %}

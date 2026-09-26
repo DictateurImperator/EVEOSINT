@@ -1,0 +1,474 @@
+<style>
+  .kb-filter-shell {
+    border: 1px solid rgba(148,163,184,.20);
+    border-radius: 16px;
+    background: rgba(2,6,23,.42);
+    overflow: visible;
+    position: relative;
+  }
+  .kb-filter-toggle {
+    width: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: .75rem;
+    border: 0;
+    background: transparent;
+    color: #e5eefb;
+    padding: .8rem 1rem;
+    text-align: left;
+    font-weight: 800;
+  }
+  .kb-filter-toggle:hover { background: rgba(13,110,253,.09); }
+  .kb-filter-panel {
+    display: none;
+    border-top: 1px solid rgba(148,163,184,.16);
+    padding: 1rem;
+  }
+  .kb-filter-shell.open .kb-filter-panel { display: block; }
+  .kb-filter-summary { color: #94a3b8; font-size: .78rem; font-weight: 600; }
+  .kb-filter-dates { display:grid; grid-template-columns:repeat(2,minmax(180px,280px)); gap:.7rem; margin-bottom:1rem; }
+  .kb-filter-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:.8rem; }
+  .kb-family { border:1px solid rgba(148,163,184,.16); border-radius:14px; background:rgba(15,23,42,.44); padding:.8rem; min-width:0; }
+  .kb-family-head { display:flex; align-items:start; justify-content:space-between; gap:.5rem; margin-bottom:.65rem; }
+  .kb-family-title { font-weight:900; }
+  .kb-family-default { color:#93c5fd; font-size:.72rem; font-weight:800; }
+  .kb-search-wrap { position:relative; }
+  .kb-search-results {
+    position:absolute; z-index:50; left:0; right:0; top:calc(100% + 4px);
+    max-height:310px; overflow:auto; background:#0b1220;
+    border:1px solid rgba(148,163,184,.28); border-radius:10px;
+    box-shadow:0 18px 45px rgba(0,0,0,.5); display:none;
+  }
+  .kb-search-results.show { display:block; }
+  .kb-search-result { display:flex; align-items:center; gap:.55rem; padding:.52rem .58rem; cursor:pointer; border-bottom:1px solid rgba(148,163,184,.08); }
+  .kb-search-result:hover { background:rgba(13,110,253,.18); }
+  .kb-search-result img, .kb-term img { width:30px; height:30px; object-fit:contain; border-radius:5px; background:rgba(255,255,255,.06); flex:0 0 30px; }
+  .kb-search-result-main { min-width:0; }
+  .kb-search-result-name { font-weight:750; color:#e5eefb; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .kb-search-result-meta { font-size:.69rem; color:#94a3b8; }
+  .kb-term-list { display:flex; flex-direction:column; gap:.45rem; margin-top:.65rem; min-height:26px; }
+  .kb-term {
+    display:grid; grid-template-columns:auto 30px minmax(0,1fr) auto auto auto;
+    align-items:center; gap:.4rem; padding:.42rem;
+    border:1px solid rgba(148,163,184,.15); border-radius:10px; background:rgba(2,6,23,.48);
+  }
+  .kb-term.kb-term-minus { border-color:rgba(248,113,113,.28); }
+  .kb-term-sign { width:34px; height:30px; padding:0; font-weight:900; }
+  .kb-term-name { min-width:0; }
+  .kb-term-name-main { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; font-weight:750; font-size:.82rem; }
+  .kb-term-name-meta { color:#94a3b8; font-size:.66rem; }
+  .kb-term-role { width:112px; font-size:.72rem; padding:.25rem .45rem; }
+  .kb-term-remove { border:0; background:transparent; color:#fca5a5; font-weight:900; font-size:1.05rem; }
+  .kb-zone-presets { display:flex; flex-wrap:wrap; gap:.32rem; margin-top:.55rem; }
+  .kb-zone-preset { font-size:.69rem; padding:.22rem .42rem; }
+  .kb-empty { color:#64748b; font-size:.74rem; padding:.15rem 0; }
+  .kb-filter-actions { display:flex; align-items:center; gap:.5rem; margin-top:1rem; }
+  @media(max-width:1100px){.kb-filter-grid{grid-template-columns:1fr;}.kb-filter-dates{grid-template-columns:1fr 1fr;}}
+  @media(max-width:640px){.kb-filter-dates{grid-template-columns:1fr}.kb-term{grid-template-columns:auto 30px minmax(0,1fr) auto}.kb-term-role{grid-column:3/5;width:100%}}
+</style>
+
+<div class="kb-filter-shell mb-3"
+     data-killboard-filters
+     data-kb-context-family="{{ killboard_context_family|default('') }}"
+     data-kb-context-type="{{ killboard_context_type|default('') }}"
+     data-kb-context-id="{{ killboard_context_id|default('') }}">
+  <button class="kb-filter-toggle" type="button" data-kb-toggle>
+    <span>Filters</span>
+    <span class="kb-filter-summary" data-kb-summary>ALL</span>
+  </button>
+
+  <div class="kb-filter-panel">
+    <div class="kb-filter-dates">
+      <div>
+        <label class="form-label small mb-1">From</label>
+        <input class="form-control form-control-sm" type="date" data-kb-date-from>
+      </div>
+      <div>
+        <label class="form-label small mb-1">To</label>
+        <input class="form-control form-control-sm" type="date" data-kb-date-to>
+      </div>
+    </div>
+
+    <div class="kb-filter-grid">
+      <section class="kb-family" data-kb-family="ship">
+        <div class="kb-family-head">
+          <div class="kb-family-title">Ships / Structures</div>
+          <div class="kb-family-default" data-kb-family-state>ALL</div>
+        </div>
+        <div class="kb-search-wrap">
+          <input class="form-control form-control-sm" type="search" placeholder="Search any ship or structure…" autocomplete="off" data-kb-search="ship">
+          <div class="kb-search-results" data-kb-results="ship"></div>
+        </div>
+        <div class="kb-term-list" data-kb-terms="ship"></div>
+      </section>
+
+      <section class="kb-family" data-kb-family="zone">
+        <div class="kb-family-head">
+          <div class="kb-family-title">Zone</div>
+          <div class="kb-family-default" data-kb-family-state>ALL</div>
+        </div>
+        <div class="kb-search-wrap">
+          <input class="form-control form-control-sm" type="search" placeholder="System, constellation, region…" autocomplete="off" data-kb-search="zone">
+          <div class="kb-search-results" data-kb-results="zone"></div>
+        </div>
+        <div class="kb-zone-presets" aria-label="Zone presets">
+          <button class="btn btn-outline-light kb-zone-preset" type="button" data-kb-zone-preset="highsec">Highsec</button>
+          <button class="btn btn-outline-light kb-zone-preset" type="button" data-kb-zone-preset="lowsec">Lowsec</button>
+          <button class="btn btn-outline-light kb-zone-preset" type="button" data-kb-zone-preset="nullsec">Nullsec</button>
+          <button class="btn btn-outline-light kb-zone-preset" type="button" data-kb-zone-preset="pochven">Pochven</button>
+          <button class="btn btn-outline-light kb-zone-preset" type="button" data-kb-zone-preset="wormhole">Wormhole</button>
+        </div>
+        <div class="kb-term-list" data-kb-terms="zone"></div>
+      </section>
+
+      <section class="kb-family" data-kb-family="entity">
+        <div class="kb-family-head">
+          <div class="kb-family-title">Entities</div>
+          <div class="kb-family-default" data-kb-family-state>ALL</div>
+        </div>
+        <div class="kb-search-wrap">
+          <input class="form-control form-control-sm" type="search" placeholder="Alliance, corporation, player…" autocomplete="off" data-kb-search="entity">
+          <div class="kb-search-results" data-kb-results="entity"></div>
+        </div>
+        <div class="kb-term-list" data-kb-terms="entity"></div>
+      </section>
+    </div>
+
+    <div class="kb-filter-actions">
+      <button class="btn btn-primary btn-sm" type="button" data-kb-apply>Apply filters</button>
+      <button class="btn btn-outline-light btn-sm" type="button" data-kb-clear>Clear</button>
+      <span class="muted-line small">No + term = ALL, then − terms are excluded.</span>
+    </div>
+  </div>
+</div>
+
+<script>
+(function () {
+  var roots = document.querySelectorAll('[data-killboard-filters]');
+  if (!roots.length) return;
+
+  function esc(value) {
+    return String(value == null ? '' : value)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#039;');
+  }
+
+  roots.forEach(function (root) {
+    if (root.dataset.kbReady === '1') return;
+    root.dataset.kbReady = '1';
+
+    var terms = {ship: [], zone: [], entity: []};
+    var timers = {};
+    var aborters = {};
+    var dateFrom = root.querySelector('[data-kb-date-from]');
+    var dateTo = root.querySelector('[data-kb-date-to]');
+    var summary = root.querySelector('[data-kb-summary]');
+    var contextFamily = String(root.dataset.kbContextFamily || '');
+    var contextType = String(root.dataset.kbContextType || '');
+    var contextId = String(root.dataset.kbContextId || '');
+
+    function isFixedContext(kind, entityType, entityId) {
+      if (!contextFamily || contextFamily !== kind) return false;
+      return (
+        String(contextType || '') === String(entityType || '')
+        && String(contextId || '') === String(entityId == null ? '' : entityId)
+      );
+    }
+
+    function initialImage(entityType, entityId) {
+      if (!entityId) return '';
+      if (entityType === 'ship') return 'https://images.evetech.net/types/' + entityId + '/icon?size=32';
+      if (entityType === 'character') return 'https://images.evetech.net/characters/' + entityId + '/portrait?size=32';
+      if (entityType === 'corporation') return 'https://images.evetech.net/corporations/' + entityId + '/logo?size=32';
+      if (entityType === 'alliance') return 'https://images.evetech.net/alliances/' + entityId + '/logo?size=32';
+      return '';
+    }
+
+    function hydrateFromUrl() {
+      var source = new URLSearchParams(window.location.search || '');
+      if (dateFrom && source.get('date_from')) dateFrom.value = source.get('date_from');
+      if (dateTo && source.get('date_to')) dateTo.value = source.get('date_to');
+
+      function addShip(raw, sign) {
+        var parts = String(raw || '').split(':');
+        if (parts.length !== 2) return;
+        var id = Number(parts[1]);
+        if (!Number.isFinite(id)) return;
+        if (isFixedContext('ship', 'ship', id)) return;
+        terms.ship.push({family:'ship', sign:sign, role:parts[0] || 'both', entity_type:'ship', entity_id:id, name:'Type ' + id, label:'Type ' + id, subtitle:'Ship / Structure', image_url:initialImage('ship', id), is_structure:false});
+      }
+      function addEntity(raw, sign) {
+        var parts = String(raw || '').split(':');
+        if (parts.length !== 3) return;
+        var id = Number(parts[2]);
+        if (!Number.isFinite(id)) return;
+        var entityType = parts[1] === 'player' ? 'character' : parts[1];
+        if (isFixedContext('entity', entityType, id)) return;
+        terms.entity.push({family:'entity', sign:sign, role:parts[0] || 'both', entity_type:entityType, entity_id:id, name:entityType + ' ' + id, label:entityType + ' ' + id, subtitle:entityType, image_url:initialImage(entityType,id)});
+      }
+      function addZone(raw, sign) {
+        var parts = String(raw || '').split(':');
+        if (parts.length !== 2) return;
+        var entityType = String(parts[0] || '').toLowerCase();
+        var rawId = String(parts[1] || '').trim();
+        var presetLabels = {highsec:'Highsec', lowsec:'Lowsec', nullsec:'Nullsec', pochven:'Pochven', wormhole:'Wormhole'};
+        if (entityType === 'security') {
+          if (!presetLabels[rawId]) return;
+          terms.zone.push({family:'zone', sign:sign, role:null, entity_type:'security', entity_id:rawId, name:presetLabels[rawId], label:presetLabels[rawId], subtitle:'Security zone', image_url:''});
+          return;
+        }
+        var id = Number(rawId);
+        if (!Number.isFinite(id)) return;
+        if (isFixedContext('zone', entityType, id)) return;
+        terms.zone.push({family:'zone', sign:sign, role:null, entity_type:entityType, entity_id:id, name:entityType + ' ' + id, label:entityType + ' ' + id, subtitle:entityType, image_url:''});
+      }
+
+      source.getAll('builder_ship_include').forEach(function(value){ addShip(value, 1); });
+      source.getAll('builder_ship_exclude').forEach(function(value){ addShip(value, -1); });
+      source.getAll('builder_entity_include').forEach(function(value){ addEntity(value, 1); });
+      source.getAll('builder_entity_exclude').forEach(function(value){ addEntity(value, -1); });
+      source.getAll('builder_zone_include').forEach(function(value){ addZone(value, 1); });
+      source.getAll('builder_zone_exclude').forEach(function(value){ addZone(value, -1); });
+
+      // Compatibility with existing links such as SuperINTEL -> profile Killboard.
+      if (!terms.ship.length) {
+        var legacyRole = source.get('type_role') || 'both';
+        source.getAll('type_ids').forEach(function(value){
+          var id = Number(value);
+          if (!Number.isFinite(id)) return;
+          terms.ship.push({family:'ship', sign:1, role:legacyRole, entity_type:'ship', entity_id:id, name:'Type ' + id, label:'Type ' + id, subtitle:'Ship / Structure', image_url:initialImage('ship',id), is_structure:false});
+        });
+      }
+    }
+
+    function familyState(kind) {
+      var list = terms[kind] || [];
+      var plus = list.filter(function (item) { return item.sign > 0; }).length;
+      var minus = list.length - plus;
+      if (!plus && !minus) return 'ALL';
+      if (!plus) return 'ALL − ' + minus;
+      return '+' + plus + (minus ? ' − ' + minus : '');
+    }
+
+    function updateSummary() {
+      ['ship', 'zone', 'entity'].forEach(function (kind) {
+        var family = root.querySelector('[data-kb-family="' + kind + '"]');
+        var state = family && family.querySelector('[data-kb-family-state]');
+        if (state) state.textContent = familyState(kind);
+      });
+      var count = terms.ship.length + terms.zone.length + terms.entity.length;
+      var hasDate = Boolean((dateFrom && dateFrom.value) || (dateTo && dateTo.value));
+      summary.textContent = (!count && !hasDate) ? 'ALL' : (count + ' term' + (count === 1 ? '' : 's') + (hasDate ? ' + date' : ''));
+    }
+
+    function termMeta(term) {
+      if (term.family === 'ship') return term.subtitle || (term.is_structure ? 'Structure' : 'Ship');
+      if (term.family === 'zone') return (term.entity_type || 'zone').toUpperCase();
+      return (term.entity_type || 'entity').toUpperCase();
+    }
+
+    function renderTerms(kind) {
+      var box = root.querySelector('[data-kb-terms="' + kind + '"]');
+      var list = terms[kind] || [];
+      if (!box) return;
+      if (!list.length) {
+        box.innerHTML = '<div class="kb-empty">ALL by default.</div>';
+        updateSummary();
+        return;
+      }
+
+      box.innerHTML = list.map(function (term, index) {
+        var role = term.role || 'both';
+        var roleHtml = '';
+        if (kind !== 'zone') {
+          roleHtml = '<select class="form-select form-select-sm kb-term-role" data-kb-role="' + kind + ':' + index + '">' +
+            '<option value="both"' + (role === 'both' ? ' selected' : '') + '>Either</option>' +
+            '<option value="attacker"' + (role === 'attacker' ? ' selected' : '') + '>Attacker</option>' +
+            '<option value="victim"' + (role === 'victim' ? ' selected' : '') + '>Victim</option>' +
+          '</select>';
+        }
+        var img = term.image_url ? '<img src="' + esc(term.image_url) + '" alt="" loading="lazy">' : '<span style="width:30px"></span>';
+        return '<div class="kb-term ' + (term.sign < 0 ? 'kb-term-minus' : '') + '">' +
+          '<button class="btn btn-sm ' + (term.sign > 0 ? 'btn-outline-success' : 'btn-outline-danger') + ' kb-term-sign" type="button" data-kb-sign="' + kind + ':' + index + '">' + (term.sign > 0 ? '+' : '−') + '</button>' +
+          img +
+          '<div class="kb-term-name"><div class="kb-term-name-main">' + esc(term.label || term.name) + '</div><div class="kb-term-name-meta">' + esc(termMeta(term)) + '</div></div>' +
+          roleHtml +
+          '<button class="kb-term-remove" type="button" title="Remove" data-kb-remove="' + kind + ':' + index + '">×</button>' +
+        '</div>';
+      }).join('');
+      updateSummary();
+    }
+
+    function renderAll() {
+      renderTerms('ship');
+      renderTerms('zone');
+      renderTerms('entity');
+    }
+
+    function addTerm(kind, item) {
+      var fixedType = item.entity_type || (kind === 'ship' ? 'ship' : kind);
+      if (isFixedContext(kind, fixedType, item.entity_id)) return;
+      terms[kind].push({
+        family: kind,
+        sign: 1,
+        role: kind === 'zone' ? null : 'both',
+        entity_type: item.entity_type || (kind === 'ship' ? 'ship' : kind),
+        entity_id: (kind === 'zone' && item.entity_type === 'security') ? String(item.entity_id) : Number(item.entity_id),
+        name: item.name || item.label || ('ID ' + item.entity_id),
+        label: item.label || item.name || ('ID ' + item.entity_id),
+        subtitle: item.subtitle || '',
+        image_url: item.image_url || '',
+        is_structure: Boolean(item.is_structure)
+      });
+      renderTerms(kind);
+    }
+
+    function drawResults(kind, results) {
+      var box = root.querySelector('[data-kb-results="' + kind + '"]');
+      if (!box) return;
+      box._items = results || [];
+      if (!box._items.length) {
+        box.innerHTML = '<div class="kb-empty px-2 py-2">No result.</div>';
+        box.classList.add('show');
+        return;
+      }
+      box.innerHTML = box._items.map(function (item, index) {
+        var img = item.image_url ? '<img src="' + esc(item.image_url) + '" alt="" loading="lazy">' : '<span style="width:30px"></span>';
+        return '<div class="kb-search-result" data-kb-result-index="' + index + '">' + img +
+          '<div class="kb-search-result-main"><div class="kb-search-result-name">' + esc(item.label || item.name) + '</div>' +
+          '<div class="kb-search-result-meta">' + esc(item.subtitle || item.entity_type || '') + '</div></div></div>';
+      }).join('');
+      box.classList.add('show');
+    }
+
+    root.querySelector('[data-kb-toggle]').addEventListener('click', function () {
+      root.classList.toggle('open');
+    });
+
+    root.querySelectorAll('[data-kb-search]').forEach(function (input) {
+      var kind = input.dataset.kbSearch;
+      var box = root.querySelector('[data-kb-results="' + kind + '"]');
+      input.addEventListener('input', function () {
+        clearTimeout(timers[kind]);
+        var q = input.value.trim();
+        if (q.length < 2) {
+          box.classList.remove('show');
+          box.innerHTML = '';
+          return;
+        }
+        timers[kind] = setTimeout(async function () {
+          if (aborters[kind]) aborters[kind].abort();
+          aborters[kind] = new AbortController();
+          try {
+            var response = await fetch('/killboard/search?kind=' + encodeURIComponent(kind) + '&q=' + encodeURIComponent(q) + '&limit=15', {
+              credentials: 'same-origin', cache: 'no-store', signal: aborters[kind].signal
+            });
+            var payload = await response.json();
+            drawResults(kind, payload.results || []);
+          } catch (error) {
+            if (error && error.name === 'AbortError') return;
+            drawResults(kind, []);
+          }
+        }, 220);
+      });
+      box.addEventListener('click', function (event) {
+        var row = event.target.closest('[data-kb-result-index]');
+        if (!row) return;
+        var item = (box._items || [])[Number(row.dataset.kbResultIndex)];
+        if (!item) return;
+        addTerm(kind, item);
+        input.value = '';
+        box.classList.remove('show');
+        box.innerHTML = '';
+      });
+    });
+
+    root.querySelectorAll('[data-kb-zone-preset]').forEach(function (button) {
+      button.addEventListener('click', function () {
+        var key = String(button.dataset.kbZonePreset || '').trim().toLowerCase();
+        var labels = {highsec:'Highsec', lowsec:'Lowsec', nullsec:'Nullsec', pochven:'Pochven', wormhole:'Wormhole'};
+        if (!labels[key]) return;
+        addTerm('zone', {
+          entity_type:'security',
+          entity_id:key,
+          name:labels[key],
+          label:labels[key],
+          subtitle:'Security zone',
+          image_url:''
+        });
+      });
+    });
+
+    root.addEventListener('click', function (event) {
+      var signButton = event.target.closest('[data-kb-sign]');
+      if (signButton) {
+        var parts = signButton.dataset.kbSign.split(':');
+        var item = terms[parts[0]][Number(parts[1])];
+        if (item) item.sign = item.sign > 0 ? -1 : 1;
+        renderTerms(parts[0]);
+        return;
+      }
+      var removeButton = event.target.closest('[data-kb-remove]');
+      if (removeButton) {
+        var rparts = removeButton.dataset.kbRemove.split(':');
+        terms[rparts[0]].splice(Number(rparts[1]), 1);
+        renderTerms(rparts[0]);
+      }
+    });
+
+    root.addEventListener('change', function (event) {
+      var roleSelect = event.target.closest('[data-kb-role]');
+      if (!roleSelect) return;
+      var parts = roleSelect.dataset.kbRole.split(':');
+      var item = terms[parts[0]][Number(parts[1])];
+      if (item) item.role = roleSelect.value || 'both';
+    });
+
+    function buildParams() {
+      var params = new URLSearchParams();
+      if (dateFrom && dateFrom.value) params.set('date_from', dateFrom.value);
+      if (dateTo && dateTo.value) params.set('date_to', dateTo.value);
+
+      terms.ship.forEach(function (term) {
+        params.append(term.sign > 0 ? 'builder_ship_include' : 'builder_ship_exclude', (term.role || 'both') + ':' + term.entity_id);
+      });
+      terms.entity.forEach(function (term) {
+        params.append(term.sign > 0 ? 'builder_entity_include' : 'builder_entity_exclude', (term.role || 'both') + ':' + term.entity_type + ':' + term.entity_id);
+      });
+      terms.zone.forEach(function (term) {
+        params.append(term.sign > 0 ? 'builder_zone_include' : 'builder_zone_exclude', term.entity_type + ':' + term.entity_id);
+      });
+      return params;
+    }
+
+    function dispatchApply() {
+      var params = buildParams();
+      root.dispatchEvent(new CustomEvent('killboard:apply', {
+        bubbles: true,
+        detail: {params: params}
+      }));
+    }
+
+    root.querySelector('[data-kb-apply]').addEventListener('click', dispatchApply);
+    root.querySelector('[data-kb-clear]').addEventListener('click', function () {
+      terms = {ship: [], zone: [], entity: []};
+      if (dateFrom) dateFrom.value = '';
+      if (dateTo) dateTo.value = '';
+      renderAll();
+      dispatchApply();
+    });
+
+    document.addEventListener('click', function (event) {
+      if (root.contains(event.target)) return;
+      root.querySelectorAll('[data-kb-results]').forEach(function (box) { box.classList.remove('show'); });
+    });
+
+    hydrateFromUrl();
+    renderAll();
+  });
+})();
+</script>

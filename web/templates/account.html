@@ -1,0 +1,89 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-start mb-4">
+  <div>
+    <h1 class="h3 fw-bold mb-1">Compte</h1>
+    <div class="muted-line">Gestion de ton compte utilisateur.</div>
+  </div>
+</div>
+
+{% if error %}
+  <div class="alert alert-danger py-2">
+    {% if error == "current_password_invalid" %}
+      Mot de passe actuel invalide.
+    {% elif error == "password_confirm_mismatch" %}
+      Les nouveaux mots de passe ne correspondent pas.
+    {% elif error == "password_too_short" %}
+      Mot de passe trop court : minimum 12 caractères.
+    {% elif error == "password_too_long" %}
+      Mot de passe trop long : maximum 72 bytes.
+    {% elif error == "delete_confirm_invalid" %}
+      Confirmation de suppression invalide.
+    {% elif error == "cannot_delete_last_admin" %}
+      Impossible de supprimer le dernier admin actif.
+    {% else %}
+      Action impossible.
+    {% endif %}
+  </div>
+{% endif %}
+
+{% if success %}
+  <div class="alert alert-success py-2">
+    {% if success == "password_updated" %}
+      Mot de passe mis à jour.
+    {% else %}
+      Action effectuée.
+    {% endif %}
+  </div>
+{% endif %}
+
+<div class="row g-4">
+  <div class="col-12 col-xl-6">
+    <section class="content-card p-3 p-md-4">
+      <h2 class="h5 mb-3">Changer le mot de passe</h2>
+
+      <form method="post" action="/account/password">
+        <div class="mb-3">
+          <label for="current_password" class="form-label">Mot de passe actuel</label>
+          <input type="password" class="form-control" id="current_password" name="current_password" autocomplete="current-password" required>
+        </div>
+
+        <div class="mb-3">
+          <label for="new_password" class="form-label">Nouveau mot de passe</label>
+          <input type="password" class="form-control" id="new_password" name="new_password" minlength="12" autocomplete="new-password" required>
+          <div class="form-text">Minimum 12 caractères.</div>
+        </div>
+
+        <div class="mb-4">
+          <label for="confirm_password" class="form-label">Confirmer le nouveau mot de passe</label>
+          <input type="password" class="form-control" id="confirm_password" name="confirm_password" minlength="12" autocomplete="new-password" required>
+        </div>
+
+        <button type="submit" class="btn btn-primary">Mettre à jour</button>
+      </form>
+    </section>
+  </div>
+
+  <div class="col-12 col-xl-6">
+    <section class="content-card p-3 p-md-4 border border-danger-subtle">
+      <h2 class="h5 mb-3 text-danger">Suppression du compte</h2>
+      <p class="muted-line">Cette action supprime ton compte et tes sessions. Elle est irréversible.</p>
+
+      <form method="post" action="/account/delete">
+        <div class="mb-3">
+          <label for="username_confirm" class="form-label">Confirme ton username</label>
+          <input type="text" class="form-control" id="username_confirm" name="username_confirm" required>
+        </div>
+
+        <div class="mb-4">
+          <label for="delete_confirm" class="form-label">Tape DELETE</label>
+          <input type="text" class="form-control" id="delete_confirm" name="delete_confirm" required>
+        </div>
+
+        <button type="submit" class="btn btn-outline-danger">Supprimer mon compte</button>
+      </form>
+    </section>
+  </div>
+</div>
+{% endblock %}

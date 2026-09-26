@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+
+{% block content %}
+<main class="page-shell container d-flex align-items-center justify-content-center px-3">
+  <section class="login-card rounded-4 p-4 p-sm-5">
+    <div class="mb-4">
+      <h1 class="h3 mb-0 fw-bold">EVEOSINT</h1>
+    </div>
+
+    {% if error %}
+      <div class="alert alert-danger py-2" role="alert">
+        {{ error }}
+      </div>
+    {% endif %}
+
+    <form method="post" action="/login">
+      <div class="mb-3">
+        <label for="username" class="form-label">Utilisateur</label>
+        <input
+          type="text"
+          class="form-control form-control-lg"
+          id="username"
+          name="username"
+          autocomplete="username"
+          required
+          autofocus>
+      </div>
+
+      <div class="mb-4">
+        <label for="password" class="form-label">Mot de passe</label>
+        <input
+          type="password"
+          class="form-control form-control-lg"
+          id="password"
+          name="password"
+          autocomplete="current-password"
+          required>
+      </div>
+
+      <button type="submit" class="btn btn-primary btn-lg w-100">
+        Login
+      </button>
+    </form>
+  </section>
+</main>
+{% endblock %}

@@ -1,0 +1,585 @@
+{% extends "base.html" %}
+
+{% block content %}
+{% macro entity_image_url(entity_type, entity_id, size=32) -%}
+{% if entity_type == 'player' or entity_type == 'character' %}https://images.evetech.net/characters/{{ entity_id }}/portrait?size={{ size }}{% elif entity_type == 'corporation' %}https://images.evetech.net/corporations/{{ entity_id }}/logo?size={{ size }}{% else %}https://images.evetech.net/alliances/{{ entity_id }}/logo?size={{ size }}{% endif %}
+{%- endmacro %}
+
+{% macro entity_link(entity_type, entity_id, entity_name, show_image=True) -%}
+{% set shown = entity_name if entity_name is not none and (entity_name|string)|trim != "" else "Unknown" %}
+{% set has_id = entity_id and (entity_id|string) not in ["0", "None", ""] %}
+{% if has_id %}<a class="superintel-entity-link text-decoration-none" href="/{% if entity_type == 'player' %}character{% else %}{{ entity_type }}{% endif %}/{{ entity_id }}">{% if show_image %}<img class="superintel-entity-icon" src="{{ entity_image_url(entity_type, entity_id, 32) }}" alt="" loading="lazy" onerror="this.style.display='none'">{% endif %}<span>{{ shown }}</span></a>{% else %}<span>{{ shown }}</span>{% endif %}
+{%- endmacro %}
+
+{% macro super_titan_kb_url(entity_type, entity_id) -%}
+{% if entity_id and (entity_id|string) not in ["0", "None", ""] -%}
+/{% if entity_type == 'player' or entity_type == 'character' %}character{% else %}{{ entity_type }}{% endif %}/{{ entity_id }}?{% for ship in detailed.ship_columns %}type_ids={{ ship.type_id }}{% if not loop.last %}&{% endif %}{% endfor %}
+{%- endif %}
+{%- endmacro %}
+
+{% macro entity_with_kb(entity_type, entity_id, entity_name, show_image=True) -%}
+<span class="superintel-entity-with-kb">
+  {{ entity_link(entity_type, entity_id, entity_name, show_image) }}
+  {% if entity_id and (entity_id|string) not in ["0", "None", ""] %}
+    <a class="superintel-kb-link" href="{{ super_titan_kb_url(entity_type, entity_id) }}" title="Open Killboard filtered to Supercarriers and Titans">KB</a>
+  {% endif %}
+</span>
+{%- endmacro %}
+
+{% macro related_headers(entity_type) -%}
+{% if entity_type == 'corporation' %}<th>Alliance</th>{% elif entity_type == 'player' %}<th>Corporation</th><th>Alliance</th>{% endif %}
+{%- endmacro %}
+
+{% macro related_cells(entity_type, row) -%}
+{% if entity_type == 'corporation' %}
+<td>{{ entity_with_kb('alliance', row.alliance_id, row.alliance_name, true) }}</td>
+{% elif entity_type == 'player' %}
+<td>{{ entity_with_kb('corporation', row.corporation_id, row.corporation_name, true) }}</td>
+<td>{{ entity_with_kb('alliance', row.alliance_id, row.alliance_name, true) }}</td>
+{% endif %}
+{%- endmacro %}
+
+{% macro movement_entity(entity_type, row) -%}
+<div class="superintel-movement-entity">
+  {{ entity_with_kb(entity_type, row.entity_id, row.entity_name, true) }}
+  {% if entity_type == 'corporation' and row.alliance_name %}
+    <span class="muted-line small">{{ row.alliance_name }}{% if row.alliance_ticker %} [{{ row.alliance_ticker }}]{% endif %}</span>
+  {% elif entity_type == 'player' %}
+    <span class="muted-line small">
+      {% if row.corporation_name %}{{ row.corporation_name }}{% if row.corporation_ticker %} [{{ row.corporation_ticker }}]{% endif %}{% endif %}
+      {% if row.alliance_name %} · {{ row.alliance_name }}{% if row.alliance_ticker %} [{{ row.alliance_ticker }}]{% endif %}{% endif %}
+    </span>
+  {% endif %}
+</div>
+{%- endmacro %}
+
+{% macro global_url(sort, page, q, page_size) -%}
+/superintel/detailed?view={{ detailed.entity_type }}&period={{ detailed.movement_period }}&sort={{ sort }}&page={{ page }}&page_size={{ page_size }}{% if q %}&q={{ q|urlencode }}{% endif %}
+{%- endmacro %}
+
+{% macro detailed_analysis_url(view=None, period=None, movement=None, asset=None, page=1, q=None) -%}
+{% set target_view = view if view is not none else detailed.analysis.view %}
+{% set target_period = period if period is not none else detailed.movement_period %}
+{% set target_movement = movement if movement is not none else detailed.analysis.movement_status %}
+{% set target_asset = asset if asset is not none else detailed.analysis.asset_status %}
+{% set target_q = q if q is not none else detailed.analysis.query %}
+/superintel/detailed?view={{ detailed.entity_type }}&period={{ target_period }}&sort={{ detailed.global_ranking.ranking_sort }}&page={{ detailed.global_ranking.page }}&page_size={{ detailed.global_ranking.page_size }}{% if detailed.global_ranking.query %}&q={{ detailed.global_ranking.query|urlencode }}{% endif %}&analysis_view={{ target_view }}&analysis_movement={{ target_movement }}&analysis_asset={{ target_asset }}&analysis_page={{ page }}&analysis_page_size={{ detailed.analysis.pagination.page_size }}{% if target_q %}&analysis_q={{ target_q|urlencode }}{% endif %}
+{%- endmacro %}
+
+{% set selected_view = detailed.entity_type if detailed else status.entity_type if status else 'alliance' %}
+{% set explain_selected = detailed and detailed.analysis and detailed.analysis.view == 'explain' %}
+<style>
+  .superintel-entity-link {
+    color: #7cc7ff;
+    font-weight: 600;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.42rem;
+    white-space: nowrap;
+  }
+  .superintel-entity-link:hover { color: #b9e3ff; text-decoration: underline !important; }
+  .superintel-entity-icon {
+    width: 24px;
+    height: 24px;
+    border-radius: 50%;
+    object-fit: cover;
+    background: rgba(255,255,255,0.06);
+  }
+  .superintel-detailed-table {
+    font-size: 0.82rem;
+    white-space: nowrap;
+  }
+  .superintel-detailed-table th {
+    position: sticky;
+    top: 0;
+    z-index: 2;
+    background: var(--bs-dark);
+    vertical-align: bottom;
+  }
+  .superintel-ship-head {
+    min-width: 68px;
+    text-align: center;
+  }
+  .superintel-ship-link {
+    color: inherit;
+    text-decoration: none;
+    display: inline-flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.15rem;
+  }
+  .superintel-ship-link:hover { color: #7cc7ff; }
+  .superintel-ship-icon {
+    width: 32px;
+    height: 32px;
+    object-fit: contain;
+    border-radius: .35rem;
+    background: rgba(255,255,255,0.06);
+  }
+  .superintel-metric-cell { min-width: 56px; }
+  .superintel-cell-delta {
+    display: block;
+    min-height: 1em;
+    font-size: .68rem;
+    line-height: 1;
+  }
+  .superintel-cell-value {
+    display: block;
+    font-size: .92rem;
+    line-height: 1.15;
+  }
+  .superintel-sort-link { color: #7cc7ff; text-decoration: none; }
+  .superintel-sort-link:hover,
+  .superintel-sort-link.active { color: #b9e3ff; text-decoration: underline; }
+  .superintel-topflop-card { overflow: hidden; }
+  .superintel-topflop-head {
+    display: flex;
+    align-items: center;
+    gap: .6rem;
+  }
+  .superintel-topflop-head img {
+    width: 40px;
+    height: 40px;
+    object-fit: contain;
+    border-radius: .4rem;
+    background: rgba(255,255,255,0.06);
+  }
+  .superintel-movement-entity {
+    display: flex;
+    flex-direction: column;
+    gap: .08rem;
+    min-width: 0;
+  }
+  .superintel-topflop-table { font-size: .80rem; }
+  .superintel-topflop-table td { vertical-align: middle; }
+  .superintel-topflop-table .rank-col { width: 34px; }
+  .superintel-topflop-table .delta-col { width: 62px; }
+  .superintel-topflop-table .now-col { width: 62px; }
+  .superintel-entity-with-kb {
+    display: inline-flex;
+    align-items: center;
+    gap: .35rem;
+  }
+  .superintel-kb-link {
+    color: #9ca3af;
+    border: 1px solid rgba(156,163,175,.4);
+    border-radius: .3rem;
+    padding: .08rem .28rem;
+    font-size: .62rem;
+    font-weight: 800;
+    line-height: 1.15;
+    text-decoration: none;
+  }
+  .superintel-kb-link:hover {
+    color: #fff;
+    border-color: rgba(255,255,255,.7);
+  }
+  .superintel-explain-reason {
+    display: inline-block;
+    font-size: .72rem;
+    font-weight: 700;
+    letter-spacing: .02em;
+    white-space: nowrap;
+  }
+  .superintel-kill-links {
+    display: flex;
+    flex-direction: column;
+    gap: .15rem;
+    min-width: 120px;
+  }
+  .superintel-kill-links a {
+    color: #ff8b8b;
+    text-decoration: none;
+    white-space: nowrap;
+  }
+  .superintel-kill-links a:hover { text-decoration: underline; }
+</style>
+
+<div class="d-flex flex-wrap justify-content-between align-items-start gap-3 mb-4">
+  <div>
+    <h1 class="h3 fw-bold mb-1">SuperINTEL Detailed</h1>
+    <div class="muted-line">Detailed daily intelligence — hull-by-hull.</div>
+    <div class="btn-group btn-group-sm mt-3" role="group" aria-label="SuperINTEL detailed ranking type">
+      <a class="btn {% if selected_view == 'alliance' and not explain_selected %}btn-primary{% else %}btn-outline-primary{% endif %}" href="/superintel/detailed?view=alliance">Alliance</a>
+      <a class="btn {% if selected_view == 'corporation' and not explain_selected %}btn-primary{% else %}btn-outline-primary{% endif %}" href="/superintel/detailed?view=corporation">Corporation</a>
+      <a class="btn {% if selected_view == 'player' and not explain_selected %}btn-primary{% else %}btn-outline-primary{% endif %}" href="/superintel/detailed?view=player">Player</a>
+      <a class="btn {% if explain_selected %}btn-primary{% else %}btn-outline-primary{% endif %}" href="{% if detailed %}{{ detailed_analysis_url(view='explain', movement='all', asset='all', page=1) }}{% else %}/superintel/detailed?view={{ selected_view }}&analysis_view=explain{% endif %}">Explain</a>
+      <a class="btn btn-outline-primary" href="/superintel/evolution">Evolution</a>
+    </div>
+  </div>
+  <a class="btn btn-outline-secondary btn-sm" href="/superintel?view={{ selected_view }}">Standard dashboard</a>
+</div>
+
+{% if error %}
+  <div class="alert alert-danger py-2">
+    {% if error.startswith('superintel_table_missing') %}Missing report table: {{ error }}{% elif error.startswith('superintel_column_missing') %}Missing report column: {{ error }}{% else %}SuperINTEL error: {{ error }}{% endif %}
+  </div>
+{% endif %}
+
+{% if detailed and not error %}
+  {% set extra_cols = 2 if detailed.entity_type == 'player' else 1 if detailed.entity_type == 'corporation' else 0 %}
+
+  {% if explain_selected %}
+  <section class="content-card p-3 p-md-4 mb-4">
+    <div class="d-flex flex-wrap justify-content-between align-items-end gap-3 mb-3">
+      <div>
+        <h2 class="h5 mb-1">Detailed Analysis</h2>
+        <div class="muted-line small">{{ detailed.analysis.from_day.isoformat() }} → {{ detailed.analysis.to_day.isoformat() }} · hull-by-hull movement analysis.</div>
+      </div>
+
+      <div class="d-flex flex-wrap gap-2 align-items-center">
+        <div class="btn-group btn-group-sm" role="group" aria-label="Detailed analysis period">
+          <a class="btn {% if detailed.movement_period == '7d' %}btn-primary{% else %}btn-outline-primary{% endif %}" href="{{ detailed_analysis_url(period='7d', page=1) }}">7 days</a>
+          <a class="btn {% if detailed.movement_period == '1m' %}btn-primary{% else %}btn-outline-primary{% endif %}" href="{{ detailed_analysis_url(period='1m', page=1) }}">1 month</a>
+        </div>
+      </div>
+    </div>
+
+    {% if detailed.analysis.view == 'explain' %}
+      <div class="d-flex flex-column gap-2 mb-3">
+        <div class="d-flex flex-wrap gap-2 align-items-center">
+          <span class="muted-line small" style="min-width:76px">Movement</span>
+          <div class="btn-group btn-group-sm flex-wrap" role="group" aria-label="Movement status filter">
+            {% for key, label in detailed.analysis.movement_status_labels.items() %}
+              <a class="btn {% if detailed.analysis.movement_status == key %}btn-primary{% else %}btn-outline-primary{% endif %}" href="{{ detailed_analysis_url(movement=key, page=1) }}">{{ label }}</a>
+            {% endfor %}
+          </div>
+        </div>
+        <div class="d-flex flex-wrap gap-2 align-items-center">
+          <span class="muted-line small" style="min-width:76px">Asset</span>
+          <div class="btn-group btn-group-sm flex-wrap" role="group" aria-label="Asset status filter">
+            {% for key, label in detailed.analysis.asset_status_labels.items() %}
+              <a class="btn {% if detailed.analysis.asset_status == key %}btn-primary{% else %}btn-outline-primary{% endif %}" href="{{ detailed_analysis_url(asset=key, page=1) }}">{{ label }}</a>
+            {% endfor %}
+          </div>
+        </div>
+      </div>
+    {% endif %}
+
+    <form class="d-flex flex-wrap gap-2 align-items-center mb-3" method="get" action="/superintel/detailed">
+      <input type="hidden" name="view" value="{{ detailed.entity_type }}">
+      <input type="hidden" name="period" value="{{ detailed.movement_period }}">
+      <input type="hidden" name="sort" value="{{ detailed.global_ranking.ranking_sort }}">
+      <input type="hidden" name="page" value="{{ detailed.global_ranking.page }}">
+      <input type="hidden" name="page_size" value="{{ detailed.global_ranking.page_size }}">
+      {% if detailed.global_ranking.query %}<input type="hidden" name="q" value="{{ detailed.global_ranking.query }}">{% endif %}
+      <input type="hidden" name="analysis_view" value="{{ detailed.analysis.view }}">
+      <input type="hidden" name="analysis_movement" value="{{ detailed.analysis.movement_status }}">
+      <input type="hidden" name="analysis_asset" value="{{ detailed.analysis.asset_status }}">
+      <input type="hidden" name="analysis_page" value="1">
+      <input type="hidden" name="analysis_page_size" value="{{ detailed.analysis.pagination.page_size }}">
+      <input class="form-control form-control-sm bg-dark text-light border-secondary" type="search" name="analysis_q" value="{{ detailed.analysis.query }}" placeholder="{% if detailed.analysis.view == 'explain' %}Filter analysed alliance...{% else %}Filter detailed analysis...{% endif %}" autocomplete="off" style="max-width:320px">
+      <button class="btn btn-outline-primary btn-sm" type="submit">Filter</button>
+    </form>
+
+    <div class="table-responsive">
+      {% if detailed.analysis.view == 'explain' %}
+        <table class="table table-dark table-hover align-middle mb-0 superintel-detailed-table">
+          <thead>
+            <tr>
+              <th>#</th>
+              <th>Pilot / Corporation</th>
+              <th>Previous alliance</th>
+              <th>Current alliance</th>
+              <th>Analysed alliance</th>
+              <th>Movement status</th>
+              <th>Asset status</th>
+              {% for ship in detailed.ship_columns %}
+                <th class="superintel-ship-head">
+                  <a class="superintel-ship-link" href="/ship/{{ ship.type_id }}" title="{{ ship.group }} — {{ ship.label }}">
+                    <img class="superintel-ship-icon" src="https://images.evetech.net/types/{{ ship.type_id }}/icon?size=64" alt="" loading="lazy">
+                    <span>{{ ship.label }}</span>
+                  </a>
+                </th>
+              {% endfor %}
+              <th class="text-end">Titans Δ</th>
+              <th class="text-end">Supers Δ</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for row in detailed.analysis.rows %}
+              <tr>
+                <td>{{ ((detailed.analysis.pagination.page - 1) * detailed.analysis.pagination.page_size) + loop.index }}</td>
+                <td>
+                  <div>{{ entity_with_kb('player', row.entity_id, row.entity_name, true) }}</div>
+                  {% if row.corporation_id %}
+                    <div class="muted-line small mt-1">{{ entity_with_kb('corporation', row.corporation_id, row.corporation_name, true) }}</div>
+                  {% endif %}
+                </td>
+                <td>{{ entity_with_kb('alliance', row.previous_alliance_id, row.previous_alliance_name, true) }}</td>
+                <td>{{ entity_with_kb('alliance', row.current_alliance_id, row.current_alliance_name, true) }}</td>
+                <td>{{ entity_with_kb('alliance', row.analysed_alliance_id, row.analysed_alliance_name, true) }}</td>
+                <td>
+                  <span class="superintel-explain-reason {% if row.movement_status == 'alliance_entrance' or row.movement_status == 'new_super_pilot' %}text-success{% elif row.movement_status == 'alliance_leave' %}text-warning{% else %}text-info{% endif %}">
+                    {{ detailed.analysis.movement_status_labels[row.movement_status] }}
+                  </span>
+                </td>
+                <td>
+                  <span class="superintel-explain-reason {% if row.asset_status in ['killed', 'deleted'] %}text-danger{% elif row.asset_status == 'created' %}text-success{% else %}text-warning{% endif %}">
+                    {{ detailed.analysis.asset_status_labels[row.asset_status] }}
+                  </span>
+                </td>
+                {% for ship in detailed.ship_columns %}
+                  {% set delta = row.ship_deltas[ship.key] %}
+                  <td class="text-end {% if delta > 0 %}text-success{% elif delta < 0 %}text-danger{% else %}muted-line{% endif %}">{% if delta > 0 %}+{% endif %}{{ delta }}</td>
+                {% endfor %}
+                <td class="text-end {% if row.total_titan_delta > 0 %}text-success{% elif row.total_titan_delta < 0 %}text-danger{% else %}muted-line{% endif %}">{% if row.total_titan_delta > 0 %}+{% endif %}{{ row.total_titan_delta }}</td>
+                <td class="text-end {% if row.total_super_delta > 0 %}text-success{% elif row.total_super_delta < 0 %}text-danger{% else %}muted-line{% endif %}">{% if row.total_super_delta > 0 %}+{% endif %}{{ row.total_super_delta }}</td>
+              </tr>
+            {% else %}
+              <tr><td colspan="{{ 9 + (detailed.ship_columns|length) }}" class="muted-line">No explained movement.</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      {% else %}
+        {% set analysis_extra_cols = 2 if detailed.analysis.entity_type == 'player' else 1 if detailed.analysis.entity_type == 'corporation' else 0 %}
+        <table class="table table-dark table-hover align-middle mb-0 superintel-detailed-table">
+          <thead>
+            <tr>
+              <th>#</th>
+              <th>{{ detailed.analysis.entity_label }}</th>
+              {{ related_headers(detailed.analysis.entity_type) }}
+              {% for ship in detailed.ship_columns %}
+                <th class="superintel-ship-head">
+                  <a class="superintel-ship-link" href="/ship/{{ ship.type_id }}" title="{{ ship.group }} — {{ ship.label }}">
+                    <img class="superintel-ship-icon" src="https://images.evetech.net/types/{{ ship.type_id }}/icon?size=64" alt="" loading="lazy">
+                    <span>{{ ship.label }}</span>
+                  </a>
+                </th>
+              {% endfor %}
+              <th class="text-end">Titans</th>
+              <th class="text-end">Supers</th>
+              <th class="text-end">Score</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for row in detailed.analysis.rows %}
+              <tr>
+                <td>{{ ((detailed.analysis.pagination.page - 1) * detailed.analysis.pagination.page_size) + loop.index }}</td>
+                <td>{{ entity_with_kb(detailed.analysis.entity_type, row.entity_id, row.entity_name, true) }}</td>
+                {{ related_cells(detailed.analysis.entity_type, row) }}
+                {% for ship in detailed.ship_columns %}
+                  {% set delta = row.ship_deltas[ship.key] %}
+                  <td class="text-end superintel-metric-cell">
+                    <span class="superintel-cell-delta {% if delta > 0 %}text-success{% elif delta < 0 %}text-danger{% else %}muted-line{% endif %}">{% if delta > 0 %}+{% endif %}{{ delta }}</span>
+                    <span class="superintel-cell-value">{{ row.ship_counts[ship.key] }}</span>
+                  </td>
+                {% endfor %}
+                <td class="text-end superintel-metric-cell">
+                  <span class="superintel-cell-delta {% if row.titan_delta > 0 %}text-success{% elif row.titan_delta < 0 %}text-danger{% else %}muted-line{% endif %}">{% if row.titan_delta > 0 %}+{% endif %}{{ row.titan_delta }}</span>
+                  <span class="superintel-cell-value fw-semibold">{{ row.total_titan }}</span>
+                </td>
+                <td class="text-end superintel-metric-cell">
+                  <span class="superintel-cell-delta {% if row.super_delta > 0 %}text-success{% elif row.super_delta < 0 %}text-danger{% else %}muted-line{% endif %}">{% if row.super_delta > 0 %}+{% endif %}{{ row.super_delta }}</span>
+                  <span class="superintel-cell-value fw-semibold">{{ row.total_super }}</span>
+                </td>
+                <td class="text-end superintel-metric-cell">
+                  <span class="superintel-cell-delta {% if row.score_delta > 0 %}text-success{% elif row.score_delta < 0 %}text-danger{% else %}muted-line{% endif %}">{% if row.score_delta > 0 %}+{% endif %}{{ row.score_delta }}</span>
+                  <span class="superintel-cell-value fw-bold">{{ row.score }}</span>
+                </td>
+              </tr>
+            {% else %}
+              <tr><td colspan="{{ 5 + analysis_extra_cols + (detailed.ship_columns|length) }}" class="muted-line">No result.</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      {% endif %}
+    </div>
+
+    <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mt-3">
+      <div class="muted-line small">{{ detailed.analysis.pagination.total_rows }} results — page {{ detailed.analysis.pagination.page }}/{{ detailed.analysis.pagination.total_pages }}</div>
+      <div class="btn-group btn-group-sm">
+        {% if detailed.analysis.pagination.has_previous %}<a class="btn btn-outline-primary" href="{{ detailed_analysis_url(page=detailed.analysis.pagination.page - 1) }}">Previous</a>{% endif %}
+        {% if detailed.analysis.pagination.has_next %}<a class="btn btn-outline-primary" href="{{ detailed_analysis_url(page=detailed.analysis.pagination.page + 1) }}">Next</a>{% endif %}
+      </div>
+    </div>
+  </section>
+
+
+
+  {% else %}
+  <section class="content-card p-3 p-md-4 mb-4">
+    <div class="mb-3">
+      <h2 class="h5 mb-1" title="Score = Titan x{{ detailed.score_titan_points }} + Super x{{ detailed.score_super_points }}">Top 5 {{ detailed.entity_label_plural }} — detailed stock</h2>
+      <div class="muted-line small">Date: {{ detailed.today.isoformat() }}</div>
+    </div>
+    <div class="table-responsive">
+      <table class="table table-dark table-hover align-middle mb-0 superintel-detailed-table">
+        <thead>
+          <tr>
+            <th>#</th>
+            <th>{{ detailed.entity_label }}</th>
+            {{ related_headers(detailed.entity_type) }}
+            {% for ship in detailed.ship_columns %}
+              <th class="superintel-ship-head">
+                <a class="superintel-ship-link" href="/ship/{{ ship.type_id }}" title="{{ ship.group }} — {{ ship.label }}">
+                  <img class="superintel-ship-icon" src="https://images.evetech.net/types/{{ ship.type_id }}/icon?size=64" alt="" loading="lazy">
+                  <span>{{ ship.label }}</span>
+                </a>
+              </th>
+            {% endfor %}
+            <th class="text-end">Titans</th>
+            <th class="text-end">Supers</th>
+            <th class="text-end">Score</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in detailed.top_today %}
+            <tr>
+              <td>{{ loop.index }}</td>
+              <td>{{ entity_with_kb(detailed.entity_type, row.entity_id, row.entity_name, true) }}</td>
+              {{ related_cells(detailed.entity_type, row) }}
+              {% for ship in detailed.ship_columns %}<td class="text-end">{{ row.ship_counts[ship.key] }}</td>{% endfor %}
+              <td class="text-end fw-semibold">{{ row.total_titan }}</td>
+              <td class="text-end fw-semibold">{{ row.total_super }}</td>
+              <td class="text-end fw-bold">{{ row.score }}</td>
+            </tr>
+          {% else %}
+            <tr><td colspan="{{ 5 + extra_cols + (detailed.ship_columns|length) }}" class="muted-line">No data.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="mb-4">
+    <div class="d-flex flex-wrap justify-content-between align-items-end gap-2 mb-3">
+      <div>
+        <h2 class="h5 mb-1">Top / Flop by ship</h2>
+        <div class="muted-line small">{{ detailed.movement_from.isoformat() }} → {{ detailed.today.isoformat() }} · Top 5 gains and losses for each hull.</div>
+      </div>
+      <div class="btn-group btn-group-sm" role="group" aria-label="Top flop period">
+        <a class="btn {% if detailed.movement_period == '7d' %}btn-primary{% else %}btn-outline-primary{% endif %}" href="/superintel/detailed?view={{ detailed.entity_type }}&period=7d&sort={{ detailed.global_ranking.ranking_sort }}&page_size={{ detailed.global_ranking.page_size }}{% if detailed.global_ranking.query %}&q={{ detailed.global_ranking.query|urlencode }}{% endif %}">7 days</a>
+        <a class="btn {% if detailed.movement_period == '1m' %}btn-primary{% else %}btn-outline-primary{% endif %}" href="/superintel/detailed?view={{ detailed.entity_type }}&period=1m&sort={{ detailed.global_ranking.ranking_sort }}&page_size={{ detailed.global_ranking.page_size }}{% if detailed.global_ranking.query %}&q={{ detailed.global_ranking.query|urlencode }}{% endif %}">1 month</a>
+      </div>
+    </div>
+
+    <div class="row g-4">
+      {% for ship in detailed.ship_top_flop %}
+        <div class="col-12 col-xxl-6">
+          <section class="content-card p-3 h-100 superintel-topflop-card">
+            <div class="superintel-topflop-head mb-3">
+              <a href="/ship/{{ ship.type_id }}"><img src="https://images.evetech.net/types/{{ ship.type_id }}/icon?size=64" alt="" loading="lazy"></a>
+              <div>
+                <h3 class="h6 mb-0"><a class="text-decoration-none" href="/ship/{{ ship.type_id }}">{{ ship.label }}</a></h3>
+                <div class="muted-line small">{{ ship.group }}</div>
+              </div>
+            </div>
+            <div class="row g-3">
+              <div class="col-12 col-lg-6">
+                <div class="text-success fw-semibold small mb-1">TOP</div>
+                <div class="table-responsive">
+                  <table class="table table-dark table-hover align-middle mb-0 superintel-topflop-table">
+                    <thead><tr><th class="rank-col">#</th><th>{{ detailed.entity_label }}</th><th class="text-end delta-col">Δ</th><th class="text-end now-col">Now</th></tr></thead>
+                    <tbody>
+                      {% for row in ship.gains %}
+                        <tr><td>{{ loop.index }}</td><td>{{ movement_entity(detailed.entity_type, row) }}</td><td class="text-end text-success fw-semibold">+{{ row.delta }}</td><td class="text-end">{{ row.current }}</td></tr>
+                      {% else %}
+                        <tr><td colspan="4" class="muted-line">No gain.</td></tr>
+                      {% endfor %}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+              <div class="col-12 col-lg-6">
+                <div class="text-danger fw-semibold small mb-1">FLOP</div>
+                <div class="table-responsive">
+                  <table class="table table-dark table-hover align-middle mb-0 superintel-topflop-table">
+                    <thead><tr><th class="rank-col">#</th><th>{{ detailed.entity_label }}</th><th class="text-end delta-col">Δ</th><th class="text-end now-col">Now</th></tr></thead>
+                    <tbody>
+                      {% for row in ship.losses %}
+                        <tr><td>{{ loop.index }}</td><td>{{ movement_entity(detailed.entity_type, row) }}</td><td class="text-end text-danger fw-semibold">{{ row.delta }}</td><td class="text-end">{{ row.current }}</td></tr>
+                      {% else %}
+                        <tr><td colspan="4" class="muted-line">No loss.</td></tr>
+                      {% endfor %}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+          </section>
+        </div>
+      {% endfor %}
+    </div>
+  </section>
+
+  <section class="content-card p-3 p-md-4 mb-4">
+    <div class="d-flex flex-wrap justify-content-between align-items-end gap-3 mb-3">
+      <div>
+        <h2 class="h5 mb-1" title="Score = Titan x{{ detailed.score_titan_points }} + Super x{{ detailed.score_super_points }}">Global Ranking — detailed</h2>
+        <div class="muted-line small">1-month evolution: {{ detailed.day_month.isoformat() }} → {{ detailed.today.isoformat() }}</div>
+      </div>
+      <form class="d-flex gap-2" method="get" action="/superintel/detailed">
+        <input type="hidden" name="view" value="{{ detailed.entity_type }}">
+        <input type="hidden" name="period" value="{{ detailed.movement_period }}">
+        <input type="hidden" name="sort" value="{{ detailed.global_ranking.ranking_sort }}">
+        <input type="hidden" name="page_size" value="{{ detailed.global_ranking.page_size }}">
+        <input class="form-control form-control-sm bg-dark text-light border-secondary" type="search" name="q" value="{{ detailed.global_ranking.query }}" placeholder="Filter {{ detailed.entity_label_plural|lower }}..." autocomplete="off" style="min-width:260px">
+        <button class="btn btn-outline-primary btn-sm" type="submit">Filter</button>
+      </form>
+    </div>
+
+    <div class="table-responsive">
+      <table class="table table-dark table-hover align-middle mb-0 superintel-detailed-table">
+        <thead>
+          <tr>
+            <th>#</th>
+            <th>{{ detailed.entity_label }}</th>
+            {{ related_headers(detailed.entity_type) }}
+            {% for ship in detailed.ship_columns %}
+              <th class="superintel-ship-head">
+                <a class="superintel-ship-link superintel-sort-link {% if detailed.global_ranking.ranking_sort == ship.key %}active{% endif %}" href="{{ global_url(ship.key, 1, detailed.global_ranking.query, detailed.global_ranking.page_size) }}" title="Sort by {{ ship.label }}">
+                  <img class="superintel-ship-icon" src="https://images.evetech.net/types/{{ ship.type_id }}/icon?size=64" alt="" loading="lazy">
+                  <span>{{ ship.label }}</span>
+                </a>
+              </th>
+            {% endfor %}
+            <th class="text-end"><a class="superintel-sort-link {% if detailed.global_ranking.ranking_sort == 'titans' %}active{% endif %}" href="{{ global_url('titans', 1, detailed.global_ranking.query, detailed.global_ranking.page_size) }}">Titans</a></th>
+            <th class="text-end"><a class="superintel-sort-link {% if detailed.global_ranking.ranking_sort == 'supers' %}active{% endif %}" href="{{ global_url('supers', 1, detailed.global_ranking.query, detailed.global_ranking.page_size) }}">Supers</a></th>
+            <th class="text-end"><a class="superintel-sort-link {% if detailed.global_ranking.ranking_sort == 'score' %}active{% endif %}" href="{{ global_url('score', 1, detailed.global_ranking.query, detailed.global_ranking.page_size) }}">Score</a></th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in detailed.global_ranking["items"] %}
+            <tr>
+              <td>{{ ((detailed.global_ranking.page - 1) * detailed.global_ranking.page_size) + loop.index }}</td>
+              <td>{{ entity_with_kb(detailed.entity_type, row.entity_id, row.entity_name, true) }}</td>
+              {{ related_cells(detailed.entity_type, row) }}
+              {% for ship in detailed.ship_columns %}
+                {% set delta = row.ship_deltas[ship.key] %}
+                <td class="text-end superintel-metric-cell">
+                  <span class="superintel-cell-delta {% if delta > 0 %}text-success{% elif delta < 0 %}text-danger{% else %}muted-line{% endif %}">{% if delta > 0 %}+{% endif %}{{ delta }}</span>
+                  <span class="superintel-cell-value">{{ row.ship_counts[ship.key] }}</span>
+                </td>
+              {% endfor %}
+              <td class="text-end superintel-metric-cell">
+                <span class="superintel-cell-delta {% if row.titan_delta > 0 %}text-success{% elif row.titan_delta < 0 %}text-danger{% else %}muted-line{% endif %}">{% if row.titan_delta > 0 %}+{% endif %}{{ row.titan_delta }}</span>
+                <span class="superintel-cell-value fw-semibold">{{ row.total_titan }}</span>
+              </td>
+              <td class="text-end superintel-metric-cell">
+                <span class="superintel-cell-delta {% if row.super_delta > 0 %}text-success{% elif row.super_delta < 0 %}text-danger{% else %}muted-line{% endif %}">{% if row.super_delta > 0 %}+{% endif %}{{ row.super_delta }}</span>
+                <span class="superintel-cell-value fw-semibold">{{ row.total_super }}</span>
+              </td>
+              <td class="text-end superintel-metric-cell">
+                <span class="superintel-cell-delta {% if row.score_delta > 0 %}text-success{% elif row.score_delta < 0 %}text-danger{% else %}muted-line{% endif %}">{% if row.score_delta > 0 %}+{% endif %}{{ row.score_delta }}</span>
+                <span class="superintel-cell-value fw-bold">{{ row.score }}</span>
+              </td>
+            </tr>
+          {% else %}
+            <tr><td colspan="{{ 5 + extra_cols + (detailed.ship_columns|length) }}" class="muted-line">No result.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+
+    <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mt-3">
+      <div class="muted-line small">{{ detailed.global_ranking.total_rows }} results — page {{ detailed.global_ranking.page }}/{{ detailed.global_ranking.total_pages }}</div>
+      <div class="btn-group btn-group-sm">
+        {% if detailed.global_ranking.has_previous %}<a class="btn btn-outline-primary" href="{{ global_url(detailed.global_ranking.ranking_sort, detailed.global_ranking.page - 1, detailed.global_ranking.query, detailed.global_ranking.page_size) }}">Previous</a>{% endif %}
+        {% if detailed.global_ranking.has_next %}<a class="btn btn-outline-primary" href="{{ global_url(detailed.global_ranking.ranking_sort, detailed.global_ranking.page + 1, detailed.global_ranking.query, detailed.global_ranking.page_size) }}">Next</a>{% endif %}
+      </div>
+    </div>
+  </section>
+  {% endif %}
+{% endif %}
+{% endblock %}

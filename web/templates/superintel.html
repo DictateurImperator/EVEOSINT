@@ -1,0 +1,472 @@
+{% extends "base.html" %}
+
+{% block content %}
+{% macro entity_image_url(entity_type, entity_id, size=32) -%}
+{% if entity_type == 'player' or entity_type == 'character' %}https://images.evetech.net/characters/{{ entity_id }}/portrait?size={{ size }}{% elif entity_type == 'corporation' %}https://images.evetech.net/corporations/{{ entity_id }}/logo?size={{ size }}{% else %}https://images.evetech.net/alliances/{{ entity_id }}/logo?size={{ size }}{% endif %}
+{%- endmacro %}
+{% macro entity_link(entity_type, entity_id, entity_name, show_image=True) -%}
+{% set shown = entity_name if entity_name is not none and (entity_name|string)|trim != "" else "Unknown" %}
+{% set has_id = entity_id and (entity_id|string) not in ["0", "None", ""] %}
+{% if has_id %}<a class="superintel-entity-link text-decoration-none" href="/{% if entity_type == 'player' %}character{% else %}{{ entity_type }}{% endif %}/{{ entity_id }}">{% if show_image %}<img class="superintel-entity-icon" src="{{ entity_image_url(entity_type, entity_id, 32) }}" alt="" loading="lazy" onerror="this.style.display='none'">{% endif %}<span>{{ shown }}</span></a>{% else %}<span>{{ shown }}</span>{% endif %}
+{%- endmacro %}
+{% macro related_entity_cell(entity_type, entity_id, entity_name, entity_ticker=None) -%}
+{% set shown = entity_name if entity_name is not none and (entity_name|string)|trim != "" else none %}
+<td class="fw-semibold superintel-related-cell">
+  {% if shown or (entity_id and (entity_id|string) not in ["0", "None", ""]) %}
+    {{ entity_link(entity_type, entity_id, shown or "Unknown", true) }}{% if entity_ticker %}<span class="muted-line ms-1">[{{ entity_ticker }}]</span>{% endif %}
+  {% else %}
+    <span class="muted-line">-</span>
+  {% endif %}
+</td>
+{%- endmacro %}
+{% macro superintel_entity_cell(entity_type, row) -%}
+<div class="superintel-entity-inline-stack">
+  <span>{{ entity_link(entity_type, row.entity_id, row.entity_name) }}</span>
+</div>
+{%- endmacro %}
+{% macro superintel_related_headers(entity_type) -%}
+{% if entity_type == "corporation" %}
+<th>Alliance</th>
+{% elif entity_type == "player" %}
+<th>Corporation</th>
+<th>Alliance</th>
+{% endif %}
+{%- endmacro %}
+{% macro superintel_related_cells(entity_type, row) -%}
+{% if entity_type == "corporation" %}
+{{ related_entity_cell("alliance", row.alliance_id, row.alliance_name, row.alliance_ticker) }}
+{% elif entity_type == "player" %}
+{{ related_entity_cell("corporation", row.corporation_id, row.corporation_name, row.corporation_ticker) }}
+{{ related_entity_cell("alliance", row.alliance_id, row.alliance_name, row.alliance_ticker) }}
+{% endif %}
+{%- endmacro %}
+{% set selected_view = dashboard.entity_type if dashboard else status.entity_type if status else "alliance" %}
+{% set more_param = "&more=1" if dashboard and dashboard.full_ranking else "" %}
+{% set sort_param = "&sort=" ~ dashboard.ranking_sort if dashboard else "" %}
+<style>
+  .superintel-entity-link {
+    color: #7cc7ff;
+    font-weight: 600;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.45rem;
+  }
+  .superintel-entity-icon {
+    width: 24px;
+    height: 24px;
+    border-radius: 50%;
+    object-fit: cover;
+    background: rgba(255,255,255,0.06);
+  }
+  .superintel-entity-link:hover {
+    color: #b9e3ff;
+    text-decoration: underline !important;
+  }
+  .superintel-sort-link {
+    color: #7cc7ff;
+    text-decoration: none;
+  }
+  .superintel-sort-link:hover,
+  .superintel-sort-link.active {
+    color: #b9e3ff;
+    text-decoration: underline;
+  }
+  .superintel-entity-inline-stack {
+    display: flex;
+    align-items: center;
+    gap: 0.45rem;
+    flex-wrap: wrap;
+  }
+  .superintel-related-inline {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.30rem;
+    font-size: 0.90rem;
+    opacity: 0.92;
+  }
+  .superintel-related-cell .superintel-entity-icon {
+    width: 18px;
+    height: 18px;
+  }
+  .superintel-related-cell {
+    font-size: 0.92rem;
+    white-space: nowrap;
+  }
+</style>
+<div class="d-flex justify-content-between align-items-start mb-4">
+  <div>
+    <h1 class="h3 fw-bold mb-1">SuperINTEL</h1>
+    <div class="muted-line">Global ranking — daily intelligence.</div>
+    <div class="btn-group btn-group-sm mt-3" role="group" aria-label="SuperINTEL ranking type">
+      <a class="btn {% if selected_view == 'alliance' %}btn-primary{% else %}btn-outline-primary{% endif %}" href="/superintel?view=alliance{{ more_param }}{{ sort_param }}">Alliance</a>
+      <a class="btn {% if selected_view == 'corporation' %}btn-primary{% else %}btn-outline-primary{% endif %}" href="/superintel?view=corporation{{ more_param }}{{ sort_param }}">Corporation</a>
+      <a class="btn {% if selected_view == 'player' %}btn-primary{% else %}btn-outline-primary{% endif %}" href="/superintel?view=player{{ more_param }}{{ sort_param }}">Player</a>
+    </div>
+  </div>
+</div>
+
+{% if error %}
+  <div class="alert alert-danger py-2">
+    {% if error.startswith("superintel_script_missing") %}
+      Missing pipeline script: {{ error }}
+    {% elif error.startswith("superintel_table_missing") %}
+      Missing report table: {{ error }}
+    {% elif error.startswith("superintel_column_missing") %}
+      Missing report column: {{ error }}
+    {% else %}
+      SuperINTEL error: {{ error }}
+    {% endif %}
+  </div>
+{% endif %}
+
+{% if dashboard and not error %}
+  {% set superintel_extra_col_count = 2 if dashboard.entity_type == "player" else 1 if dashboard.entity_type == "corporation" else 0 %}
+  <div class="row g-4">
+    <div class="col-12">
+      <section class="content-card p-3 p-md-4 h-100">
+        <h2 class="h5 mb-1" title="Score = Titan x{{ dashboard.score_titan_points }} + Super x{{ dashboard.score_super_points }}">Top 5 {{ dashboard.entity_label_plural }} SuperINTEL</h2>
+        <div class="muted-line small mb-3">Date: {{ dashboard.today.isoformat() }}</div>
+
+        <div class="table-responsive">
+          <table class="table table-dark table-hover align-middle mb-0">
+            <thead>
+              <tr>
+                <th>#</th>
+                <th>{{ dashboard.entity_label }}</th>
+                {{ superintel_related_headers(dashboard.entity_type) }}
+                <th class="text-end">Titans</th>
+                <th class="text-end">Supers</th>
+                <th class="text-end">Score</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for row in dashboard.top_today %}
+                <tr>
+                  <td>{{ loop.index }}</td>
+                  <td class="fw-semibold">{{ superintel_entity_cell(dashboard.entity_type, row) }}</td>
+                  {{ superintel_related_cells(dashboard.entity_type, row) }}
+                  <td class="text-end">{{ row.total_titan }}</td>
+                  <td class="text-end">{{ row.total_super }}</td>
+                  <td class="text-end">{{ row.score }}</td>
+                </tr>
+              {% else %}
+                <tr>
+                  <td colspan="{{ 5 + superintel_extra_col_count }}" class="muted-line">No data.</td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </div>
+
+    <div class="col-12">
+      <div class="row g-4">
+        <div class="col-12 col-xl-6">
+          <section class="content-card p-3 p-md-4 h-100">
+            <h2 class="h5 mb-1" title="Score = Titan x{{ dashboard.score_titan_points }} + Super x{{ dashboard.score_super_points }}">Top 5 score gains over 7 days</h2>
+            <div class="muted-line small mb-3">{{ dashboard.day_7.isoformat() }} → {{ dashboard.today.isoformat() }}</div>
+
+            <div class="table-responsive">
+              <table class="table table-dark table-hover align-middle mb-0">
+                <thead>
+                  <tr>
+                    <th>{{ dashboard.entity_label }}</th>
+                {{ superintel_related_headers(dashboard.entity_type) }}
+                    <th class="text-end">Titans</th>
+                    <th class="text-end">Supers</th>
+                    <th class="text-end">Score</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {% for row in dashboard.top_gain_7 %}
+                    <tr>
+                      <td class="fw-semibold">{{ superintel_entity_cell(dashboard.entity_type, row) }}</td>
+                  {{ superintel_related_cells(dashboard.entity_type, row) }}
+                      <td class="text-end">
+                        <span class="superintel-metric-delta {% if row.titan_delta > 0 %}text-success{% elif row.titan_delta < 0 %}text-danger{% else %}muted-line{% endif %}">{% if row.titan_delta > 0 %}+{% endif %}{{ row.titan_delta }}</span>
+                        <span class="superintel-metric-value">{{ row.current_titan }}</span>
+                      </td>
+                      <td class="text-end">
+                        <span class="superintel-metric-delta {% if row.super_delta > 0 %}text-success{% elif row.super_delta < 0 %}text-danger{% else %}muted-line{% endif %}">{% if row.super_delta > 0 %}+{% endif %}{{ row.super_delta }}</span>
+                        <span class="superintel-metric-value">{{ row.current_super }}</span>
+                      </td>
+                      <td class="text-end fw-semibold">
+                        <span class="superintel-metric-delta {% if row.score_delta > 0 %}text-success{% elif row.score_delta < 0 %}text-danger{% else %}muted-line{% endif %}">{% if row.score_delta > 0 %}+{% endif %}{{ row.score_delta }}</span>
+                        <span class="superintel-metric-value">{{ row.current_score }}</span>
+                      </td>
+                    </tr>
+                  {% else %}
+                    <tr>
+                      <td colspan="{{ 4 + superintel_extra_col_count }}" class="muted-line">No gain.</td>
+                    </tr>
+                  {% endfor %}
+                </tbody>
+              </table>
+            </div>
+          </section>
+        </div>
+
+        <div class="col-12 col-xl-6">
+          <section class="content-card p-3 p-md-4 h-100">
+            <h2 class="h5 mb-1" title="Score = Titan x{{ dashboard.score_titan_points }} + Super x{{ dashboard.score_super_points }}">Top 5 score losses over 7 days</h2>
+            <div class="muted-line small mb-3">{{ dashboard.day_7.isoformat() }} → {{ dashboard.today.isoformat() }}</div>
+
+            <div class="table-responsive">
+              <table class="table table-dark table-hover align-middle mb-0">
+                <thead>
+                  <tr>
+                    <th>{{ dashboard.entity_label }}</th>
+                {{ superintel_related_headers(dashboard.entity_type) }}
+                    <th class="text-end">Titans</th>
+                    <th class="text-end">Supers</th>
+                    <th class="text-end">Score</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {% for row in dashboard.top_loss_7 %}
+                    <tr>
+                      <td class="fw-semibold">{{ superintel_entity_cell(dashboard.entity_type, row) }}</td>
+                  {{ superintel_related_cells(dashboard.entity_type, row) }}
+                      <td class="text-end">
+                        <span class="superintel-metric-delta {% if row.titan_delta > 0 %}text-success{% elif row.titan_delta < 0 %}text-danger{% else %}muted-line{% endif %}">{% if row.titan_delta > 0 %}+{% endif %}{{ row.titan_delta }}</span>
+                        <span class="superintel-metric-value">{{ row.current_titan }}</span>
+                      </td>
+                      <td class="text-end">
+                        <span class="superintel-metric-delta {% if row.super_delta > 0 %}text-success{% elif row.super_delta < 0 %}text-danger{% else %}muted-line{% endif %}">{% if row.super_delta > 0 %}+{% endif %}{{ row.super_delta }}</span>
+                        <span class="superintel-metric-value">{{ row.current_super }}</span>
+                      </td>
+                      <td class="text-end fw-semibold">
+                        <span class="superintel-metric-delta {% if row.score_delta > 0 %}text-success{% elif row.score_delta < 0 %}text-danger{% else %}muted-line{% endif %}">{% if row.score_delta > 0 %}+{% endif %}{{ row.score_delta }}</span>
+                        <span class="superintel-metric-value">{{ row.current_score }}</span>
+                      </td>
+                    </tr>
+                  {% else %}
+                    <tr>
+                      <td colspan="{{ 4 + superintel_extra_col_count }}" class="muted-line">No loss.</td>
+                    </tr>
+                  {% endfor %}
+                </tbody>
+              </table>
+            </div>
+          </section>
+        </div>
+      </div>
+    </div>
+
+    <div class="col-12">
+      <div class="row g-4">
+        <div class="col-12 col-xl-6">
+          <section class="content-card p-3 p-md-4 h-100">
+            <h2 class="h5 mb-1" title="Score = Titan x{{ dashboard.score_titan_points }} + Super x{{ dashboard.score_super_points }}">Top 5 score gains over 1 month</h2>
+            <div class="muted-line small mb-3">{{ dashboard.day_month.isoformat() }} → {{ dashboard.today.isoformat() }}</div>
+
+            <div class="table-responsive">
+              <table class="table table-dark table-hover align-middle mb-0">
+                <thead>
+                  <tr>
+                    <th>{{ dashboard.entity_label }}</th>
+                {{ superintel_related_headers(dashboard.entity_type) }}
+                    <th class="text-end">Titans</th>
+                    <th class="text-end">Supers</th>
+                    <th class="text-end">Score</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {% for row in dashboard.top_gain_month %}
+                    <tr>
+                      <td class="fw-semibold">{{ superintel_entity_cell(dashboard.entity_type, row) }}</td>
+                  {{ superintel_related_cells(dashboard.entity_type, row) }}
+                      <td class="text-end">
+                        <span class="superintel-metric-delta {% if row.titan_delta > 0 %}text-success{% elif row.titan_delta < 0 %}text-danger{% else %}muted-line{% endif %}">{% if row.titan_delta > 0 %}+{% endif %}{{ row.titan_delta }}</span>
+                        <span class="superintel-metric-value">{{ row.current_titan }}</span>
+                      </td>
+                      <td class="text-end">
+                        <span class="superintel-metric-delta {% if row.super_delta > 0 %}text-success{% elif row.super_delta < 0 %}text-danger{% else %}muted-line{% endif %}">{% if row.super_delta > 0 %}+{% endif %}{{ row.super_delta }}</span>
+                        <span class="superintel-metric-value">{{ row.current_super }}</span>
+                      </td>
+                      <td class="text-end fw-semibold">
+                        <span class="superintel-metric-delta {% if row.score_delta > 0 %}text-success{% elif row.score_delta < 0 %}text-danger{% else %}muted-line{% endif %}">{% if row.score_delta > 0 %}+{% endif %}{{ row.score_delta }}</span>
+                        <span class="superintel-metric-value">{{ row.current_score }}</span>
+                      </td>
+                    </tr>
+                  {% else %}
+                    <tr>
+                      <td colspan="{{ 4 + superintel_extra_col_count }}" class="muted-line">No gain.</td>
+                    </tr>
+                  {% endfor %}
+                </tbody>
+              </table>
+            </div>
+          </section>
+        </div>
+
+        <div class="col-12 col-xl-6">
+          <section class="content-card p-3 p-md-4 h-100">
+            <h2 class="h5 mb-1" title="Score = Titan x{{ dashboard.score_titan_points }} + Super x{{ dashboard.score_super_points }}">Top 5 score losses over 1 month</h2>
+            <div class="muted-line small mb-3">{{ dashboard.day_month.isoformat() }} → {{ dashboard.today.isoformat() }}</div>
+
+            <div class="table-responsive">
+              <table class="table table-dark table-hover align-middle mb-0">
+                <thead>
+                  <tr>
+                    <th>{{ dashboard.entity_label }}</th>
+                {{ superintel_related_headers(dashboard.entity_type) }}
+                    <th class="text-end">Titans</th>
+                    <th class="text-end">Supers</th>
+                    <th class="text-end">Score</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {% for row in dashboard.top_loss_month %}
+                    <tr>
+                      <td class="fw-semibold">{{ superintel_entity_cell(dashboard.entity_type, row) }}</td>
+                  {{ superintel_related_cells(dashboard.entity_type, row) }}
+                      <td class="text-end">
+                        <span class="superintel-metric-delta {% if row.titan_delta > 0 %}text-success{% elif row.titan_delta < 0 %}text-danger{% else %}muted-line{% endif %}">{% if row.titan_delta > 0 %}+{% endif %}{{ row.titan_delta }}</span>
+                        <span class="superintel-metric-value">{{ row.current_titan }}</span>
+                      </td>
+                      <td class="text-end">
+                        <span class="superintel-metric-delta {% if row.super_delta > 0 %}text-success{% elif row.super_delta < 0 %}text-danger{% else %}muted-line{% endif %}">{% if row.super_delta > 0 %}+{% endif %}{{ row.super_delta }}</span>
+                        <span class="superintel-metric-value">{{ row.current_super }}</span>
+                      </td>
+                      <td class="text-end fw-semibold">
+                        <span class="superintel-metric-delta {% if row.score_delta > 0 %}text-success{% elif row.score_delta < 0 %}text-danger{% else %}muted-line{% endif %}">{% if row.score_delta > 0 %}+{% endif %}{{ row.score_delta }}</span>
+                        <span class="superintel-metric-value">{{ row.current_score }}</span>
+                      </td>
+                    </tr>
+                  {% else %}
+                    <tr>
+                      <td colspan="{{ 4 + superintel_extra_col_count }}" class="muted-line">No loss.</td>
+                    </tr>
+                  {% endfor %}
+                </tbody>
+              </table>
+            </div>
+          </section>
+        </div>
+      </div>
+    </div>
+
+
+    <div class="col-12">
+      <section class="content-card p-3 p-md-4 h-100">
+        <div class="d-flex justify-content-between align-items-start gap-3 mb-3">
+          <div>
+            <h2 class="h5 mb-1" title="Score = Titan x{{ dashboard.score_titan_points }} + Super x{{ dashboard.score_super_points }}">Global Ranking</h2>
+            <div class="muted-line small">1-month evolution: {{ dashboard.day_month.isoformat() }} → {{ dashboard.today.isoformat() }}</div>
+          </div>
+          <div class="d-flex gap-2 align-items-center flex-wrap justify-content-end">
+            <button id="superintelGlobalRankingMore" class="btn btn-outline-primary btn-sm" type="button" data-expanded="{% if dashboard.full_ranking %}1{% else %}0{% endif %}">{% if dashboard.full_ranking %}Top 10{% else %}More{% endif %}</button>
+          </div>
+        </div>
+
+        <style>
+          .superintel-metric-delta {
+            display: block;
+            font-size: 0.70em;
+            line-height: 1;
+            min-height: 1em;
+          }
+          .superintel-metric-value {
+            display: block;
+            font-size: 1.15em;
+            line-height: 1.1;
+          }
+        </style>
+
+        <div class="table-responsive">
+          <table id="superintelGlobalRankingTable" class="table table-dark table-hover align-middle mb-0">
+            <thead>
+              <tr>
+                <th>#</th>
+                <th>
+                  <div class="d-flex align-items-center gap-3">
+                    <span>{{ dashboard.entity_label }}</span>
+                    <input id="superintelGlobalRankingFilter" class="form-control form-control-sm" type="search" placeholder="Filter {{ dashboard.entity_label_plural | lower }}..." aria-label="Filter global ranking" style="max-width: 260px;">
+                  </div>
+                </th>
+                {{ superintel_related_headers(dashboard.entity_type) }}
+                <th class="text-end"><a class="superintel-sort-link {% if dashboard.ranking_sort == 'titans' %}active{% endif %}" href="/superintel?view={{ dashboard.entity_type }}{% if dashboard.full_ranking %}&more=1{% endif %}&sort=titans">Titans</a></th>
+                <th class="text-end"><a class="superintel-sort-link {% if dashboard.ranking_sort == 'supers' %}active{% endif %}" href="/superintel?view={{ dashboard.entity_type }}{% if dashboard.full_ranking %}&more=1{% endif %}&sort=supers">Supers</a></th>
+                <th class="text-end"><a class="superintel-sort-link {% if dashboard.ranking_sort == 'score' %}active{% endif %}" href="/superintel?view={{ dashboard.entity_type }}{% if dashboard.full_ranking %}&more=1{% endif %}&sort=score">Score</a></th>
+              </tr>
+            </thead>
+            <tbody>
+              {% set ranking_rows = dashboard.score_ranking_month_all | default(dashboard.score_ranking_month, true) %}
+              {% for row in ranking_rows %}
+                <tr data-superintel-ranking-row data-ranking-index="{{ loop.index }}" {% if not dashboard.full_ranking and loop.index > 10 %}class="d-none"{% endif %}>
+                  <td>{{ loop.index }}</td>
+                  <td class="fw-semibold">{{ superintel_entity_cell(dashboard.entity_type, row) }}</td>
+                  {{ superintel_related_cells(dashboard.entity_type, row) }}
+                  <td class="text-end">
+                    <span class="superintel-metric-delta {% if row.titan_delta > 0 %}text-success{% elif row.titan_delta < 0 %}text-danger{% else %}muted-line{% endif %}">{% if row.titan_delta > 0 %}+{% endif %}{{ row.titan_delta }}</span>
+                    <span class="superintel-metric-value">{{ row.total_titan }}</span>
+                  </td>
+                  <td class="text-end">
+                    <span class="superintel-metric-delta {% if row.super_delta > 0 %}text-success{% elif row.super_delta < 0 %}text-danger{% else %}muted-line{% endif %}">{% if row.super_delta > 0 %}+{% endif %}{{ row.super_delta }}</span>
+                    <span class="superintel-metric-value">{{ row.total_super }}</span>
+                  </td>
+                  <td class="text-end fw-semibold">
+                    <span class="superintel-metric-delta {% if row.score_delta > 0 %}text-success{% elif row.score_delta < 0 %}text-danger{% else %}muted-line{% endif %}">{% if row.score_delta > 0 %}+{% endif %}{{ row.score_delta }}</span>
+                    <span class="superintel-metric-value">{{ row.score }}</span>
+                  </td>
+                </tr>
+              {% else %}
+                <tr>
+                  <td colspan="{{ 5 + superintel_extra_col_count }}" class="muted-line">No data.</td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+        <script>
+          (() => {
+            const input = document.getElementById("superintelGlobalRankingFilter");
+            const button = document.getElementById("superintelGlobalRankingMore");
+            const rows = document.querySelectorAll("#superintelGlobalRankingTable tbody tr[data-superintel-ranking-row]");
+            if (!input || !rows.length) {
+              return;
+            }
+
+            const applyRankingVisibility = () => {
+              const needle = input.value.trim().toLowerCase();
+              const expanded = button && button.dataset.expanded === "1";
+              let visibleMatches = 0;
+
+              rows.forEach((row) => {
+                const matches = needle === "" || row.textContent.toLowerCase().includes(needle);
+                if (!matches) {
+                  row.classList.add("d-none");
+                  return;
+                }
+
+                if (expanded) {
+                  row.classList.remove("d-none");
+                  return;
+                }
+
+                visibleMatches += 1;
+                row.classList.toggle("d-none", visibleMatches > 10);
+              });
+
+              if (button) {
+                button.textContent = expanded ? "Top 10" : "More";
+              }
+            };
+
+            input.addEventListener("input", applyRankingVisibility);
+            if (button) {
+              button.addEventListener("click", () => {
+                button.dataset.expanded = button.dataset.expanded === "1" ? "0" : "1";
+                applyRankingVisibility();
+              });
+            }
+            applyRankingVisibility();
+          })();
+        </script>
+      </section>
+    </div>
+  </div>
+{% endif %}
+{% endblock %}

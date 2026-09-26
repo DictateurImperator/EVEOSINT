@@ -1,0 +1,282 @@
+{% extends "base.html" %}
+
+{% block content %}
+<style>
+  .mer-killmail-page {
+    min-height: calc(100vh - 110px);
+    padding: 1rem;
+    color: #d6e1e5;
+    background:
+      linear-gradient(rgba(2, 6, 8, 0.90), rgba(2, 6, 8, 0.96)),
+      radial-gradient(circle at 28% 10%, rgba(52, 103, 123, 0.28), transparent 38%),
+      radial-gradient(circle at 82% 18%, rgba(105, 48, 40, 0.18), transparent 34%),
+      #030607;
+  }
+
+  .mer-killmail-shell {
+    max-width: 1440px;
+    margin: 0 auto;
+  }
+
+  .mer-killmail-summary {
+    display: grid;
+    grid-template-columns: minmax(0, 1.6fr) repeat(4, minmax(115px, 0.55fr));
+    gap: 1px;
+    margin-bottom: 0.8rem;
+    border: 1px solid rgba(137, 169, 178, 0.32);
+    border-radius: 4px;
+    overflow: hidden;
+    background: rgba(137, 169, 178, 0.16);
+  }
+
+  .mer-summary-main,
+  .mer-summary-stat,
+  .mer-panel {
+    background: linear-gradient(180deg, rgba(17, 27, 32, 0.98), rgba(8, 14, 17, 0.98));
+  }
+
+  .mer-summary-main {
+    display: grid;
+    grid-template-columns: 72px minmax(0, 1fr);
+    gap: 0.85rem;
+    align-items: center;
+    padding: 0.8rem;
+  }
+
+  .mer-summary-main img,
+  .mer-ship-image {
+    width: 72px;
+    height: 72px;
+    object-fit: contain;
+    border: 1px solid rgba(147, 176, 184, 0.25);
+    background: rgba(0, 0, 0, 0.34);
+  }
+
+  .mer-summary-main h1 {
+    margin: 0;
+    color: #eef7fa;
+    font-size: 1.08rem;
+  }
+
+  .mer-summary-meta,
+  .mer-muted {
+    color: #8fa5ad;
+  }
+
+  .mer-summary-stat {
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    padding: 0.65rem 0.75rem;
+  }
+
+  .mer-summary-stat .label,
+  .mer-label {
+    color: #788e97;
+    font-size: 0.64rem;
+    text-transform: uppercase;
+    letter-spacing: 0.075em;
+  }
+
+  .mer-summary-stat .value {
+    margin-top: 0.15rem;
+    color: #edf6f8;
+    font-size: 0.95rem;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .mer-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.8rem;
+  }
+
+  .mer-panel {
+    border: 1px solid rgba(137, 169, 178, 0.32);
+    border-radius: 4px;
+    overflow: hidden;
+  }
+
+  .mer-panel-title {
+    padding: 0.55rem 0.7rem;
+    color: #d9e6ea;
+    background: linear-gradient(180deg, rgba(57, 79, 88, 0.58), rgba(20, 32, 38, 0.64));
+    border-bottom: 1px solid rgba(151, 183, 192, 0.28);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    font-size: 0.72rem;
+  }
+
+  .mer-panel-body {
+    padding: 0.9rem;
+  }
+
+  .mer-entity-line {
+    margin-top: 0.28rem;
+  }
+
+  .mer-entity-line a {
+    color: #dce9ec;
+    text-decoration: none;
+  }
+
+  .mer-entity-line a:hover {
+    color: #ffffff;
+    text-decoration: underline;
+  }
+
+  .mer-ship-block {
+    display: grid;
+    grid-template-columns: 72px minmax(0, 1fr);
+    gap: 0.9rem;
+    align-items: center;
+  }
+
+  .mer-badge-hid {
+    display: inline-block;
+    margin-left: 0.45rem;
+    padding: 0.16rem 0.42rem;
+    border-radius: 0.24rem;
+    background: #5c636a;
+    color: #fff;
+    font-size: 0.66rem;
+    line-height: 1;
+    vertical-align: middle;
+  }
+
+  @media (max-width: 1000px) {
+    .mer-killmail-summary {
+      grid-template-columns: 1fr 1fr;
+    }
+    .mer-summary-main {
+      grid-column: 1 / -1;
+    }
+    .mer-grid {
+      grid-template-columns: 1fr;
+    }
+  }
+</style>
+
+<div class="mer-killmail-page">
+  <div class="mer-killmail-shell">
+    {% if error %}
+      <div class="alert alert-danger py-2">{{ error }}</div>
+    {% elif mer_killmail %}
+      {% set victim_ship = mer_killmail.victim_ship %}
+      {% set victim = mer_killmail.victim %}
+      {% set final = mer_killmail.final_blow %}
+      {% set location = mer_killmail.location %}
+
+      <div class="mer-killmail-summary">
+        <div class="mer-summary-main">
+          {% if victim_ship and victim_ship.image_url %}
+            <img src="{{ victim_ship.image_url }}" alt="{{ victim_ship.name }}" loading="lazy">
+          {% else %}
+            <div class="mer-ship-image"></div>
+          {% endif %}
+          <div>
+            <h1>
+              {% if victim_ship %}{{ victim_ship.name }}{% else %}Unknown ship{% endif %}
+              <span class="mer-badge-hid">HID</span>
+            </h1>
+            {% if mer_killmail.victim_ship_group_name %}
+              <div class="mer-summary-meta">{{ mer_killmail.victim_ship_group_name }}</div>
+            {% endif %}
+            <div class="mer-summary-meta">MER {{ mer_killmail.source_month }} — row {{ mer_killmail.source_row }}</div>
+          </div>
+        </div>
+
+        {% if mer_killmail.killmail_time %}
+        <div class="mer-summary-stat">
+          <div class="label">Time</div>
+          <div class="value">{{ mer_killmail.date_label }}</div>
+        </div>
+        {% endif %}
+
+        {% if location and location.system %}
+        <div class="mer-summary-stat">
+          <div class="label">System</div>
+          <div class="value"><a class="text-decoration-none text-light" href="{{ location.system.url }}">{{ location.system.name }}</a></div>
+          {% if location.region %}<div class="mer-muted">{{ location.region.name }}</div>{% endif %}
+        </div>
+        {% elif location and location.region %}
+        <div class="mer-summary-stat">
+          <div class="label">Region</div>
+          <div class="value"><a class="text-decoration-none text-light" href="{{ location.region.url }}">{{ location.region.name }}</a></div>
+        </div>
+        {% endif %}
+
+        {% if mer_killmail.isk_lost_label %}
+        <div class="mer-summary-stat">
+          <div class="label">ISK Lost</div>
+          <div class="value">{{ mer_killmail.isk_lost_label }}</div>
+        </div>
+        {% endif %}
+
+        {% if mer_killmail.isk_destroyed_label %}
+        <div class="mer-summary-stat">
+          <div class="label">ISK Destroyed</div>
+          <div class="value">{{ mer_killmail.isk_destroyed_label }}</div>
+        </div>
+        {% endif %}
+      </div>
+
+      <div class="mer-grid">
+        <section class="mer-panel">
+          <div class="mer-panel-title">Victim</div>
+          <div class="mer-panel-body">
+            <div class="mer-ship-block">
+              {% if victim_ship and victim_ship.image_url %}
+                {% if victim_ship.url %}<a href="{{ victim_ship.url }}">{% endif %}
+                <img class="mer-ship-image" src="{{ victim_ship.image_url }}" alt="{{ victim_ship.name }}" loading="lazy">
+                {% if victim_ship.url %}</a>{% endif %}
+              {% else %}
+                <div class="mer-ship-image"></div>
+              {% endif %}
+              <div>
+                {% if victim_ship %}
+                  <div class="fw-bold">{% if victim_ship.url %}<a class="text-light text-decoration-none" href="{{ victim_ship.url }}">{{ victim_ship.name }}</a>{% else %}{{ victim_ship.name }}{% endif %}</div>
+                {% endif %}
+                {% if victim and victim.corporation %}
+                  <div class="mer-entity-line"><span class="mer-label">Corporation</span><br><a href="{{ victim.corporation.url }}">{{ victim.corporation.name }}</a></div>
+                {% endif %}
+                {% if victim and victim.alliance %}
+                  <div class="mer-entity-line"><span class="mer-label">Alliance</span><br><a href="{{ victim.alliance.url }}">{{ victim.alliance.name }}</a></div>
+                {% endif %}
+              </div>
+            </div>
+          </div>
+        </section>
+
+        {% if final and (final.ship or final.corporation or final.alliance) %}
+        <section class="mer-panel">
+          <div class="mer-panel-title">Final Blow</div>
+          <div class="mer-panel-body">
+            <div class="mer-ship-block">
+              {% if final.ship and final.ship.image_url %}
+                {% if final.ship.url %}<a href="{{ final.ship.url }}">{% endif %}
+                <img class="mer-ship-image" src="{{ final.ship.image_url }}" alt="{{ final.ship.name }}" loading="lazy">
+                {% if final.ship.url %}</a>{% endif %}
+              {% else %}
+                <div class="mer-ship-image"></div>
+              {% endif %}
+              <div>
+                {% if final.ship %}
+                  <div class="fw-bold">{% if final.ship.url %}<a class="text-light text-decoration-none" href="{{ final.ship.url }}">{{ final.ship.name }}</a>{% else %}{{ final.ship.name }}{% endif %}</div>
+                {% endif %}
+                {% if final.corporation %}
+                  <div class="mer-entity-line"><span class="mer-label">Corporation</span><br><a href="{{ final.corporation.url }}">{{ final.corporation.name }}</a></div>
+                {% endif %}
+                {% if final.alliance %}
+                  <div class="mer-entity-line"><span class="mer-label">Alliance</span><br><a href="{{ final.alliance.url }}">{{ final.alliance.name }}</a></div>
+                {% endif %}
+              </div>
+            </div>
+          </div>
+        </section>
+        {% endif %}
+      </div>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}

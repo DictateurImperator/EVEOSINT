@@ -1,0 +1,1425 @@
+{% extends "base.html" %}
+
+{% block content %}
+<style>
+  .evo-shell { max-width: 100%; }
+  .evo-controls { display:grid; grid-template-columns:minmax(300px, 1fr) minmax(360px, 1.25fr); gap:1rem; }
+  .evo-section-title { font-size:.86rem; font-weight:800; letter-spacing:.025em; text-transform:uppercase; color:#cbd5e1; }
+  .evo-hulls { display:flex; flex-wrap:wrap; gap:.45rem; }
+  .evo-hull {
+    display:inline-flex; align-items:center; gap:.35rem; padding:.28rem .48rem;
+    border:1px solid #334155; border-radius:.45rem; background:#0f172a; cursor:pointer;
+    font-size:.78rem;
+  }
+  .evo-hull img { width:24px; height:24px; object-fit:contain; }
+  .evo-hull input { margin:0; }
+  .evo-search-wrap { position:relative; }
+  .evo-search-results {
+    position:absolute; left:0; right:0; top:100%; z-index:20; margin-top:.25rem;
+    border:1px solid #334155; border-radius:.5rem; background:#0b1220;
+    box-shadow:0 12px 30px rgba(0,0,0,.35); max-height:340px; overflow:auto;
+  }
+  .evo-search-item {
+    display:flex; align-items:center; justify-content:space-between; gap:.65rem;
+    padding:.55rem .65rem; border-bottom:1px solid rgba(51,65,85,.65);
+  }
+  .evo-search-item:last-child { border-bottom:0; }
+  .evo-search-main { display:flex; align-items:center; gap:.55rem; min-width:0; }
+  .evo-search-main img { width:30px; height:30px; border-radius:50%; object-fit:cover; background:#111827; flex:0 0 auto; }
+  .evo-search-name { min-width:0; }
+  .evo-search-name strong { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .evo-search-name span { display:block; font-size:.72rem; color:#94a3b8; }
+  .evo-search-actions { display:flex; gap:.3rem; flex:0 0 auto; }
+  .evo-term-list, .evo-series-list { display:flex; flex-direction:column; gap:.45rem; }
+  .evo-term, .evo-series {
+    display:flex; align-items:center; justify-content:space-between; gap:.75rem;
+    border:1px solid #334155; border-radius:.5rem; padding:.48rem .6rem; background:#0f172a;
+  }
+  .evo-term-sign { width:24px; font-size:1rem; font-weight:900; text-align:center; }
+  .evo-term-sign.plus { color:#4ade80; }
+  .evo-term-sign.minus { color:#f87171; }
+  .evo-entity-logo {
+    width:30px; height:30px; border-radius:50%; object-fit:cover;
+    background:#111827; border:1px solid #334155; flex:0 0 auto;
+  }
+  .evo-series-logos { display:flex; align-items:center; padding-left:7px; }
+  .evo-series-logos .evo-entity-logo { margin-left:-7px; }
+  .evo-series-ship {
+    display:inline-flex; align-items:center; gap:.22rem; padding:.12rem .32rem;
+    border:1px solid #334155; border-radius:.35rem; color:#cbd5e1;
+    background:#0b1220; font-size:.68rem;
+  }
+  .evo-series-ship img { width:20px; height:20px; object-fit:contain; }
+  .evo-series-ships { display:flex; flex-wrap:wrap; gap:.25rem; margin-top:.35rem; }
+  .evo-expression { color:#94a3b8; font-size:.75rem; overflow-wrap:anywhere; }
+  .evo-specials { display:flex; flex-wrap:wrap; gap:.5rem; }
+  .evo-special {
+    display:flex; align-items:center; gap:.4rem; border:1px solid #334155;
+    border-radius:.5rem; padding:.45rem .55rem; background:#0f172a;
+  }
+  .evo-chart-wrap {
+    position:relative; width:100%; min-height:540px; overflow-x:auto;
+    border:1px solid #263449; border-radius:.65rem; background:#080f1d;
+  }
+  #evolutionChart { display:block; width:100%; min-width:780px; height:540px; }
+  .evo-legend { display:flex; flex-wrap:wrap; gap:.7rem 1rem; margin-top:.75rem; }
+  .evo-legend-item { display:flex; align-items:center; gap:.35rem; font-size:.78rem; color:#cbd5e1; }
+  .evo-legend-swatch { width:18px; height:3px; border-radius:3px; }
+  .evo-empty {
+    min-height:420px; display:flex; align-items:center; justify-content:center;
+    color:#64748b; text-align:center; padding:2rem;
+  }
+  .evo-csv-table { font-size:.78rem; white-space:nowrap; }
+  .evo-loading { opacity:.55; pointer-events:none; }
+  .evo-status { min-height:1.2rem; }
+  @media (max-width: 1050px) {
+    .evo-controls { grid-template-columns:1fr; }
+  }
+</style>
+
+<div class="evo-shell">
+  <div class="d-flex flex-wrap justify-content-between align-items-start gap-3 mb-4">
+    <div>
+      <h1 class="h3 fw-bold mb-1">SuperINTEL Evolution</h1>
+      <div class="muted-line">Daily evolution of observed Supercarriers and Titans.</div>
+      <div class="btn-group btn-group-sm mt-3" role="group" aria-label="SuperINTEL detailed navigation">
+        <a class="btn btn-outline-primary" href="/superintel/detailed?view=alliance">Alliance</a>
+        <a class="btn btn-outline-primary" href="/superintel/detailed?view=corporation">Corporation</a>
+        <a class="btn btn-outline-primary" href="/superintel/detailed?view=player">Player</a>
+        <a class="btn btn-outline-primary" href="/superintel/detailed?view=player&period=1m&analysis_view=explain">Explain</a>
+        <a class="btn btn-primary" href="/superintel/evolution">Evolution</a>
+      </div>
+    </div>
+    <a class="btn btn-outline-secondary btn-sm" href="/superintel">Standard dashboard</a>
+  </div>
+
+  {% if error %}
+    <div class="alert alert-danger py-2">SuperINTEL Evolution error: {{ error }}</div>
+  {% elif evolution %}
+    <div id="evolutionApp">
+      <div class="evo-controls mb-4">
+        <section class="content-card p-3 p-md-4">
+          <div class="evo-section-title mb-3">Time & hulls</div>
+
+          <div class="row g-2 align-items-end mb-3">
+            <div class="col-sm-5">
+              <label class="form-label small mb-1" for="evoDateFrom">From</label>
+              <input id="evoDateFrom" class="form-control form-control-sm bg-dark text-light border-secondary" type="date"
+                     min="{{ evolution.available_from.isoformat() }}" max="{{ evolution.available_to.isoformat() }}"
+                     value="{{ evolution.default_from.isoformat() }}">
+            </div>
+            <div class="col-sm-5">
+              <label class="form-label small mb-1" for="evoDateTo">To</label>
+              <input id="evoDateTo" class="form-control form-control-sm bg-dark text-light border-secondary" type="date"
+                     min="{{ evolution.available_from.isoformat() }}" max="{{ evolution.available_to.isoformat() }}"
+                     value="{{ evolution.default_to.isoformat() }}">
+            </div>
+          </div>
+
+          <div class="d-flex flex-wrap gap-1 mb-3">
+            <button class="btn btn-outline-secondary btn-sm" type="button" data-evo-period="7d">7d</button>
+            <button class="btn btn-primary btn-sm" type="button" data-evo-period="1m">1m</button>
+            <button class="btn btn-outline-secondary btn-sm" type="button" data-evo-period="3m">3m</button>
+            <button class="btn btn-outline-secondary btn-sm" type="button" data-evo-period="1y">1y</button>
+            <button class="btn btn-outline-secondary btn-sm" type="button" data-evo-period="all">All</button>
+          </div>
+
+          <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-2">
+            <div class="small fw-semibold">Ships for new / edited series</div>
+            <div class="btn-group btn-group-sm">
+              <button class="btn btn-outline-secondary" type="button" data-evo-hulls="all">All</button>
+              <button class="btn btn-outline-secondary" type="button" data-evo-hulls="titans">Titans</button>
+              <button class="btn btn-outline-secondary" type="button" data-evo-hulls="supers">Supercarriers</button>
+              <button class="btn btn-outline-secondary" type="button" data-evo-hulls="none">None</button>
+            </div>
+          </div>
+
+          <div class="evo-hulls" id="evoHullList">
+            {% for ship in evolution.ship_columns %}
+              <label class="evo-hull" title="{{ ship.group }}">
+                <input type="checkbox" value="{{ ship.key }}" data-group="{{ ship.group }}" checked>
+                <img src="https://images.evetech.net/types/{{ ship.type_id }}/icon?size=32" alt="" loading="lazy">
+                <span>{{ ship.label }}</span>
+              </label>
+            {% endfor %}
+          </div>
+          <div class="muted-line small mt-2">Default range: 1 month. Available snapshots: {{ evolution.available_from.isoformat() }} → {{ evolution.available_to.isoformat() }}.</div>
+        </section>
+
+        <section class="content-card p-3 p-md-4">
+          <div class="evo-section-title mb-3">Series & groups</div>
+
+          <div class="evo-specials mb-3">
+            <div class="evo-special">
+              <strong>UNIVERSE</strong>
+              <button class="btn btn-outline-primary btn-sm" type="button" data-special-graph="universe">Graph</button>
+              <button class="btn btn-outline-success btn-sm" type="button" data-special-add="universe" data-sign="1">+</button>
+              <button class="btn btn-outline-danger btn-sm" type="button" data-special-add="universe" data-sign="-1">−</button>
+            </div>
+            <div class="evo-special">
+              <strong>NO_ALLIANCE</strong>
+              <button class="btn btn-outline-primary btn-sm" type="button" data-special-graph="no_alliance">Graph</button>
+              <button class="btn btn-outline-success btn-sm" type="button" data-special-add="no_alliance" data-sign="1">+</button>
+              <button class="btn btn-outline-danger btn-sm" type="button" data-special-add="no_alliance" data-sign="-1">−</button>
+            </div>
+          </div>
+
+          <div class="evo-search-wrap mb-3">
+            <label class="form-label small mb-1" for="evoEntitySearch">Alliance / corporation</label>
+            <input id="evoEntitySearch" class="form-control form-control-sm bg-dark text-light border-secondary"
+                   type="search" placeholder="Search alliance or corporation..." autocomplete="off">
+            <div id="evoEntityResults" class="evo-search-results d-none"></div>
+          </div>
+
+          <div class="border-top border-secondary pt-3 mt-3">
+            <div class="d-flex flex-wrap justify-content-between align-items-end gap-2 mb-2">
+              <div class="flex-grow-1">
+                <label class="form-label small mb-1" for="evoGroupName">Group name</label>
+                <input id="evoGroupName" class="form-control form-control-sm bg-dark text-light border-secondary"
+                       type="text" placeholder="Example: Rest of EVE" maxlength="160">
+              </div>
+              <div class="d-flex gap-1">
+                <button id="evoCancelEdit" class="btn btn-outline-secondary btn-sm d-none" type="button">Cancel edit</button>
+                <button id="evoAddGroup" class="btn btn-primary btn-sm" type="button">Add group to graph</button>
+              </div>
+            </div>
+            <div id="evoGroupTerms" class="evo-term-list">
+              <div class="muted-line small" data-empty-group>No terms yet. Use + / − above.</div>
+            </div>
+          </div>
+
+          <div class="border-top border-secondary pt-3 mt-3">
+            <div class="small fw-semibold mb-2">Graph series</div>
+            <div id="evoSeriesList" class="evo-series-list"></div>
+          </div>
+        </section>
+      </div>
+
+      <section class="content-card p-3 p-md-4">
+        <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
+          <div>
+            <h2 class="h5 mb-1">Evolution</h2>
+            <div id="evoStatus" class="muted-line small evo-status"></div>
+          </div>
+          <div class="d-flex flex-wrap gap-2">
+            <div class="btn-group btn-group-sm" role="group">
+              <button id="evoGraphTab" class="btn btn-primary" type="button">Graph</button>
+              <button id="evoCsvTab" class="btn btn-outline-primary" type="button">CSV</button>
+            </div>
+            <div class="btn-group btn-group-sm" role="group" aria-label="Display mode">
+              <button id="evoCountMode" class="btn btn-primary" type="button">Count</button>
+              <button id="evoPercentMode" class="btn btn-outline-primary" type="button">%</button>
+            </div>
+            <button id="evoRefresh" class="btn btn-primary btn-sm" type="button">Update</button>
+            <button id="evoDownload" class="btn btn-outline-success btn-sm" type="button">Download CSV</button>
+          </div>
+        </div>
+
+        <div id="evoGraphView">
+          <div id="evoChartWrap" class="evo-chart-wrap">
+            <svg id="evolutionChart" viewBox="0 0 1200 540" preserveAspectRatio="none"></svg>
+          </div>
+          <div id="evoLegend" class="evo-legend"></div>
+        </div>
+
+        <div id="evoCsvView" class="d-none">
+          <div class="table-responsive" style="max-height:70vh">
+            <table class="table table-dark table-hover table-sm align-middle evo-csv-table mb-0">
+              <thead id="evoCsvHead"></thead>
+              <tbody id="evoCsvBody"></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+    </div>
+
+<script>
+(() => {
+  const app = document.getElementById("evolutionApp");
+  if (!app) return;
+
+  const DEFAULT_SERIES = {{ evolution.default_series | tojson }};
+  const SHIPS = {{ evolution.ship_columns | tojson }};
+  const AVAILABLE_FROM = "{{ evolution.available_from.isoformat() }}";
+  const AVAILABLE_TO = "{{ evolution.available_to.isoformat() }}";
+
+  const dateFrom = document.getElementById("evoDateFrom");
+  const dateTo = document.getElementById("evoDateTo");
+  const search = document.getElementById("evoEntitySearch");
+  const results = document.getElementById("evoEntityResults");
+  const groupName = document.getElementById("evoGroupName");
+  const groupTermsNode = document.getElementById("evoGroupTerms");
+  const addGroupButton = document.getElementById("evoAddGroup");
+  const cancelEditButton = document.getElementById("evoCancelEdit");
+  const seriesList = document.getElementById("evoSeriesList");
+  const refreshButton = document.getElementById("evoRefresh");
+  const downloadButton = document.getElementById("evoDownload");
+  const statusNode = document.getElementById("evoStatus");
+  const graphTab = document.getElementById("evoGraphTab");
+  const csvTab = document.getElementById("evoCsvTab");
+  const countModeButton = document.getElementById("evoCountMode");
+  const percentModeButton = document.getElementById("evoPercentMode");
+  const graphView = document.getElementById("evoGraphView");
+  const csvView = document.getElementById("evoCsvView");
+  const svg = document.getElementById("evolutionChart");
+  const legend = document.getElementById("evoLegend");
+  const csvHead = document.getElementById("evoCsvHead");
+  const csvBody = document.getElementById("evoCsvBody");
+
+  const EVOLUTION_STATE_KEY = "eveosint.superintel.evolution.state.v1";
+
+  let savedEvolutionState = null;
+  try {
+    const rawSavedState = localStorage.getItem(EVOLUTION_STATE_KEY);
+    if (rawSavedState) {
+      const parsed = JSON.parse(rawSavedState);
+      if (parsed && Array.isArray(parsed.series)) {
+        savedEvolutionState = parsed;
+      }
+    }
+  } catch (_) {
+    savedEvolutionState = null;
+  }
+
+  let groupTerms = [];
+  let editingSeriesIndex = null;
+  let series = savedEvolutionState
+    ? JSON.parse(JSON.stringify(savedEvolutionState.series))
+    : JSON.parse(JSON.stringify(DEFAULT_SERIES));
+  let currentData = null;
+  let searchTimer = null;
+  let searchAbort = null;
+  let percentMode = savedEvolutionState ? savedEvolutionState.percentMode === true : false;
+
+  function makeSeriesUid() {
+    if (window.crypto && typeof window.crypto.randomUUID === "function") {
+      return window.crypto.randomUUID();
+    }
+    return "series-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2);
+  }
+
+  series.forEach(item => {
+    if (!item.uid) item.uid = makeSeriesUid();
+    if (!Object.prototype.hasOwnProperty.call(item, "percent_base_uid")) {
+      item.percent_base_uid = null;
+    }
+  });
+
+  // Migrate the old single global 100% reference to the new per-series model.
+  const legacyPercentBaseIndex =
+    savedEvolutionState && Number.isInteger(savedEvolutionState.percentBaseIndex)
+      ? savedEvolutionState.percentBaseIndex
+      : null;
+
+  if (
+    legacyPercentBaseIndex !== null
+    && legacyPercentBaseIndex >= 0
+    && legacyPercentBaseIndex < series.length
+  ) {
+    const legacyBaseUid = series[legacyPercentBaseIndex].uid;
+    series.forEach((item, index) => {
+      if (index !== legacyPercentBaseIndex && !item.percent_base_uid) {
+        item.percent_base_uid = legacyBaseUid;
+      }
+    });
+  }
+
+  // Every snapshot day remains in the result. This only controls how many
+  // days one HTTP request computes before the graph is refreshed.
+  const EVOLUTION_CHUNK_SIZE = 120;
+  // Keep progressive rendering, but don't rebuild the full multi-year SVG
+  // after every tiny response. First chunk is immediate, then every 5 chunks.
+  const EVOLUTION_RENDER_EVERY_CHUNKS = 5;
+
+  const colors = [
+    "#60a5fa", "#f97316", "#4ade80", "#f472b6", "#a78bfa", "#facc15",
+    "#22d3ee", "#fb7185", "#34d399", "#c084fc", "#fbbf24", "#38bdf8",
+    "#e879f9", "#a3e635", "#fb923c", "#2dd4bf", "#818cf8", "#f43f5e",
+    "#84cc16", "#06b6d4", "#d946ef", "#eab308", "#10b981", "#3b82f6"
+  ];
+
+  function esc(value) {
+    return String(value == null ? "" : value)
+      .replaceAll("&", "&amp;")
+      .replaceAll("<", "&lt;")
+      .replaceAll(">", "&gt;")
+      .replaceAll('"', "&quot;")
+      .replaceAll("'", "&#039;");
+  }
+
+  function termLabel(term) {
+    if (term.kind === "universe") return "UNIVERSE";
+    if (term.kind === "no_alliance") return "NO_ALLIANCE";
+    return term.name + (term.ticker ? " [" + term.ticker + "]" : "");
+  }
+
+  function expressionLabel(item) {
+    return item.terms.map((term, index) => {
+      const sign = term.sign < 0 ? "−" : "+";
+      const prefix = index === 0 && term.sign > 0 ? "" : sign + " ";
+      return prefix + termLabel(term);
+    }).join(" ");
+  }
+
+  function entityImageUrl(kind, entityId) {
+    const id = Number(entityId);
+    if (!Number.isFinite(id)) return "";
+    if (kind === "alliance") return `https://images.evetech.net/alliances/${id}/logo?size=64`;
+    if (kind === "corporation") return `https://images.evetech.net/corporations/${id}/logo?size=64`;
+    if (kind === "player" || kind === "character") return `https://images.evetech.net/characters/${id}/portrait?size=64`;
+    return "";
+  }
+
+  function makeSpecial(kind, sign=1) {
+    return {
+      kind,
+      entity_id: null,
+      name: kind === "universe" ? "UNIVERSE" : "NO_ALLIANCE",
+      ticker: "",
+      image_url: "",
+      sign
+    };
+  }
+
+  function makeEntity(result, sign=1) {
+    const kind = result.entity_type === "character" ? "player" : result.entity_type;
+    return {
+      kind,
+      entity_id: Number(result.entity_id),
+      name: result.name || "Unknown",
+      ticker: result.ticker || "",
+      image_url: result.image_url || entityImageUrl(kind, result.entity_id),
+      sign
+    };
+  }
+
+  function currentHullSelection() {
+    return selectedHulls();
+  }
+
+  function setHullSelection(hulls) {
+    const wanted = new Set(Array.isArray(hulls) ? hulls : []);
+    document.querySelectorAll("#evoHullList input[type=checkbox]").forEach(box => {
+      box.checked = wanted.has(box.value);
+    });
+  }
+
+  function shipByKey(key) {
+    return SHIPS.find(ship => ship.key === key) || null;
+  }
+
+  function seriesHullHtml(item) {
+    const hulls = Array.isArray(item.hulls) && item.hulls.length
+      ? item.hulls
+      : currentHullSelection();
+
+    return hulls.map(key => {
+      const ship = shipByKey(key);
+      if (!ship) return "";
+      return `<span class="evo-series-ship" title="${esc(ship.group || "")}">
+        <img src="https://images.evetech.net/types/${esc(ship.type_id)}/icon?size=32" alt="" loading="lazy">
+        <span>${esc(ship.label)}</span>
+      </span>`;
+    }).join("");
+  }
+
+  function seriesEntityLogoHtml(item) {
+    const seen = new Set();
+    const logos = [];
+    (item.terms || []).forEach(term => {
+      if (!["alliance", "corporation", "player"].includes(term.kind)) return;
+      const key = term.kind + ":" + term.entity_id;
+      if (seen.has(key)) return;
+      seen.add(key);
+      const src = term.image_url || entityImageUrl(term.kind, term.entity_id);
+      if (src) logos.push(`<img class="evo-entity-logo" src="${esc(src)}" alt="" title="${esc(termLabel(term))}" loading="lazy">`);
+    });
+    return logos.join("");
+  }
+
+  function uniqueSeriesName(baseName) {
+    let name = baseName || "Series";
+    let n = 2;
+    while (series.some(item => item.name === name)) {
+      name = `${baseName || "Series"} (${n++})`;
+    }
+    return name;
+  }
+
+  function saveEvolutionState() {
+    try {
+      localStorage.setItem(EVOLUTION_STATE_KEY, JSON.stringify({
+        series,
+        percentMode
+      }));
+    } catch (_) {
+      // Local storage is only a convenience; Evolution must still work without it.
+    }
+  }
+
+  function addStandalone(term) {
+    const hulls = currentHullSelection();
+    if (!hulls.length) {
+      statusNode.textContent = "Select at least one ship before adding a series.";
+      return;
+    }
+    const baseName = termLabel(term);
+    const name = uniqueSeriesName(baseName);
+    const copy = {...term, sign: 1};
+    series.push({
+      uid:makeSeriesUid(),
+      name,
+      terms:[copy],
+      hulls:[...hulls],
+      hidden:false,
+      percent_base_uid:null
+    });
+    saveEvolutionState();
+    renderSeries();
+  }
+
+  function addGroupTerm(term) {
+    groupTerms.push({...term});
+    renderGroupTerms();
+  }
+
+  function renderGroupTerms() {
+    if (!groupTerms.length) {
+      groupTermsNode.innerHTML = '<div class="muted-line small" data-empty-group>No terms yet. Use + / − above.</div>';
+      return;
+    }
+
+    groupTermsNode.innerHTML = groupTerms.map((term, index) => `
+      <div class="evo-term">
+        <div class="d-flex align-items-center gap-2 min-w-0">
+          <span class="evo-term-sign ${term.sign > 0 ? "plus" : "minus"}">${term.sign > 0 ? "+" : "−"}</span>
+          ${term.image_url || entityImageUrl(term.kind, term.entity_id)
+            ? `<img class="evo-entity-logo" src="${esc(term.image_url || entityImageUrl(term.kind, term.entity_id))}" alt="" loading="lazy">`
+            : ""}
+          <div>
+            <div class="fw-semibold small">${esc(termLabel(term))}</div>
+            <div class="muted-line" style="font-size:.68rem">${esc(term.kind.replace("_", " ").toUpperCase())}</div>
+          </div>
+        </div>
+        <button class="btn btn-outline-danger btn-sm" type="button" data-remove-term="${index}">×</button>
+      </div>
+    `).join("");
+
+    groupTermsNode.querySelectorAll("[data-remove-term]").forEach(button => {
+      button.addEventListener("click", () => {
+        groupTerms.splice(Number(button.dataset.removeTerm), 1);
+        renderGroupTerms();
+      });
+    });
+  }
+
+  function seriesIndexByUid(uid) {
+    if (!uid) return -1;
+    return series.findIndex(item => item.uid === uid);
+  }
+
+  function seriesByUid(uid) {
+    const index = seriesIndexByUid(uid);
+    return index >= 0 ? series[index] : null;
+  }
+
+  function percentBaseName(item) {
+    const base = seriesByUid(item && item.percent_base_uid);
+    return base ? base.name : "";
+  }
+
+  function percentBaseUseCount(uid) {
+    if (!uid) return 0;
+    return series.filter(item => item.percent_base_uid === uid).length;
+  }
+
+  function hasPercentConfiguration() {
+    return series.some(item => {
+      const base = seriesByUid(item.percent_base_uid);
+      return Boolean(base && base.uid !== item.uid);
+    });
+  }
+
+  function isSeriesPercentBase(item) {
+    return Boolean(item && percentBaseUseCount(item.uid) > 0);
+  }
+
+  function renderSeries() {
+    if (!series.length) {
+      seriesList.innerHTML = '<div class="muted-line small">No series selected.</div>';
+      return;
+    }
+
+    series.forEach(item => {
+      if (!item.uid) item.uid = makeSeriesUid();
+      if (typeof item.hidden !== "boolean") item.hidden = false;
+      if (!Object.prototype.hasOwnProperty.call(item, "percent_base_uid")) {
+        item.percent_base_uid = null;
+      }
+      if (item.percent_base_uid && !seriesByUid(item.percent_base_uid)) {
+        item.percent_base_uid = null;
+      }
+      if (!Array.isArray(item.hulls) || !item.hulls.length) {
+        item.hulls = [...currentHullSelection()];
+      }
+      (item.terms || []).forEach(term => {
+        if (!term.image_url) term.image_url = entityImageUrl(term.kind, term.entity_id);
+      });
+    });
+
+    seriesList.innerHTML = series.map((item, index) => {
+      const baseName = percentBaseName(item);
+      const baseUseCount = percentBaseUseCount(item.uid);
+
+      const baseOptions = [
+        '<option value="">— no % reference —</option>',
+        ...series
+          .filter(candidate => candidate.uid !== item.uid)
+          .map(candidate => `
+            <option value="${esc(candidate.uid)}"
+                    ${item.percent_base_uid === candidate.uid ? "selected" : ""}>
+              ${esc(candidate.name)}
+            </option>
+          `)
+      ].join("");
+
+      return `
+        <div class="evo-series">
+          <div class="d-flex align-items-start gap-2 min-w-0 flex-grow-1">
+            <div class="evo-series-logos">${seriesEntityLogoHtml(item)}</div>
+            <div class="min-w-0 flex-grow-1">
+              <div class="fw-semibold">
+                ${esc(item.name)}
+                ${baseName ? `<span class="badge text-bg-info ms-1">% of ${esc(baseName)}</span>` : ""}
+                ${baseUseCount ? `<span class="badge text-bg-warning ms-1">100% base ×${baseUseCount}</span>` : ""}
+                ${item.hidden ? '<span class="badge text-bg-secondary ms-1">hidden</span>' : ''}
+              </div>
+              <div class="evo-expression">${esc(expressionLabel(item))}</div>
+              <div class="evo-series-ships">${seriesHullHtml(item)}</div>
+            </div>
+          </div>
+
+          <div class="d-flex flex-wrap gap-1 justify-content-end align-items-center">
+            <div class="input-group input-group-sm" style="width:min(300px, 100%);">
+              <span class="input-group-text">% of</span>
+              <select class="form-select" data-percent-reference="${index}">
+                ${baseOptions}
+              </select>
+            </div>
+
+            <button class="btn btn-outline-info btn-sm" type="button" data-edit-series="${index}">Edit</button>
+            <button class="btn btn-outline-light btn-sm" type="button" data-copy-series="${index}">Copy</button>
+            <button class="btn btn-outline-secondary btn-sm"
+                    type="button" data-toggle-series="${index}">
+              ${item.hidden ? "Show" : "Hide"}
+            </button>
+            <button class="btn btn-outline-danger btn-sm"
+                    type="button" data-remove-series="${index}">Remove</button>
+          </div>
+        </div>
+      `;
+    }).join("");
+
+    seriesList.querySelectorAll("[data-percent-reference]").forEach(select => {
+      select.addEventListener("change", () => {
+        const index = Number(select.dataset.percentReference);
+        const item = series[index];
+        if (!item) return;
+
+        item.percent_base_uid = select.value || null;
+        saveEvolutionState();
+        renderSeries();
+        rerenderCurrentData();
+      });
+    });
+
+    seriesList.querySelectorAll("[data-edit-series]").forEach(button => {
+      button.addEventListener("click", () => beginEditSeries(Number(button.dataset.editSeries)));
+    });
+
+    seriesList.querySelectorAll("[data-copy-series]").forEach(button => {
+      button.addEventListener("click", () => {
+        const index = Number(button.dataset.copySeries);
+        const source = series[index];
+        if (!source) return;
+
+        const copy = JSON.parse(JSON.stringify(source));
+        copy.uid = makeSeriesUid();
+        copy.name = uniqueSeriesName(source.name + " copy");
+        copy.hidden = false;
+
+        series.splice(index + 1, 0, copy);
+        saveEvolutionState();
+        renderSeries();
+        rerenderCurrentData();
+      });
+    });
+
+    seriesList.querySelectorAll("[data-toggle-series]").forEach(button => {
+      button.addEventListener("click", () => {
+        const index = Number(button.dataset.toggleSeries);
+        series[index].hidden = !series[index].hidden;
+        saveEvolutionState();
+        renderSeries();
+        rerenderCurrentData();
+      });
+    });
+
+    seriesList.querySelectorAll("[data-remove-series]").forEach(button => {
+      button.addEventListener("click", () => {
+        const index = Number(button.dataset.removeSeries);
+        const removed = series[index];
+        if (!removed) return;
+
+        const removedUid = removed.uid;
+        series.splice(index, 1);
+
+        series.forEach(item => {
+          if (item.percent_base_uid === removedUid) item.percent_base_uid = null;
+        });
+
+        if (editingSeriesIndex === index) cancelEditSeries();
+        else if (editingSeriesIndex !== null && editingSeriesIndex > index) editingSeriesIndex -= 1;
+
+        if (!hasPercentConfiguration()) {
+          percentMode = false;
+        }
+
+        saveEvolutionState();
+        updateDisplayModeButtons();
+        renderSeries();
+        rerenderCurrentData();
+      });
+    });
+  }
+
+  function beginEditSeries(index) {
+    const item = series[index];
+    if (!item) return;
+
+    editingSeriesIndex = index;
+    groupName.value = item.name || "";
+    groupTerms = JSON.parse(JSON.stringify(item.terms || []));
+    setHullSelection(item.hulls || []);
+    addGroupButton.textContent = "Save changes";
+    cancelEditButton.classList.remove("d-none");
+    renderGroupTerms();
+
+    groupName.focus({preventScroll:true});
+    groupName.scrollIntoView({behavior:"smooth", block:"center"});
+  }
+
+  function cancelEditSeries() {
+    editingSeriesIndex = null;
+    groupTerms = [];
+    groupName.value = "";
+    addGroupButton.textContent = "Add group to graph";
+    cancelEditButton.classList.add("d-none");
+    renderGroupTerms();
+  }
+
+  function selectedHulls() {
+    return Array.from(document.querySelectorAll("#evoHullList input[type=checkbox]:checked"))
+      .map(node => node.value);
+  }
+
+  function payload() {
+    return {
+      date_from: dateFrom.value,
+      date_to: dateTo.value,
+      hulls: selectedHulls(),
+      series
+    };
+  }
+
+  function setLoading(value) {
+    app.classList.toggle("evo-loading", Boolean(value));
+    refreshButton.disabled = Boolean(value);
+    downloadButton.disabled = Boolean(value);
+  }
+
+  function daysBefore(iso, count, unit) {
+    const d = new Date(iso + "T12:00:00Z");
+    if (unit === "month") d.setUTCMonth(d.getUTCMonth() - count);
+    else if (unit === "year") d.setUTCFullYear(d.getUTCFullYear() - count);
+    else d.setUTCDate(d.getUTCDate() - count);
+    return d.toISOString().slice(0, 10);
+  }
+
+  document.querySelectorAll("[data-evo-period]").forEach(button => {
+    button.addEventListener("click", () => {
+      const period = button.dataset.evoPeriod;
+      const end = dateTo.value || AVAILABLE_TO;
+      let start = AVAILABLE_FROM;
+      if (period === "7d") start = daysBefore(end, 7, "day");
+      if (period === "1m") start = daysBefore(end, 1, "month");
+      if (period === "3m") start = daysBefore(end, 3, "month");
+      if (period === "1y") start = daysBefore(end, 1, "year");
+      if (start < AVAILABLE_FROM) start = AVAILABLE_FROM;
+      dateFrom.value = start;
+
+      document.querySelectorAll("[data-evo-period]").forEach(node => {
+        node.classList.toggle("btn-primary", node === button);
+        node.classList.toggle("btn-outline-secondary", node !== button);
+      });
+    });
+  });
+
+  document.querySelectorAll("[data-evo-hulls]").forEach(button => {
+    button.addEventListener("click", () => {
+      const mode = button.dataset.evoHulls;
+      document.querySelectorAll("#evoHullList input[type=checkbox]").forEach(box => {
+        if (mode === "all") box.checked = true;
+        else if (mode === "none") box.checked = false;
+        else if (mode === "titans") box.checked = box.dataset.group === "Titan";
+        else if (mode === "supers") box.checked = box.dataset.group === "Supercarrier";
+      });
+    });
+  });
+
+  document.querySelectorAll("[data-special-graph]").forEach(button => {
+    button.addEventListener("click", () => addStandalone(makeSpecial(button.dataset.specialGraph, 1)));
+  });
+
+  document.querySelectorAll("[data-special-add]").forEach(button => {
+    button.addEventListener("click", () => {
+      addGroupTerm(makeSpecial(button.dataset.specialAdd, Number(button.dataset.sign)));
+    });
+  });
+
+  addGroupButton.addEventListener("click", () => {
+    if (!groupTerms.length) return;
+
+    const hulls = currentHullSelection();
+    if (!hulls.length) {
+      statusNode.textContent = "Select at least one ship for this series.";
+      return;
+    }
+
+    const requested = groupName.value.trim();
+    const name = requested || expressionLabel({terms: groupTerms}) || ("Group " + (series.length + 1));
+    const existingItem =
+      editingSeriesIndex !== null && series[editingSeriesIndex]
+        ? series[editingSeriesIndex]
+        : null;
+
+    const nextItem = {
+      uid: existingItem ? existingItem.uid : makeSeriesUid(),
+      name,
+      terms:groupTerms.map(term => ({...term})),
+      hulls:[...hulls],
+      hidden: existingItem ? Boolean(existingItem.hidden) : false,
+      percent_base_uid: existingItem ? (existingItem.percent_base_uid || null) : null
+    };
+
+    if (existingItem) {
+      series[editingSeriesIndex] = nextItem;
+    } else {
+      series.push(nextItem);
+    }
+
+    editingSeriesIndex = null;
+    groupTerms = [];
+    groupName.value = "";
+    addGroupButton.textContent = "Add group to graph";
+    cancelEditButton.classList.add("d-none");
+    saveEvolutionState();
+    renderGroupTerms();
+    renderSeries();
+    rerenderCurrentData();
+  });
+
+  cancelEditButton.addEventListener("click", cancelEditSeries);
+
+  function renderSearchResults(items) {
+    const allowed = items
+      .filter(item => ["corporation", "alliance"].includes(item.entity_type))
+      .map(item => ({
+        ...item,
+        image_url: item.image_url || entityImageUrl(item.entity_type, item.entity_id)
+      }));
+    if (!allowed.length) {
+      results.innerHTML = '<div class="p-2 muted-line small">No result.</div>';
+      results.classList.remove("d-none");
+      return;
+    }
+
+    results.innerHTML = allowed.map((item, index) => `
+      <div class="evo-search-item" data-search-index="${index}">
+        <div class="evo-search-main">
+          <img src="${esc(item.image_url)}" alt="" loading="lazy">
+          <div class="evo-search-name">
+            <strong>${esc(item.name || "Unknown")}${item.ticker ? " [" + esc(item.ticker) + "]" : ""}</strong>
+            <span>${esc(item.entity_type.toUpperCase())} · ${esc(item.entity_id)}</span>
+          </div>
+        </div>
+        <div class="evo-search-actions">
+          <button class="btn btn-outline-primary btn-sm" type="button" data-search-action="graph" data-index="${index}">Graph</button>
+          <button class="btn btn-outline-success btn-sm" type="button" data-search-action="plus" data-index="${index}">+</button>
+          <button class="btn btn-outline-danger btn-sm" type="button" data-search-action="minus" data-index="${index}">−</button>
+        </div>
+      </div>
+    `).join("");
+
+    results.querySelectorAll("[data-search-action]").forEach(button => {
+      button.addEventListener("click", () => {
+        const item = allowed[Number(button.dataset.index)];
+        if (!item) return;
+        if (button.dataset.searchAction === "graph") addStandalone(makeEntity(item, 1));
+        else addGroupTerm(makeEntity(item, button.dataset.searchAction === "minus" ? -1 : 1));
+        results.classList.add("d-none");
+        search.value = "";
+      });
+    });
+
+    results.classList.remove("d-none");
+  }
+
+  search.addEventListener("input", () => {
+    clearTimeout(searchTimer);
+    const q = search.value.trim();
+    if (searchAbort) searchAbort.abort();
+    if (q.length < 2) {
+      results.classList.add("d-none");
+      results.innerHTML = "";
+      return;
+    }
+
+    searchTimer = setTimeout(async () => {
+      searchAbort = new AbortController();
+      try {
+        const response = await fetch("/api/entity-search?q=" + encodeURIComponent(q) + "&limit=8&scope=global", {
+          headers: {"Accept": "application/json"},
+          credentials: "same-origin",
+          signal: searchAbort.signal
+        });
+        if (!response.ok) throw new Error("Erreur " + response.status);
+        const data = await response.json();
+        renderSearchResults(data.results || []);
+      } catch (error) {
+        if (error.name !== "AbortError") {
+          results.innerHTML = '<div class="p-2 text-danger small">Erreur 500</div>';
+          results.classList.remove("d-none");
+        }
+      }
+    }, 180);
+  });
+
+  document.addEventListener("click", event => {
+    if (!event.target.closest(".evo-search-wrap")) results.classList.add("d-none");
+  });
+
+  function updateDisplayModeButtons() {
+    countModeButton.classList.toggle("btn-primary", !percentMode);
+    countModeButton.classList.toggle("btn-outline-primary", percentMode);
+    percentModeButton.classList.toggle("btn-primary", percentMode);
+    percentModeButton.classList.toggle("btn-outline-primary", !percentMode);
+  }
+
+  function displayedSeries(data) {
+    return data.series
+      .map((item, index) => ({...item, sourceIndex:index}))
+      .filter(item => !(series[item.sourceIndex] && series[item.sourceIndex].hidden));
+  }
+
+  function displayValue(data, row, item) {
+    const raw = row[item.key];
+    if (typeof raw !== "number" || !Number.isFinite(raw)) return null;
+    if (!percentMode) return raw;
+
+    const localSeries = series[item.sourceIndex];
+    if (!localSeries) return null;
+
+    // A denominator can stay visible: it becomes a flat 100% line unless
+    // that denominator itself has another % reference configured.
+    if (!localSeries.percent_base_uid && isSeriesPercentBase(localSeries)) {
+      return 100;
+    }
+
+    const baseIndex = seriesIndexByUid(localSeries.percent_base_uid);
+    if (baseIndex < 0 || !data.series[baseIndex]) return null;
+
+    const baseKey = data.series[baseIndex].key;
+    const base = row[baseKey];
+    if (typeof base !== "number" || !Number.isFinite(base) || base === 0) return null;
+
+    return (raw / base) * 100;
+  }
+
+  function formatDisplayValue(value) {
+    if (value == null || !Number.isFinite(value)) return "";
+    if (!percentMode) return String(value);
+    return value.toFixed(2).replace(/\.00$/, "") + "%";
+  }
+
+  function rerenderCurrentData() {
+    if (!currentData) return;
+    renderChart(currentData);
+    if (!csvView.classList.contains("d-none")) renderCsv(currentData);
+  }
+
+  function niceNumber(value) {
+    if (percentMode) {
+      const abs = Math.abs(value);
+      const decimals = abs >= 100 ? 0 : (abs >= 10 ? 1 : 2);
+      return value.toFixed(decimals).replace(/\.0+$/, "").replace(/(\.\d*[1-9])0+$/, "$1") + "%";
+    }
+    const abs = Math.abs(value);
+    if (abs >= 1000000) return (value / 1000000).toFixed(abs >= 10000000 ? 0 : 1) + "M";
+    if (abs >= 1000) return (value / 1000).toFixed(abs >= 10000 ? 0 : 1) + "k";
+    return String(Math.round(value));
+  }
+
+  function svgNode(name, attrs={}, text=null) {
+    const node = document.createElementNS("http://www.w3.org/2000/svg", name);
+    Object.entries(attrs).forEach(([key, value]) => node.setAttribute(key, String(value)));
+    if (text !== null) node.textContent = text;
+    return node;
+  }
+
+  function renderChart(data) {
+    svg.innerHTML = "";
+    legend.innerHTML = "";
+
+    if (!data || !data.rows.length || !data.series.length) {
+      const text = svgNode("text", {
+        x: 600, y: 270, fill: "#64748b", "text-anchor": "middle", "font-size": 18
+      }, "No data to display.");
+      svg.appendChild(text);
+      return;
+    }
+
+    const visibleSeries = displayedSeries(data);
+    if (!visibleSeries.length) {
+      svg.appendChild(svgNode("text", {
+        x: 600, y: 270, fill: "#64748b", "text-anchor": "middle", "font-size": 18
+      }, "All series are hidden."));
+      return;
+    }
+
+    const width = 1200, height = 540;
+    const left = 76, right = 28, top = 30, bottom = 58;
+    const plotW = width - left - right;
+    const plotH = height - top - bottom;
+
+    const values = [];
+    data.rows.forEach(row => {
+      visibleSeries.forEach(item => {
+        const value = displayValue(data, row, item);
+        if (typeof value === "number" && Number.isFinite(value)) values.push(value);
+      });
+    });
+
+    if (!values.length) {
+      svg.appendChild(svgNode("text", {
+        x: 600, y: 270, fill: "#64748b", "text-anchor": "middle", "font-size": 18
+      }, percentMode
+        ? "Visible series need a valid % reference, or must be used as a 100% base."
+        : "Selected series have no usable snapshots."));
+      return;
+    }
+
+    // Ship counts cannot be negative: keep the Y axis strictly anchored at 0.
+    const minY = 0;
+    let maxY = Math.max(0, ...values);
+    if (maxY === 0) {
+      maxY = 1;
+    }
+    const padding = Math.max(1, maxY * 0.06);
+    maxY += padding;
+
+    const xAt = index => {
+      if (data.rows.length <= 1) return left + plotW / 2;
+      return left + (index / (data.rows.length - 1)) * plotW;
+    };
+    const yAt = value => top + ((maxY - value) / (maxY - minY)) * plotH;
+
+    const bg = svgNode("rect", {x:0, y:0, width, height, fill:"#080f1d"});
+    svg.appendChild(bg);
+
+    for (let tick = 0; tick <= 5; tick++) {
+      const value = minY + ((maxY - minY) * tick / 5);
+      const y = yAt(value);
+      svg.appendChild(svgNode("line", {
+        x1:left, y1:y, x2:width-right, y2:y,
+        stroke:"#263449", "stroke-width":1
+      }));
+      svg.appendChild(svgNode("text", {
+        x:left-10, y:y+4, fill:"#94a3b8", "text-anchor":"end", "font-size":12
+      }, niceNumber(value)));
+    }
+
+    const xTickCount = Math.min(8, data.rows.length);
+    const usedIndexes = new Set();
+    for (let tick = 0; tick < xTickCount; tick++) {
+      const index = xTickCount === 1 ? 0 : Math.round(tick * (data.rows.length - 1) / (xTickCount - 1));
+      if (usedIndexes.has(index)) continue;
+      usedIndexes.add(index);
+      const x = xAt(index);
+      svg.appendChild(svgNode("line", {
+        x1:x, y1:top, x2:x, y2:height-bottom,
+        stroke:"#172033", "stroke-width":1
+      }));
+      const label = data.rows[index].date;
+      svg.appendChild(svgNode("text", {
+        x, y:height-bottom+23, fill:"#94a3b8", "text-anchor":"middle", "font-size":11
+      }, label));
+    }
+
+    if (minY < 0 && maxY > 0) {
+      const zeroY = yAt(0);
+      svg.appendChild(svgNode("line", {
+        x1:left, y1:zeroY, x2:width-right, y2:zeroY,
+        stroke:"#64748b", "stroke-width":1.4
+      }));
+    }
+
+    visibleSeries.forEach(item => {
+      const seriesIndex = item.sourceIndex;
+      const color = colors[seriesIndex % colors.length];
+      let currentSegment = [];
+
+      const flush = () => {
+        if (!currentSegment.length) return;
+        if (currentSegment.length === 1) {
+          const [x, y] = currentSegment[0];
+          svg.appendChild(svgNode("circle", {cx:x, cy:y, r:2.8, fill:color}));
+        } else {
+          svg.appendChild(svgNode("polyline", {
+            points: currentSegment.map(point => point.join(",")).join(" "),
+            fill:"none",
+            stroke:color,
+            "stroke-width":2.25,
+            "stroke-linejoin":"round",
+            "stroke-linecap":"round"
+          }));
+        }
+        currentSegment = [];
+      };
+
+      data.rows.forEach((row, index) => {
+        const value = displayValue(data, row, item);
+        if (typeof value !== "number" || !Number.isFinite(value)) {
+          flush();
+          return;
+        }
+        currentSegment.push([xAt(index), yAt(value)]);
+      });
+      flush();
+
+      // The line above still contains EVERY daily point. For very long
+      // histories we only thin the hover markers, otherwise 5-6 series over
+      // ~20 years would create tens of thousands of SVG DOM nodes.
+      const radius = data.rows.length <= 120 ? 2.4 : 1.2;
+      const hoverStep = data.rows.length <= 365
+        ? 1
+        : Math.max(1, Math.ceil(data.rows.length / 700));
+      data.rows.forEach((row, index) => {
+        if (index % hoverStep !== 0 && index !== data.rows.length - 1) return;
+        const value = displayValue(data, row, item);
+        if (typeof value !== "number" || !Number.isFinite(value)) return;
+        const circle = svgNode("circle", {
+          cx:xAt(index), cy:yAt(value), r:radius,
+          fill:color, opacity:data.rows.length <= 120 ? .9 : .35
+        });
+        circle.appendChild(svgNode("title", {}, item.name + " · " + row.date + " · " + formatDisplayValue(value)));
+        svg.appendChild(circle);
+      });
+
+      const legendItem = document.createElement("div");
+      legendItem.className = "evo-legend-item";
+      const localSeries = series[item.sourceIndex];
+      const referenceName = percentMode && localSeries
+        ? percentBaseName(localSeries)
+        : "";
+      const legendLabel = referenceName
+        ? item.name + " (% of " + referenceName + ")"
+        : item.name;
+      legendItem.innerHTML = `<span class="evo-legend-swatch" style="background:${color}"></span><span>${esc(legendLabel)}</span>`;
+      legend.appendChild(legendItem);
+    });
+  }
+
+  function renderCsv(data) {
+    if (!data) {
+      csvHead.innerHTML = "";
+      csvBody.innerHTML = "";
+      return;
+    }
+
+    const visibleSeries = displayedSeries(data);
+
+    csvHead.innerHTML = "<tr><th>Date</th>"
+      + visibleSeries.map(item => {
+          if (!percentMode) {
+            return `<th class="text-end">${esc(item.name)}</th>`;
+          }
+          const localSeries = series[item.sourceIndex];
+          const baseName = localSeries ? percentBaseName(localSeries) : "";
+          const label = baseName
+            ? item.name + " (% of " + baseName + ")"
+            : item.name + " (%)";
+          return `<th class="text-end">${esc(label)}</th>`;
+        }).join("")
+      + "</tr>";
+
+    csvBody.innerHTML = data.rows.map(row => {
+      return "<tr><td>" + esc(row.date) + "</td>"
+        + visibleSeries.map(item => {
+          const value = displayValue(data, row, item);
+          return `<td class="text-end">${value == null ? "" : esc(formatDisplayValue(value))}</td>`;
+        }).join("")
+        + "</tr>";
+    }).join("");
+  }
+
+  async function fetchEvolutionChunk(basePayload, cursor) {
+    const response = await fetch("/api/superintel/evolution/data", {
+      method: "POST",
+      headers: {"Content-Type":"application/json", "Accept":"application/json"},
+      credentials: "same-origin",
+      body: JSON.stringify({
+        ...basePayload,
+        cursor,
+        chunk_size: EVOLUTION_CHUNK_SIZE
+      })
+    });
+
+    // Read as text first so a proxy error page gives a useful message instead
+    // of "JSON.parse unexpected character".
+    const raw = await response.text();
+    let data;
+    try {
+      data = JSON.parse(raw);
+    } catch (_) {
+      throw new Error("Erreur " + (response.status || 500));
+    }
+
+    if (!response.ok) {
+      throw new Error(data.error || ("Erreur " + response.status));
+    }
+    return data;
+  }
+
+  async function loadData() {
+    if (!series.length) {
+      statusNode.textContent = "Add at least one series.";
+      currentData = null;
+      renderChart(null);
+      renderCsv(null);
+      return;
+    }
+    if (!selectedHulls().length) {
+      statusNode.textContent = "Select at least one hull.";
+      return;
+    }
+
+    setLoading(true);
+    currentData = null;
+    renderChart(null);
+    renderCsv(null);
+
+    const basePayload = payload();
+    let cursor = 0;
+    let loadedChunks = 0;
+
+    try {
+      while (true) {
+        statusNode.textContent =
+          "Loading snapshots…"
+          + (currentData ? " " + currentData.rows.length + " loaded" : "");
+
+        const chunk = await fetchEvolutionChunk(basePayload, cursor);
+
+        if (!currentData) {
+          currentData = {
+            ...chunk,
+            rows: [],
+            incomplete_days: []
+          };
+          dateFrom.value = chunk.date_from;
+          dateTo.value = chunk.date_to;
+        }
+
+        currentData.rows.push(...chunk.rows);
+        currentData.incomplete_days.push(...(chunk.incomplete_days || []));
+        currentData.cursor = chunk.cursor;
+        currentData.next_cursor = chunk.next_cursor;
+        currentData.done = chunk.done;
+        currentData.total_snapshots = chunk.total_snapshots;
+
+        loadedChunks += 1;
+
+        // First result is drawn immediately. Afterwards, redraw the complete
+        // SVG every few chunks instead of recreating thousands of SVG nodes
+        // for every 120-day response.
+        const shouldRenderChart =
+          loadedChunks === 1
+          || chunk.done
+          || loadedChunks % EVOLUTION_RENDER_EVERY_CHUNKS === 0;
+
+        if (shouldRenderChart) {
+          renderChart(currentData);
+        }
+
+        // CSV is intentionally NOT rebuilt while loading. With many years and
+        // several series it creates a huge hidden DOM table. It is rendered
+        // only when the user opens the CSV tab.
+        if (!csvView.classList.contains("d-none") && chunk.done) {
+          renderCsv(currentData);
+        }
+
+        const missing = currentData.incomplete_days.length
+          ? " · " + currentData.incomplete_days.length + " incomplete snapshot day(s)"
+          : "";
+        statusNode.textContent =
+          currentData.date_from + " → " + currentData.date_to
+          + " · " + currentData.rows.length + " / "
+          + currentData.total_snapshots + " snapshot(s)"
+          + " · " + currentData.series.length + " series"
+          + (percentMode ? " · per-series %" : "")
+          + missing
+          + (chunk.done ? "" : " · loading…");
+
+        if (chunk.done) break;
+        cursor = chunk.next_cursor;
+
+        // Give the browser one paint frame so the progressively extended graph
+        // is actually visible before starting the next request.
+        await new Promise(resolve => requestAnimationFrame(resolve));
+      }
+
+      // Do not build the potentially huge CSV table while its tab is hidden.
+      // The CSV tab renders it on demand, and downloadCsv() works directly
+      // from currentData without needing the HTML table.
+    } catch (error) {
+      statusNode.textContent = window.eveosintPublicError(error);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  function csvCell(value) {
+    let text = String(value == null ? "" : value);
+    if (["=", "+", "-", "@"].includes(text.charAt(0))) {
+      text = "'" + text;
+    }
+    return '"' + text.replaceAll('"', '""') + '"';
+  }
+
+  function downloadCsv() {
+    if (!currentData || !currentData.rows || !currentData.rows.length) {
+      statusNode.textContent = "Load the graph before downloading the CSV.";
+      return;
+    }
+    if (!currentData.done) {
+      statusNode.textContent = "Wait for all snapshots to finish loading.";
+      return;
+    }
+
+    const visibleSeries = displayedSeries(currentData);
+    const header = ["date", ...visibleSeries.map(item => {
+      if (!percentMode) return item.name;
+      const localSeries = series[item.sourceIndex];
+      const baseName = localSeries ? percentBaseName(localSeries) : "";
+      return baseName
+        ? item.name + " (% of " + baseName + ")"
+        : item.name + " (%)";
+    })].map(csvCell).join(",");
+    const lines = currentData.rows.map(row => {
+      return [
+        row.date,
+        ...visibleSeries.map(item => {
+          const value = displayValue(currentData, row, item);
+          if (value == null) return "";
+          return percentMode ? value.toFixed(4).replace(/0+$/, "").replace(/\.$/, "") : value;
+        })
+      ].map(csvCell).join(",");
+    });
+
+    const blob = new Blob(
+      ["\ufeff" + [header, ...lines].join("\r\n")],
+      {type:"text/csv;charset=utf-8"}
+    );
+    const filename =
+      "superintel_evolution_"
+      + currentData.date_from + "_to_" + currentData.date_to + ".csv";
+
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+
+    statusNode.textContent =
+      "CSV generated · " + currentData.rows.length + " snapshot(s).";
+  }
+
+  countModeButton.addEventListener("click", () => {
+    percentMode = false;
+    saveEvolutionState();
+    updateDisplayModeButtons();
+    renderSeries();
+    rerenderCurrentData();
+  });
+
+  percentModeButton.addEventListener("click", () => {
+    if (!hasPercentConfiguration()) {
+      statusNode.textContent = "Choose a % reference on at least one series first.";
+      return;
+    }
+    percentMode = true;
+    saveEvolutionState();
+    updateDisplayModeButtons();
+    renderSeries();
+    rerenderCurrentData();
+  });
+
+  graphTab.addEventListener("click", () => {
+    graphView.classList.remove("d-none");
+    csvView.classList.add("d-none");
+    graphTab.classList.add("btn-primary");
+    graphTab.classList.remove("btn-outline-primary");
+    csvTab.classList.remove("btn-primary");
+    csvTab.classList.add("btn-outline-primary");
+  });
+
+  csvTab.addEventListener("click", () => {
+    graphView.classList.add("d-none");
+    csvView.classList.remove("d-none");
+    csvTab.classList.add("btn-primary");
+    csvTab.classList.remove("btn-outline-primary");
+    graphTab.classList.remove("btn-primary");
+    graphTab.classList.add("btn-outline-primary");
+    if (currentData) renderCsv(currentData);
+  });
+
+  refreshButton.addEventListener("click", loadData);
+  downloadButton.addEventListener("click", downloadCsv);
+
+  series.forEach(item => {
+    if (!item.uid) item.uid = makeSeriesUid();
+    if (!Object.prototype.hasOwnProperty.call(item, "percent_base_uid")) {
+      item.percent_base_uid = null;
+    }
+    if (!Array.isArray(item.hulls) || !item.hulls.length) {
+      item.hulls = [...currentHullSelection()];
+    }
+    (item.terms || []).forEach(term => {
+      if (!term.image_url) term.image_url = entityImageUrl(term.kind, term.entity_id);
+    });
+  });
+  saveEvolutionState();
+
+  updateDisplayModeButtons();
+  renderGroupTerms();
+  renderSeries();
+  statusNode.textContent = "Ready. Click Update to load the graph.";
+})();
+</script>
+  {% endif %}
+</div>
+{% endblock %}

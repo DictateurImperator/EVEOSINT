@@ -1,0 +1,146 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-start mb-4">
+  <div>
+    <h1 class="h3 fw-bold mb-1">Audit</h1>
+    <div class="muted-line">Utilisateurs et dernières actions.</div>
+  </div>
+</div>
+
+<section class="content-card p-3 p-md-4 mb-4">
+  <div class="d-flex justify-content-between align-items-start gap-3 mb-3">
+    <div>
+      <h2 class="h5 mb-1">Users</h2>
+      <div class="muted-line small">Maximum 50 utilisateurs par page.</div>
+    </div>
+
+    <input
+      type="search"
+      class="form-control"
+      style="max-width: 320px;"
+      id="userSearch"
+      placeholder="Rechercher un user..."
+      autocomplete="off">
+  </div>
+
+  <div class="table-responsive">
+    <table class="table table-dark table-hover align-middle mb-0" id="usersTable">
+      <thead>
+        <tr>
+          <th>User</th>
+          <th>Actions</th>
+          <th>Dernière action</th>
+          <th>Dernière IP</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for account in users_page["items"] %}
+          <tr>
+            <td>
+              <a class="text-decoration-none fw-semibold" href="/admin/audit/users/{{ account.id }}">
+                {{ account.username }}
+              </a>
+            </td>
+            <td>{{ account.actions_count }}</td>
+            <td>{{ account.last_action_at.strftime("%Y-%m-%d %H:%M:%S") if account.last_action_at else "-" }}</td>
+            <td>{{ account.last_ip or "-" }}</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  <div class="d-flex justify-content-between align-items-center mt-3">
+    <div class="muted-line small">
+      Page {{ users_page["page"] }} / {{ users_page["total_pages"] }} — {{ users_page["total"] }} users
+    </div>
+
+    <div class="d-flex gap-2">
+      {% if users_page["has_prev"] %}
+        <a class="btn btn-sm btn-outline-light" href="/admin/audit?users_page={{ users_page['prev_page'] }}">Précédent</a>
+      {% endif %}
+
+      {% if users_page["has_next"] %}
+        <a class="btn btn-sm btn-outline-light" href="/admin/audit?users_page={{ users_page['next_page'] }}">Suivant</a>
+      {% endif %}
+    </div>
+  </div>
+</section>
+
+<section class="content-card p-3 p-md-4">
+  <div class="d-flex justify-content-between align-items-start gap-3 mb-3">
+    <div>
+      <h2 class="h5 mb-1">50 dernières actions</h2>
+      <div class="muted-line small">Actions récentes globales.</div>
+    </div>
+
+    <input
+      type="search"
+      class="form-control"
+      style="max-width: 320px;"
+      id="actionSearch"
+      placeholder="Rechercher une action..."
+      autocomplete="off">
+  </div>
+
+  <div class="table-responsive">
+    <table class="table table-dark table-hover align-middle mb-0" id="actionsTable">
+      <thead>
+        <tr>
+          <th>Date</th>
+          <th>User</th>
+          <th>Action</th>
+          <th>Target</th>
+          <th>Détails</th>
+          <th>IP</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in latest_actions %}
+          <tr>
+            <td>{{ row.created_at.strftime("%Y-%m-%d %H:%M:%S") if row.created_at else "-" }}</td>
+            <td>
+              {% if row.user_id %}
+                <a class="text-decoration-none fw-semibold" href="/admin/audit/users/{{ row.user_id }}">
+                  {{ row.username or "-" }}
+                </a>
+              {% else %}
+                {{ row.username or "-" }}
+              {% endif %}
+            </td>
+            <td><span class="badge text-bg-secondary">{{ row.action }}</span></td>
+            <td>{{ row.target_type or "-" }}{% if row.target_id %}:{{ row.target_id }}{% endif %}</td>
+            <td class="small muted-line">{{ row.details or "" }}</td>
+            <td class="small">{{ row.ip_address or "-" }}</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<script>
+  function installTableFilter(inputId, tableId) {
+    const input = document.getElementById(inputId);
+    const table = document.getElementById(tableId);
+
+    if (!input || !table) {
+      throw new Error("Audit filter target missing: " + inputId + " / " + tableId);
+    }
+
+    input.addEventListener("input", () => {
+      const needle = input.value.trim().toLowerCase();
+      const rows = table.querySelectorAll("tbody tr");
+
+      rows.forEach((row) => {
+        const text = row.innerText.toLowerCase();
+        row.style.display = text.includes(needle) ? "" : "none";
+      });
+    });
+  }
+
+  installTableFilter("userSearch", "usersTable");
+  installTableFilter("actionSearch", "actionsTable");
+</script>
+{% endblock %}

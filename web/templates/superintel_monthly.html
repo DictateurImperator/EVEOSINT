@@ -1,0 +1,282 @@
+{% extends "base.html" %}
+
+{% block content %}
+{% macro display_name(value) -%}
+{% if value is not none and (value|string)|trim != "" %}{{ value }}{% else %}Unknown{% endif %}
+{%- endmacro %}
+{% macro entity_image_url(entity_type, entity_id, size=32) -%}
+{% if entity_type == 'player' or entity_type == 'character' %}https://images.evetech.net/characters/{{ entity_id }}/portrait?size={{ size }}{% elif entity_type == 'corporation' %}https://images.evetech.net/corporations/{{ entity_id }}/logo?size={{ size }}{% else %}https://images.evetech.net/alliances/{{ entity_id }}/logo?size={{ size }}{% endif %}
+{%- endmacro %}
+{% macro profile_link(entity_type, entity_id, entity_name, show_image=True) -%}
+{% set shown = display_name(entity_name) %}
+{% set has_id = entity_id and (entity_id|string) not in ["0", "None", ""] %}
+{% if has_id %}<a class="superintel-entity-link text-decoration-none" href="/{% if entity_type == 'player' %}character{% else %}{{ entity_type }}{% endif %}/{{ entity_id }}">{% if show_image %}<img class="superintel-entity-icon" src="{{ entity_image_url(entity_type, entity_id, 32) }}" alt="" loading="lazy" onerror="this.style.display='none'">{% endif %}<span>{{ shown }}</span></a>{% else %}<span>{{ shown }}</span>{% endif %}
+{%- endmacro %}
+{% macro is_hidden_id(column_key) -%}
+{% if column_key == 'pilot_id' or column_key == 'corp_id' or column_key == 'alliance_id' or column_key.endswith('_id') %}1{% else %}0{% endif %}
+{%- endmacro %}
+{% macro monthly_url(page, sort, direction, q=analysis.query) -%}
+/superintel/monthly-analysis?view={{ analysis.view }}{% if analysis.selected_day %}&period={{ analysis.selected_day.isoformat() }}{% endif %}{% if analysis.view == 'explain' %}&reason={{ analysis.reason }}{% endif %}{% if q %}&q={{ q|urlencode }}{% endif %}{% for key, value in analysis.filters.items() %}{% if value %}&f_{{ key }}={{ value|urlencode }}{% endif %}{% endfor %}&sort={{ sort }}&dir={{ direction }}&page={{ page }}&page_size={{ analysis.pagination.page_size }}
+{%- endmacro %}
+{% set superintel_ship_type_ids = {
+  'erebus': 671,
+  'revenant': 3514,
+  'leviathan': 3764,
+  'avatar': 11567,
+  'hel': 22852,
+  'ragnarok': 23773,
+  'nyx': 23913,
+  'wyvern': 23917,
+  'aeon': 23919,
+  'vendetta': 42125,
+  'vanquisher': 42126,
+  'molok': 42241,
+  'komodo': 45649,
+  'azariel': 78576
+} %}
+{% macro ship_icon_url(type_id, size=32) -%}
+https://images.evetech.net/types/{{ type_id }}/icon?size={{ size }}
+{%- endmacro %}
+<div class="d-flex justify-content-between align-items-start mb-4">
+  <div>
+    <h1 class="h3 fw-bold mb-1">SuperINTEL</h1>
+    <div class="muted-line">Monthly analysis — monthly report columns with explained movement.</div>
+  </div>
+</div>
+
+{% if error %}
+  <div class="alert alert-danger py-2">{{ error }}</div>
+{% endif %}
+
+{% if analysis and not error %}
+  <style>
+    .superintel-monthly-table {
+      font-size: 0.86rem;
+      white-space: nowrap;
+    }
+    .superintel-monthly-table th {
+      position: sticky;
+      top: 0;
+      z-index: 2;
+      background: var(--bs-dark);
+    }
+    .superintel-monthly-table th.superintel-monthly-sortable a {
+      color: inherit;
+      text-decoration: underline;
+      text-decoration-style: dotted;
+      text-underline-offset: 0.18rem;
+    }
+    .superintel-monthly-table th.superintel-monthly-sortable a:hover {
+      color: #7cc7ff;
+    }
+    .superintel-monthly-column-filter {
+      max-width: 220px;
+      min-width: 120px;
+      height: 1.75rem;
+      font-size: 0.72rem;
+    }
+    .superintel-monthly-delta {
+      display: block;
+      font-size: 0.70em;
+      line-height: 1;
+      min-height: 1em;
+    }
+    .superintel-monthly-value {
+      display: block;
+      font-size: 1.10em;
+      line-height: 1.12;
+    }
+    .superintel-monthly-diff-only {
+      display: block;
+      font-size: 1.00em;
+      line-height: 1.12;
+    }
+    .superintel-entity-link {
+      color: #7cc7ff;
+      font-weight: 600;
+      display: inline-flex;
+      align-items: center;
+      gap: 0.45rem;
+    }
+    .superintel-entity-icon {
+      width: 24px;
+      height: 24px;
+      border-radius: 50%;
+      object-fit: cover;
+      background: rgba(255,255,255,0.06);
+    }
+    .superintel-entity-link:hover {
+      color: #b9e3ff;
+      text-decoration: underline !important;
+    }
+    .superintel-ship-column-link {
+      display: inline-flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 0.15rem;
+      line-height: 1.05;
+    }
+    .superintel-ship-column-icon {
+      width: 32px;
+      height: 32px;
+      object-fit: contain;
+      background: rgba(255,255,255,0.06);
+      border-radius: 0.35rem;
+    }
+    .superintel-ship-column-name {
+      display: block;
+    }
+  </style>
+
+  <section class="content-card p-3 p-md-4 mb-4">
+    <div class="d-flex flex-wrap gap-2 justify-content-between align-items-end">
+      <div>
+        <h2 class="h5 mb-1" title="Score = Titan x{{ analysis.score_titan_points }} + Super x{{ analysis.score_super_points }}">Monthly Analysis</h2>
+        {% if analysis.selected_day %}
+          <div class="muted-line small">{{ analysis.previous_day.isoformat() }} → {{ analysis.selected_day.isoformat() }}</div>
+        {% else %}
+          <div class="muted-line small">No monthly pair available.</div>
+        {% endif %}
+      </div>
+
+      <div class="d-flex flex-wrap gap-2 align-items-center">
+        <div class="btn-group btn-group-sm" role="group" aria-label="Monthly analysis view">
+          {% for key, label in analysis.view_labels.items() %}
+            <a class="btn {% if analysis.view == key %}btn-primary{% else %}btn-outline-primary{% endif %}" href="/superintel/monthly-analysis{% if analysis.selected_day %}?period={{ analysis.selected_day.isoformat() }}&view={{ key }}{% else %}?view={{ key }}{% endif %}{% if key == 'explain' %}&reason={{ analysis.reason }}{% endif %}&q={{ analysis.query|urlencode }}&sort=sort_delta&dir=desc&page=1&page_size={{ analysis.pagination.page_size }}">{{ label }}</a>
+          {% endfor %}
+        </div>
+
+        {% if analysis.periods %}
+          <select class="form-select form-select-sm bg-dark text-light border-secondary" onchange="window.location.href='/superintel/monthly-analysis?period=' + this.value + '&view={{ analysis.view }}{% if analysis.view == 'explain' %}&reason={{ analysis.reason }}{% endif %}&q={{ analysis.query|urlencode }}&sort={{ analysis.sort }}&dir={{ analysis.direction }}&page=1&page_size={{ analysis.pagination.page_size }}'">
+            {% for period in analysis.periods %}
+              <option value="{{ period.isoformat() }}" {% if period == analysis.selected_day %}selected{% endif %}>{{ period.isoformat() }}</option>
+            {% endfor %}
+          </select>
+          {% if analysis.selected_day %}
+            <a class="btn btn-outline-primary btn-sm" href="/superintel/monthly-analysis/download?period={{ analysis.selected_day.isoformat() }}">Download Excel</a>
+          {% endif %}
+        {% endif %}
+
+        {% if analysis.view == 'explain' %}
+          <div class="btn-group btn-group-sm" role="group" aria-label="Monthly analysis reason filter">
+            {% for key, label in analysis.reason_labels.items() %}
+              <a class="btn {% if analysis.reason == key %}btn-primary{% else %}btn-outline-primary{% endif %}" href="/superintel/monthly-analysis{% if analysis.selected_day %}?period={{ analysis.selected_day.isoformat() }}&view={{ analysis.view }}&reason={{ key }}{% else %}?view={{ analysis.view }}&reason={{ key }}{% endif %}&q={{ analysis.query|urlencode }}&sort={{ analysis.sort }}&dir={{ analysis.direction }}&page=1&page_size={{ analysis.pagination.page_size }}">{{ label }}</a>
+            {% endfor %}
+          </div>
+        {% endif %}
+      </div>
+    </div>
+  </section>
+
+  <section class="content-card p-3 p-md-4">
+    <div class="d-flex flex-wrap gap-2 justify-content-end align-items-center mb-3">
+      <div class="d-flex align-items-center gap-2">
+        {% if analysis.pagination.has_previous %}
+          <a class="btn btn-outline-primary btn-sm" href="{{ monthly_url(analysis.pagination.page - 1, analysis.sort, analysis.direction) }}">Previous</a>
+        {% else %}
+          <button class="btn btn-outline-primary btn-sm" type="button" disabled>Previous</button>
+        {% endif %}
+        <span class="muted-line small">{{ analysis.pagination.total_rows }} results — page {{ analysis.pagination.page }}/{{ analysis.pagination.total_pages }}</span>
+        {% if analysis.pagination.has_next %}
+          <a class="btn btn-outline-primary btn-sm" href="{{ monthly_url(analysis.pagination.page + 1, analysis.sort, analysis.direction) }}">Next</a>
+        {% else %}
+          <button class="btn btn-outline-primary btn-sm" type="button" disabled>Next</button>
+        {% endif %}
+      </div>
+    </div>
+
+    <form method="get" action="/superintel/monthly-analysis">
+      {% if analysis.selected_day %}<input type="hidden" name="period" value="{{ analysis.selected_day.isoformat() }}">{% endif %}
+      <input type="hidden" name="view" value="{{ analysis.view }}">
+      {% if analysis.view == 'explain' %}<input type="hidden" name="reason" value="{{ analysis.reason }}">{% endif %}
+      <input type="hidden" name="sort" value="{{ analysis.sort }}">
+      <input type="hidden" name="dir" value="{{ analysis.direction }}">
+      <input type="hidden" name="page" value="1">
+      <input type="hidden" name="page_size" value="{{ analysis.pagination.page_size }}">
+      <div class="table-responsive">
+        <table class="table table-dark table-hover align-middle mb-0 superintel-monthly-table">
+        <thead>
+          <tr>
+            {% set visible_count = namespace(value=0) %}
+            {% for column in analysis.columns %}
+              {% if is_hidden_id(column.key) != '1' %}
+                {% set visible_count.value = visible_count.value + 1 %}
+                {% set next_dir = 'asc' if analysis.sort == column.key and analysis.direction == 'desc' else 'desc' %}
+                <th class="{% if column.type in ['metric', 'diff'] %}text-end {% endif %}superintel-monthly-sortable">
+                  <div>
+                    <a href="{{ monthly_url(1, column.key, next_dir) }}"{% if column.key in superintel_ship_type_ids %} class="superintel-ship-column-link"{% endif %}>
+                      {% if column.key in superintel_ship_type_ids %}
+                        <img class="superintel-ship-column-icon" src="{{ ship_icon_url(superintel_ship_type_ids[column.key], 32) }}" alt="" loading="lazy" onerror="this.style.display='none'">
+                        <span class="superintel-ship-column-name">{{ column.label }}{% if analysis.sort == column.key %} {{ '↓' if analysis.direction == 'desc' else '↑' }}{% endif %}</span>
+                      {% else %}
+                        {{ column.label }}{% if analysis.sort == column.key %} {{ '↓' if analysis.direction == 'desc' else '↑' }}{% endif %}
+                      {% endif %}
+                    </a>
+                  </div>
+                  {% if column.type == 'text' and column.key != 'jour' %}
+                    <input class="form-control form-control-sm bg-dark text-light border-secondary superintel-monthly-column-filter mt-1" type="search" name="f_{{ column.key }}" value="{{ analysis.filters.get(column.key, '') }}" placeholder="Filter..." autocomplete="off" onchange="this.form.submit()">
+                  {% endif %}
+                </th>
+              {% endif %}
+            {% endfor %}
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in analysis.rows %}
+            <tr>
+              {% for column in analysis.columns %}
+                {% if is_hidden_id(column.key) != '1' %}
+                  {% set cell = row['values'][column.key] %}
+                  {% if column.type == 'metric' %}
+                    <td class="text-end">
+                      <span class="superintel-monthly-delta {% if cell.delta > 0 %}text-success{% elif cell.delta < 0 %}text-danger{% else %}muted-line{% endif %}">{% if cell.delta > 0 %}+{% endif %}{{ cell.delta }}</span>
+                      <span class="superintel-monthly-value">{{ cell.value }}</span>
+                    </td>
+                  {% elif column.type == 'diff' %}
+                    <td class="text-end">
+                      <span class="superintel-monthly-diff-only {% if cell > 0 %}text-success{% elif cell < 0 %}text-danger{% else %}muted-line{% endif %}">{% if cell > 0 %}+{% endif %}{{ cell }}</span>
+                    </td>
+                  {% else %}
+                    <td>
+                      {% if column.key == 'pilot_name' %}
+                        {{ profile_link('player', row['values']['pilot_id'], cell) }}
+                      {% elif column.key == 'corp_name' %}
+                        {{ profile_link('corporation', row['values']['corp_id'], cell) }}
+                      {% elif column.key == 'corp_ticker' %}
+                        {{ profile_link('corporation', row['values']['corp_id'], cell, False) }}
+                      {% elif column.key == 'alliance_name' %}
+                        {{ profile_link('alliance', row['values']['alliance_id'], cell) }}
+                      {% elif column.key == 'alliance_ticker' %}
+                        {{ profile_link('alliance', row['values']['alliance_id'], cell, False) }}
+                      {% elif column.key == 'alliance_prev' %}
+                        {{ profile_link('alliance', row['values']['alliance_prev_id'], cell) }}
+                      {% elif column.key == 'alliance_prev_ticker' %}
+                        {{ profile_link('alliance', row['values']['alliance_prev_id'], cell, False) }}
+                      {% elif column.key == 'alliance_curr' %}
+                        {{ profile_link('alliance', row['values']['alliance_curr_id'], cell) }}
+                      {% elif column.key == 'alliance_curr_ticker' %}
+                        {{ profile_link('alliance', row['values']['alliance_curr_id'], cell, False) }}
+                      {% elif column.key == 'alliance_analysee' %}
+                        {{ profile_link('alliance', row['values']['alliance_analysee_id'], cell) }}
+                      {% elif column.key == 'alliance_analysee_ticker' %}
+                        {{ profile_link('alliance', row['values']['alliance_analysee_id'], cell, False) }}
+                      {% else %}
+                        {{ display_name(cell) }}
+                      {% endif %}
+                    </td>
+                  {% endif %}
+                {% endif %}
+              {% endfor %}
+            </tr>
+          {% else %}
+            <tr>
+              <td colspan="{{ visible_count.value }}" class="muted-line">No monthly movement.</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+        </table>
+      </div>
+    </form>
+  </section>
+{% endif %}
+{% endblock %}

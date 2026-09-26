@@ -1,0 +1,126 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-start gap-3 mb-4">
+  <div>
+    <h1 class="h3 fw-bold mb-1">EntitiesINTEL — {{ entity_index.title }}</h1>
+    <div class="muted-line">{{ entity_index.description }}</div>
+  </div>
+  {% if entity_index.entity_type == "ship" %}
+    <a class="btn btn-outline-warning btn-sm" href="/ship-analysis">Analysis</a>
+  {% endif %}
+</div>
+
+<section class="content-card p-3 p-md-4">
+  <div class="d-flex justify-content-between align-items-start gap-3 mb-3">
+    <div>
+      {% if entity_index.entity_type in ["character", "corporation", "alliance", "system"] %}
+        <h2 class="h5 mb-1">Latest {{ entity_index.title }} entities involved in kills</h2>
+      {% else %}
+        <h2 class="h5 mb-1">{{ entity_index.title }} entities</h2>
+      {% endif %}
+    </div>
+  </div>
+
+  <div
+    id="entityRecentList"
+    data-entity-type="{{ entity_index.entity_type }}"
+    data-ship-tier-filter="{{ entity_index.ship_tier_filter or '' }}"
+    data-ship-group-filter="{{ entity_index.ship_group_filter or '' }}"
+    data-ship-size-filter="{{ entity_index.ship_size_filter or '' }}"
+    data-ship-faction-filter="{{ entity_index.ship_faction_filter or '' }}">
+    <div class="d-flex align-items-center gap-2 muted-line">
+      <span class="spinner-border spinner-border-sm" aria-hidden="true"></span>
+      <span>Loading latest entities…</span>
+    </div>
+  </div>
+</section>
+
+<script>
+  (() => {
+    const recentRoot = document.getElementById("entityRecentList");
+    if (!recentRoot) {
+      throw new Error("EntitiesINTEL recent list target missing");
+    }
+
+    const entityType = recentRoot.dataset.entityType;
+    if (!entityType) {
+      throw new Error("EntitiesINTEL entity type missing");
+    }
+
+    function initShipTreeTabs(root) {
+      const tabs = root.querySelectorAll("[data-ship-faction-tab]");
+      const panels = root.querySelectorAll("[data-ship-faction-panel]");
+
+      tabs.forEach((tab) => {
+        tab.addEventListener("click", () => {
+          const target = tab.getAttribute("data-ship-faction-tab");
+
+          tabs.forEach((item) => {
+            item.classList.toggle("active", item === tab);
+          });
+
+          panels.forEach((panel) => {
+            panel.classList.toggle("active", panel.getAttribute("data-ship-faction-panel") === target);
+          });
+        });
+      });
+    }
+
+    const controller = new AbortController();
+    const timeoutId = window.setTimeout(() => {
+      controller.abort();
+    }, 30000);
+
+    const params = new URLSearchParams();
+    const shipTierFilter = recentRoot.dataset.shipTierFilter || "";
+    const shipGroupFilter = recentRoot.dataset.shipGroupFilter || "";
+    const shipSizeFilter = recentRoot.dataset.shipSizeFilter || "";
+    const shipFactionFilter = recentRoot.dataset.shipFactionFilter || "";
+
+    if (shipTierFilter) {
+      params.set("tier", shipTierFilter);
+    }
+
+    if (shipGroupFilter) {
+      params.set("group", shipGroupFilter);
+    }
+
+    if (shipSizeFilter) {
+      params.set("size", shipSizeFilter);
+    }
+
+    if (shipFactionFilter) {
+      params.set("faction", shipFactionFilter);
+    }
+
+    const recentUrl = "/api/entities/" + encodeURIComponent(entityType) + "/recent" + (params.toString() ? "?" + params.toString() : "");
+
+    fetch(recentUrl, {
+      method: "GET",
+      credentials: "same-origin",
+      cache: "no-store",
+      signal: controller.signal,
+    })
+      .then((response) => {
+        if (!response.ok) {
+          throw new Error("Erreur " + response.status);
+        }
+        return response.text();
+      })
+      .then((html) => {
+        window.clearTimeout(timeoutId);
+        recentRoot.innerHTML = html;
+        initShipTreeTabs(recentRoot);
+      })
+      .catch((error) => {
+        window.clearTimeout(timeoutId);
+        if (error && error.name === "AbortError") {
+          recentRoot.innerHTML = '<div class="alert alert-danger py-2">Erreur 504</div>';
+          return;
+        }
+        recentRoot.innerHTML = '<div class="alert alert-danger py-2">Erreur 500</div>';
+      });
+  })();
+</script>
+{% endblock %}

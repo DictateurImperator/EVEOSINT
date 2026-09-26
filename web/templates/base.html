@@ -1,0 +1,949 @@
+<!doctype html>
+<html lang="fr" data-bs-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ title or "EVEOSINT" }}</title>
+
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+
+  <style>
+    :root {
+      --bg: #080b10;
+      --panel: rgba(17, 24, 39, 0.94);
+      --border: rgba(148, 163, 184, 0.16);
+      --muted: #94a3b8;
+      --topbar-height: 58px;
+      --context-width: 210px;
+      --context-collapsed: 56px;
+    }
+
+    body {
+      min-height: 100vh;
+      background:
+        radial-gradient(circle at top left, rgba(13, 110, 253, 0.16), transparent 34%),
+        radial-gradient(circle at bottom right, rgba(0, 255, 200, 0.07), transparent 30%),
+        var(--bg);
+      color: #e9eef5;
+    }
+
+    .muted-line {
+      color: var(--muted);
+    }
+
+    .page-shell {
+      min-height: 100vh;
+      padding-bottom: 72px;
+    }
+
+    .login-card {
+      width: 100%;
+      max-width: 420px;
+      background: var(--panel);
+      border: 1px solid var(--border);
+      box-shadow: 0 24px 80px rgba(0, 0, 0, 0.45);
+      backdrop-filter: blur(10px);
+    }
+
+    .form-control {
+      background-color: #0b1220;
+      border-color: rgba(148, 163, 184, 0.25);
+      color: #f8fafc;
+    }
+
+    .form-control:focus {
+      background-color: #0b1220;
+      border-color: #0d6efd;
+      box-shadow: 0 0 0 .25rem rgba(13, 110, 253, .18);
+      color: #f8fafc;
+    }
+
+    .btn-primary {
+      font-weight: 700;
+    }
+
+    .app-topbar {
+      height: var(--topbar-height);
+      display: flex;
+      align-items: center;
+      border-bottom: 1px solid var(--border);
+      background: rgba(8, 11, 16, 0.92);
+      backdrop-filter: blur(10px);
+      position: sticky;
+      top: 0;
+      z-index: 20;
+      gap: 12px;
+    }
+
+    .update-banner {
+      border-bottom: 1px solid rgba(96, 165, 250, 0.22);
+      background: rgba(10, 22, 38, 0.96);
+      backdrop-filter: blur(10px);
+      color: #dbeafe;
+    }
+
+    .update-banner-inner {
+      min-height: 38px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 7px 16px;
+      font-size: .86rem;
+    }
+
+    .update-banner-spinner {
+      width: 14px;
+      height: 14px;
+      flex: 0 0 14px;
+      border: 2px solid rgba(147, 197, 253, 0.28);
+      border-top-color: #93c5fd;
+      border-radius: 50%;
+      animation: update-banner-spin .8s linear infinite;
+    }
+
+    .update-banner-label {
+      font-weight: 700;
+      white-space: nowrap;
+    }
+
+    .update-banner-detail {
+      color: #a8b7cc;
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .update-banner-warning {
+      flex: 1 1 auto;
+      min-width: 0;
+      text-align: center;
+      color: #ef4444;
+      font-weight: 700;
+      font-size: .80rem;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .update-banner-progress {
+      margin-left: auto;
+      width: min(220px, 24vw);
+      min-width: 90px;
+      height: 5px;
+      background: rgba(148, 163, 184, 0.15);
+      border-radius: 999px;
+      overflow: hidden;
+    }
+
+    .update-banner-progress-bar {
+      height: 100%;
+      width: 0;
+      background: #60a5fa;
+      transition: width .25s ease;
+    }
+
+    .update-banner-percent {
+      min-width: 48px;
+      text-align: right;
+      color: #bfdbfe;
+      font-variant-numeric: tabular-nums;
+    }
+
+    @keyframes update-banner-spin {
+      to { transform: rotate(360deg); }
+    }
+
+    @media (max-width: 760px) {
+      .update-banner-inner { gap: 7px; padding-left: 10px; padding-right: 10px; }
+      .update-banner-detail { display: none; }
+      .update-banner-progress { width: 90px; }
+    }
+
+    .top-brand {
+      font-weight: 800;
+      letter-spacing: .04em;
+      margin-right: 28px;
+      white-space: nowrap;
+    }
+
+    .top-link {
+      color: #cbd5e1;
+      text-decoration: none;
+      padding: 8px 12px;
+      border-radius: 10px;
+      font-size: .94rem;
+      display: inline-flex;
+      align-items: center;
+    }
+
+    .top-link:hover,
+    .top-link.active {
+      color: #fff;
+      background: rgba(13, 110, 253, 0.18);
+    }
+
+    .topbar-entity-search {
+      margin-left: auto;
+      position: relative;
+      width: min(460px, 34vw);
+      min-width: 260px;
+    }
+
+    .topbar-entity-search-form {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .topbar-entity-search-input {
+      height: 36px;
+      font-size: .9rem;
+    }
+
+    .topbar-entity-search-results {
+      position: absolute;
+      top: calc(100% + 6px);
+      right: 0;
+      width: min(980px, calc(100vw - 28px));
+      z-index: 10000;
+      background: #0b1220;
+      border: 1px solid rgba(148, 163, 184, 0.28);
+      border-radius: 10px;
+      box-shadow: 0 18px 50px rgba(0, 0, 0, 0.5);
+      overflow-y: auto;
+      max-height: min(680px, calc(100vh - 86px));
+      display: none;
+    }
+
+    .topbar-entity-search-results.show {
+      display: block;
+    }
+
+    .topbar-entity-search-section + .topbar-entity-search-section {
+      border-top: 1px solid rgba(148, 163, 184, 0.20);
+    }
+
+    .topbar-entity-search-section-title {
+      padding: 6px 11px;
+      background: rgba(255, 255, 255, 0.055);
+      color: #cbd5e1;
+      font-size: .67rem;
+      line-height: 1;
+      font-weight: 800;
+      letter-spacing: .035em;
+    }
+
+    .topbar-entity-search-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 0;
+    }
+
+    .topbar-entity-search-result {
+      min-width: 0;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 7px 9px;
+      color: #e5eefb;
+      text-decoration: none;
+      border-right: 1px solid rgba(148, 163, 184, 0.07);
+      border-bottom: 1px solid rgba(148, 163, 184, 0.07);
+    }
+
+    .topbar-entity-search-result:hover,
+    .topbar-entity-search-result.active {
+      background: rgba(13, 110, 253, 0.45);
+      color: #fff;
+    }
+
+    .topbar-entity-search-result img,
+    .topbar-entity-search-fallback-icon {
+      width: 30px;
+      height: 30px;
+      flex: 0 0 30px;
+      border-radius: 5px;
+      object-fit: cover;
+      background: rgba(255,255,255,0.06);
+    }
+
+    .topbar-entity-search-fallback-icon {
+      display: grid;
+      place-items: center;
+      color: #8bd3ff;
+      border: 1px solid rgba(148, 163, 184, .28);
+      font-weight: 800;
+      font-size: 1rem;
+    }
+
+    .topbar-entity-search-fallback-icon.system::before { content: "◎"; }
+    .topbar-entity-search-fallback-icon.constellation::before { content: "✣"; }
+    .topbar-entity-search-fallback-icon.region::before { content: "⬡"; }
+    .topbar-entity-search-fallback-icon.ship::before { content: "✦"; }
+    .topbar-entity-search-fallback-icon.ship_group::before { content: "◈"; }
+
+    .topbar-entity-search-text {
+      min-width: 0;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .topbar-entity-search-name {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      font-weight: 650;
+      line-height: 1.15;
+      font-size: .86rem;
+    }
+
+    .topbar-entity-search-type {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      color: var(--muted);
+      font-size: .68rem;
+      line-height: 1.1;
+      margin-top: 2px;
+    }
+
+    @media (max-width: 900px) {
+      .topbar-entity-search-results { width: min(680px, calc(100vw - 20px)); }
+      .topbar-entity-search-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    }
+
+    @media (max-width: 560px) {
+      .topbar-entity-search-grid { grid-template-columns: 1fr; }
+    }
+
+    .top-actions {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .account-link {
+      color: #fff;
+      text-decoration: none;
+      padding: 8px 14px;
+      border-radius: 12px;
+      background: rgba(13, 110, 253, 0.22);
+      border: 1px solid rgba(13, 110, 253, 0.28);
+      display: inline-flex;
+      align-items: center;
+      min-height: 40px;
+      font-size: .94rem;
+      white-space: nowrap;
+    }
+
+    .account-link:hover {
+      color: #fff;
+      background: rgba(13, 110, 253, 0.32);
+    }
+
+    .logout-link {
+      width: 40px;
+      height: 40px;
+      border-radius: 12px;
+      border: 1px solid rgba(148, 163, 184, 0.20);
+      background: rgba(255, 255, 255, 0.04);
+      color: #cbd5e1;
+      text-decoration: none;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 1.1rem;
+      line-height: 1;
+    }
+
+    .logout-link:hover {
+      color: #fff;
+      background: rgba(220, 53, 69, 0.16);
+      border-color: rgba(220, 53, 69, 0.35);
+    }
+
+    .app-layout {
+      display: flex;
+      min-height: calc(100vh - var(--topbar-height));
+      padding-bottom: 72px;
+    }
+
+    .context-sidebar {
+      width: var(--context-width);
+      border-right: 1px solid var(--border);
+      background: rgba(10, 15, 25, 0.88);
+      transition: width .18s ease;
+      overflow: hidden;
+    }
+
+    .context-sidebar.collapsed {
+      width: var(--context-collapsed);
+    }
+
+    .context-header {
+      height: 52px;
+      padding: 0 12px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .context-title {
+      font-size: .82rem;
+      text-transform: uppercase;
+      color: var(--muted);
+      letter-spacing: .08em;
+      white-space: nowrap;
+    }
+
+    .context-toggle {
+      width: 32px;
+      height: 32px;
+      border-radius: 9px;
+      border: 1px solid rgba(148, 163, 184, 0.22);
+      background: #0b1220;
+      color: #cbd5e1;
+    }
+
+    .context-sidebar.collapsed .context-title,
+    .context-sidebar.collapsed .nav-label {
+      display: none;
+    }
+
+    .context-nav {
+      padding: 10px;
+    }
+
+    .context-link {
+      display: flex;
+      gap: 10px;
+      align-items: center;
+      min-height: 40px;
+      padding: 8px 10px;
+      margin-bottom: 5px;
+      border-radius: 11px;
+      color: #cbd5e1;
+      text-decoration: none;
+      white-space: nowrap;
+    }
+
+    .context-link:hover,
+    .context-link.active {
+      color: #fff;
+      background: rgba(148, 163, 184, 0.10);
+    }
+
+    .nav-icon {
+      width: 22px;
+      text-align: center;
+      flex: 0 0 22px;
+    }
+
+    .app-content {
+      flex: 1;
+      min-width: 0;
+      padding: 28px;
+    }
+
+    .content-card {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 22px;
+      box-shadow: 0 18px 60px rgba(0, 0, 0, 0.28);
+    }
+
+    .legal-notice {
+      position: fixed;
+      left: 0;
+      right: 0;
+      bottom: 18px;
+      padding: 0 16px;
+      color: #64748b;
+      font-size: 0.78rem;
+      line-height: 1.35;
+      text-align: center;
+      pointer-events: none;
+    }
+
+    .legal-notice a {
+      color: #94a3b8;
+      text-decoration: none;
+      pointer-events: auto;
+    }
+
+    .legal-notice a:hover {
+      color: #cbd5e1;
+      text-decoration: underline;
+    }
+
+    .public-faq {
+      margin-top: 3rem;
+      padding-top: 1.5rem;
+      padding-bottom: 1rem;
+      border-top: 1px solid var(--border);
+      position: static;
+    }
+
+    .public-faq-heading {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 1rem;
+      margin-bottom: 1rem;
+    }
+
+    .public-faq-item {
+      border: 1px solid rgba(148, 163, 184, 0.16);
+      border-radius: 12px;
+      background: rgba(15, 23, 42, 0.42);
+      margin-bottom: .55rem;
+      overflow: hidden;
+    }
+
+    .public-faq-item summary {
+      cursor: pointer;
+      padding: .78rem .95rem;
+      font-weight: 700;
+      color: #dbeafe;
+    }
+
+    .public-faq-item[open] summary {
+      border-bottom: 1px solid rgba(148, 163, 184, 0.12);
+    }
+
+    .public-faq-item > div {
+      padding: .8rem .95rem .95rem;
+      color: #b8c4d6;
+      line-height: 1.55;
+      font-size: .92rem;
+    }
+
+    .public-faq-source-note {
+      margin-top: .9rem;
+      color: #738197;
+      font-size: .78rem;
+      line-height: 1.45;
+    }
+  </style>
+</head>
+
+<body>
+  {% if show_app_layout %}
+    {% set account_label = username if username else (user.username if user and user.username else "Compte") %}
+
+    <header class="app-topbar px-3">
+      <div class="top-brand">EVEOSINT</div>
+
+      <nav class="d-flex gap-1">
+        {% for item in top_menu or [] %}
+          <a class="top-link {% if item.active %}active{% endif %}" href="{{ item.href }}">
+            {{ item.label }}
+          </a>
+        {% endfor %}
+      </nav>
+
+      <div class="topbar-entity-search" data-entity-search>
+        <div class="topbar-entity-search-form" data-entity-search-form>
+          <input class="form-control topbar-entity-search-input" data-entity-search-input type="search" name="q" placeholder="Search entity..." aria-label="Search entity" autocomplete="off">
+        </div>
+        <div class="topbar-entity-search-results" data-entity-search-results></div>
+      </div>
+
+      <div class="top-actions">
+        <a class="account-link" href="/account">
+          {{ account_label }}
+        </a>
+
+        <form method="post" action="/logout" class="m-0">
+          <button class="logout-link" type="submit" title="Logout" aria-label="Logout" style="padding:0;cursor:pointer;">
+            ⏻
+          </button>
+        </form>
+      </div>
+    </header>
+
+    <div id="globalUpdateBanner" class="update-banner d-none" role="status" aria-live="polite">
+      <div class="update-banner-inner">
+        <span class="update-banner-spinner" aria-hidden="true"></span>
+        <span id="globalUpdateLabel" class="update-banner-label">EVEOSINT update running</span>
+        <span id="globalUpdateDetail" class="update-banner-detail"></span>
+        <span class="update-banner-warning">Some data may be temporarily outdated until this update completes.</span>
+        <span id="globalUpdateProgress" class="update-banner-progress d-none" aria-hidden="true">
+          <span id="globalUpdateProgressBar" class="update-banner-progress-bar"></span>
+        </span>
+        <span id="globalUpdatePercent" class="update-banner-percent d-none"></span>
+      </div>
+    </div>
+
+    <div class="app-layout">
+      <aside id="contextSidebar" class="context-sidebar">
+        <div class="context-header">
+          <div class="context-title">{{ context_title or "Menu" }}</div>
+          <button id="contextToggle" class="context-toggle" type="button">☰</button>
+        </div>
+
+        <nav class="context-nav">
+          {% for item in context_menu or [] %}
+            <a class="context-link {% if item.active %}active{% endif %}" href="{{ item.href }}">
+              <span class="nav-icon">{{ item.icon }}</span>
+              <span class="nav-label">{{ item.label }}</span>
+            </a>
+          {% endfor %}
+        </nav>
+      </aside>
+
+      <main class="app-content">
+  {% endif %}
+
+  {% block content %}{% endblock %}
+
+  {% if show_app_layout %}
+    {% include "public_faq.html" %}
+  {% endif %}
+
+  {% if show_app_layout %}
+      </main>
+    </div>
+  {% endif %}
+
+  <div id="globalFetchError" class="alert alert-danger d-none" role="alert" aria-live="assertive"
+       style="position:fixed;top:72px;right:18px;z-index:2000;min-width:140px;text-align:center;font-weight:700;">
+    Erreur 500
+  </div>
+
+  <footer class="legal-notice">
+    All EVE related materials are property of <a href="https://fenriscreations.com/" target="_blank" rel="noopener noreferrer">Fenris Creation</a>.
+  </footer>
+
+  <script>
+    (() => {
+      const nativeFetch = window.fetch.bind(window);
+      const errorBox = document.getElementById("globalFetchError");
+      let hideTimer = null;
+
+      const showPublicError = (text) => {
+        if (!errorBox) return;
+        errorBox.textContent = text;
+        errorBox.classList.remove("d-none");
+        if (hideTimer) window.clearTimeout(hideTimer);
+        hideTimer = window.setTimeout(() => errorBox.classList.add("d-none"), 4500);
+      };
+
+      window.eveosintPublicError = (error, fallbackStatus = 500) => {
+        const raw = String(error && error.message ? error.message : (error || ""));
+        const match = raw.match(/(?:Erreur|HTTP)\s*(\d{3})/i);
+        if (match) return `Erreur ${match[1]}`;
+        if (/network|failed to fetch|load failed/i.test(raw)) return "Erreur réseau";
+        return `Erreur ${fallbackStatus}`;
+      };
+
+      window.fetch = async (...args) => {
+        try {
+          const response = await nativeFetch(...args);
+          if (!response.ok) showPublicError(`Erreur ${response.status}`);
+          return response;
+        } catch (error) {
+          if (!(error && error.name === "AbortError")) showPublicError("Erreur réseau");
+          throw error;
+        }
+      };
+    })();
+  </script>
+
+  <script>
+    (() => {
+      const banner = document.getElementById("globalUpdateBanner");
+      if (!banner) return;
+
+      const label = document.getElementById("globalUpdateLabel");
+      const detail = document.getElementById("globalUpdateDetail");
+      const progress = document.getElementById("globalUpdateProgress");
+      const progressBar = document.getElementById("globalUpdateProgressBar");
+      const percentLabel = document.getElementById("globalUpdatePercent");
+
+      const hideBanner = () => banner.classList.add("d-none");
+
+      const refreshUpdateBanner = async () => {
+        try {
+          const response = await fetch("/api/update-status", {
+            method: "GET",
+            headers: {"Accept": "application/json"},
+            credentials: "same-origin",
+            cache: "no-store",
+          });
+          if (!response.ok) {
+            hideBanner();
+            return;
+          }
+
+          const payload = await response.json();
+          if (!payload || !payload.running) {
+            hideBanner();
+            return;
+          }
+
+          label.textContent = payload.label || "EVEOSINT update running";
+          detail.textContent = payload.detail || "";
+
+          const percent = Number(payload.percent);
+          if (Number.isFinite(percent)) {
+            const bounded = Math.max(0, Math.min(100, percent));
+            progress.classList.remove("d-none");
+            percentLabel.classList.remove("d-none");
+            progressBar.style.width = `${bounded}%`;
+            percentLabel.textContent = `${bounded.toFixed(1)}%`;
+          } else {
+            progress.classList.add("d-none");
+            percentLabel.classList.add("d-none");
+            progressBar.style.width = "0%";
+            percentLabel.textContent = "";
+          }
+
+          banner.classList.remove("d-none");
+        } catch (error) {
+          hideBanner();
+        }
+      };
+
+      refreshUpdateBanner();
+      window.setInterval(refreshUpdateBanner, 5000);
+    })();
+  </script>
+
+  <script>
+    const sidebar = document.getElementById("contextSidebar");
+    const toggle = document.getElementById("contextToggle");
+
+    if (sidebar && toggle) {
+      const saved = localStorage.getItem("eveosint_context_sidebar_collapsed");
+
+      if (saved === "1") {
+        sidebar.classList.add("collapsed");
+      }
+
+      toggle.addEventListener("click", () => {
+        sidebar.classList.toggle("collapsed");
+        localStorage.setItem(
+          "eveosint_context_sidebar_collapsed",
+          sidebar.classList.contains("collapsed") ? "1" : "0"
+        );
+      });
+    }
+
+    document.addEventListener("DOMContentLoaded", () => {
+      const root = document.querySelector("[data-entity-search]");
+      if (!root) return;
+
+      const input = root.querySelector("[data-entity-search-input]");
+      const resultsBox = root.querySelector("[data-entity-search-results]");
+      if (!input || !resultsBox) return;
+
+      let debounceTimer = null;
+      let lastResults = [];
+      let selectedIndex = -1;
+      let lastQueryId = 0;
+
+      const escapeHtml = (value) => String(value ?? "")
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#039;");
+
+      const showBox = () => resultsBox.classList.add("show");
+      const hideBox = () => resultsBox.classList.remove("show");
+
+      const clearResults = () => {
+        lastResults = [];
+        selectedIndex = -1;
+        resultsBox.innerHTML = "";
+        hideBox();
+      };
+
+      const normalizeResults = (payload) => {
+        const raw = payload && Array.isArray(payload.results) ? payload.results : [];
+        return raw
+          .map((item) => ({
+            label: item.label || item.name || "Unknown",
+            subtitle: item.subtitle || item.entity_type || "Entity",
+            url: item.url || "",
+            image_url: item.image_url || "",
+            entity_type: item.entity_type || "entity",
+            section: item.section || String(item.entity_type || "ENTITY").toUpperCase(),
+          }))
+          .filter((item) => item.url);
+      };
+
+      const renderResults = (items) => {
+        lastResults = items || [];
+        selectedIndex = -1;
+
+        if (!lastResults.length) {
+          resultsBox.innerHTML = '<div class="px-3 py-2 muted-line small">No result</div>';
+          showBox();
+          return;
+        }
+
+        const groups = [];
+        const bySection = new Map();
+        lastResults.forEach((item, index) => {
+          if (!bySection.has(item.section)) {
+            const group = {section: item.section, items: []};
+            bySection.set(item.section, group);
+            groups.push(group);
+          }
+          bySection.get(item.section).items.push({item, index});
+        });
+
+        resultsBox.innerHTML = groups.map((group) => `
+          <section class="topbar-entity-search-section">
+            <div class="topbar-entity-search-section-title">${escapeHtml(group.section)}</div>
+            <div class="topbar-entity-search-grid">
+              ${group.items.map(({item, index}) => `
+                <a class="topbar-entity-search-result" href="${escapeHtml(item.url)}" data-index="${index}">
+                  ${item.image_url
+                    ? `<img src="${escapeHtml(item.image_url)}" alt="" loading="lazy" onerror="this.style.display='none'">`
+                    : `<span class="topbar-entity-search-fallback-icon ${escapeHtml(item.entity_type)}" aria-hidden="true"></span>`}
+                  <span class="topbar-entity-search-text">
+                    <span class="topbar-entity-search-name">${escapeHtml(item.label)}</span>
+                    <span class="topbar-entity-search-type">${escapeHtml(item.subtitle)}</span>
+                  </span>
+                </a>
+              `).join("")}
+            </div>
+          </section>
+        `).join("");
+
+        resultsBox.querySelectorAll(".topbar-entity-search-result").forEach((node) => {
+          node.addEventListener("mousedown", (event) => {
+            event.preventDefault();
+            window.location.href = node.getAttribute("href");
+          });
+        });
+
+        showBox();
+      };
+
+      const setActive = () => {
+        resultsBox.querySelectorAll(".topbar-entity-search-result").forEach((node, index) => {
+          node.classList.toggle("active", index === selectedIndex);
+        });
+      };
+
+      const searchEntities = async (limit) => {
+        const q = input.value.trim();
+        if (!q) {
+          clearResults();
+          return [];
+        }
+
+        const queryId = ++lastQueryId;
+        const url = `/api/entity-search?q=${encodeURIComponent(q)}&limit=${encodeURIComponent(limit)}&scope=global`;
+
+        try {
+          const response = await fetch(url, {
+            method: "GET",
+            headers: {"Accept": "application/json"},
+            credentials: "same-origin",
+            cache: "no-store",
+          });
+
+          if (queryId !== lastQueryId) return [];
+
+          const text = await response.text();
+          if (!response.ok) {
+            resultsBox.innerHTML = '<div class="px-3 py-2 text-danger small">Erreur 500</div>';
+            showBox();
+            return [];
+          }
+
+          let payload = {};
+          try {
+            payload = JSON.parse(text || "{}");
+          } catch (error) {
+            resultsBox.innerHTML = '<div class="px-3 py-2 text-danger small">Erreur 500</div>';
+            showBox();
+            return [];
+          }
+
+          const items = normalizeResults(payload);
+          return items;
+        } catch (error) {
+          if (queryId !== lastQueryId) return [];
+          resultsBox.innerHTML = '<div class="px-3 py-2 text-danger small">Erreur 500</div>';
+          showBox();
+          return [];
+        }
+      };
+
+      const refreshSuggestions = async () => {
+        const items = await searchEntities(6);
+        renderResults(items);
+      };
+
+      const scheduleSuggestions = () => {
+        window.clearTimeout(debounceTimer);
+        if (!input.value.trim()) {
+          clearResults();
+          return;
+        }
+        debounceTimer = window.setTimeout(refreshSuggestions, 250);
+      };
+
+      const goToSelectedOrFirst = async () => {
+        window.clearTimeout(debounceTimer);
+
+        if (lastResults.length) {
+          const index = selectedIndex >= 0 ? selectedIndex : 0;
+          window.location.href = lastResults[index].url;
+          return;
+        }
+
+        const items = await searchEntities(1);
+        if (items.length) {
+          window.location.href = items[0].url;
+          return;
+        }
+        renderResults([]);
+      };
+
+      input.addEventListener("input", scheduleSuggestions);
+      input.addEventListener("focus", () => {
+        if (lastResults.length) showBox();
+        else if (input.value.trim()) scheduleSuggestions();
+      });
+
+      input.addEventListener("keydown", (event) => {
+        if (event.key === "Escape") {
+          clearResults();
+          return;
+        }
+        if (event.key === "ArrowDown") {
+          if (!lastResults.length) return;
+          event.preventDefault();
+          selectedIndex = Math.min(selectedIndex + 1, lastResults.length - 1);
+          setActive();
+          return;
+        }
+        if (event.key === "ArrowUp") {
+          if (!lastResults.length) return;
+          event.preventDefault();
+          selectedIndex = Math.max(selectedIndex - 1, 0);
+          setActive();
+          return;
+        }
+        if (event.key === "Enter") {
+          event.preventDefault();
+          goToSelectedOrFirst();
+        }
+      });
+
+      document.addEventListener("click", (event) => {
+        if (!root.contains(event.target)) hideBox();
+      });
+    });
+  </script>
+</body>
+</html>

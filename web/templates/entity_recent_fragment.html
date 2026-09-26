@@ -1,0 +1,443 @@
+{% set ship_filter_base_url = ship_filter_base_url | default("/ship-category?", true) %}
+{% set category_pilot_counts = category_pilot_counts | default({}, true) %}
+{% macro pilot_count_suffix(scope, value) -%}
+{% if category_pilot_counts and category_pilot_counts.get(scope) and category_pilot_counts.get(scope).get(value) is not none %} <span class="muted-line">({{ category_pilot_counts.get(scope).get(value) }})</span>{% endif %}
+{%- endmacro %}
+{% if recent_entities_error %}
+  <div class="alert alert-danger py-2">{{ recent_entities_error }}</div>
+{% elif recent_entities %}
+  {% if entity_index.entity_type == "ship" %}
+    <style>
+      .ship-tree-tabs {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.45rem;
+        margin-bottom: 1rem;
+      }
+      .ship-tree-tab {
+        border: 1px solid rgba(148, 163, 184, 0.22);
+        background: rgba(15, 23, 42, 0.72);
+        color: #cbd5e1;
+        border-radius: 999px;
+        padding: 0.25rem;
+        font-weight: 700;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 44px;
+        height: 44px;
+      }
+      .ship-tree-faction-logo {
+        width: 34px;
+        height: 34px;
+        border-radius: 50%;
+        object-fit: cover;
+        background: rgba(255,255,255,0.06);
+      }
+      .ship-tree-faction-fallback {
+        display: none;
+      }
+      .ship-tree-tab:hover,
+      .ship-tree-tab.active {
+        color: #fff;
+        background: rgba(13, 110, 253, 0.30);
+        border-color: rgba(13, 110, 253, 0.45);
+      }
+      .ship-tree-faction {
+        display: none;
+        border: 1px solid rgba(148, 163, 184, 0.16);
+        border-radius: 18px;
+        background: rgba(15, 23, 42, 0.55);
+        padding: 1rem;
+        margin-bottom: 1rem;
+      }
+      .ship-tree-faction.active {
+        display: block;
+      }
+      .ship-tree-faction-title {
+        font-weight: 800;
+        font-size: 1.05rem;
+        margin-bottom: 0.85rem;
+      }
+      .ship-tree-row-title {
+        margin: 1rem 0 0.75rem;
+        padding: 0.45rem 0.65rem;
+        border: 1px solid rgba(13, 110, 253, 0.35);
+        border-radius: 12px;
+        background: rgba(13, 110, 253, 0.12);
+        color: #dbeafe;
+        font-weight: 900;
+        text-align: center;
+        text-transform: uppercase;
+        letter-spacing: .04em;
+      }
+      .ship-tree-size-blocks {
+        display: flex;
+        gap: 1rem;
+        width: 100%;
+        overflow-x: auto;
+        padding-bottom: 0.75rem;
+      }
+      .ship-tree-size-block {
+        min-width: 280px;
+        flex: 1 0 280px;
+        border: 1px solid rgba(13, 110, 253, 0.25);
+        border-radius: 16px;
+        background: rgba(13, 110, 253, 0.055);
+        overflow: hidden;
+      }
+      .ship-tree-size-block[data-size-label="S"] {
+        border-color: rgba(34, 197, 94, 0.48);
+      }
+      .ship-tree-size-block[data-size-label="M"] {
+        border-color: rgba(234, 179, 8, 0.48);
+      }
+      .ship-tree-size-block[data-size-label="L"] {
+        border-color: rgba(249, 115, 22, 0.48);
+      }
+      .ship-tree-size-block[data-size-label="XL"] {
+        border-color: rgba(239, 68, 68, 0.48);
+      }
+      .ship-tree-size-block-header {
+        padding: 0.55rem 0.75rem;
+        text-align: center;
+        font-weight: 900;
+        font-size: 1.05rem;
+        border-bottom: 1px solid rgba(148, 163, 184, 0.18);
+        background: rgba(15, 23, 42, 0.72);
+      }
+      .ship-tree-size-block-header small {
+        display: block;
+        color: #cbd5e1;
+        font-size: 0.72rem;
+        font-weight: 700;
+        margin-top: 0.1rem;
+      }
+      .ship-tree-size-inner {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+        gap: 0.35rem;
+        padding: 0.35rem;
+      }
+      .ship-tree-size {
+        min-width: 0;
+        border: 1px solid rgba(148, 163, 184, 0.12);
+        border-radius: 10px;
+        background: rgba(2, 6, 23, 0.34);
+        padding: 0.65rem;
+      }
+      .ship-tree-size-title {
+        color: #cbd5e1;
+        font-weight: 900;
+        margin-bottom: 0.55rem;
+      }
+      .ship-tree-title-link {
+        color: inherit;
+        text-decoration: none;
+      }
+      .ship-tree-title-link:hover {
+        color: #7cc7ff;
+        text-decoration: underline;
+      }
+      .ship-filter-title {
+        margin-bottom: 1rem;
+        color: #dbeafe;
+        font-weight: 900;
+      }
+      .ship-filter-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+        gap: 0.55rem;
+      }
+      .ship-filter-card {
+        border: 1px solid rgba(148, 163, 184, 0.14);
+        border-radius: 12px;
+        background: rgba(2, 6, 23, 0.34);
+        padding: 0.65rem;
+      }
+      .ship-filter-main {
+        display: flex;
+        align-items: center;
+        gap: 0.45rem;
+      }
+      .ship-filter-faction-link {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 28px;
+        height: 28px;
+        border-radius: 50%;
+        overflow: hidden;
+        background: rgba(255,255,255,0.06);
+        flex: 0 0 auto;
+      }
+      .ship-filter-faction-icon {
+        width: 28px;
+        height: 28px;
+        border-radius: 50%;
+        object-fit: cover;
+      }
+      .ship-filter-meta {
+        color: #94a3b8;
+        font-size: 0.75rem;
+        margin-top: 0.25rem;
+      }
+      .ship-tree-tier {
+        margin-top: 0.55rem;
+      }
+      .ship-tree-tier-title {
+        color: #94a3b8;
+        font-size: 0.76rem;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: .04em;
+        margin-bottom: 0.35rem;
+      }
+      .ship-tree-subgroup-title {
+        color: #cbd5e1;
+        font-size: 0.74rem;
+        font-weight: 700;
+        margin: 0.45rem 0 0.25rem;
+        padding-left: 0.15rem;
+        border-left: 2px solid rgba(13, 110, 253, 0.55);
+      }
+      .ship-tree-list {
+        display: flex;
+        flex-direction: column;
+        gap: 0.25rem;
+      }
+      .ship-tree-link {
+        color: #7cc7ff;
+        display: inline-flex;
+        align-items: center;
+        gap: 0.4rem;
+        text-decoration: none;
+        min-height: 30px;
+      }
+      .ship-tree-link:hover {
+        color: #b9e3ff;
+        text-decoration: underline;
+      }
+      .ship-tree-icon {
+        width: 28px;
+        height: 28px;
+        border-radius: 0.35rem;
+        object-fit: cover;
+        background: rgba(255,255,255,0.06);
+      }
+    </style>
+
+    {% if entity_index.ship_filter_label %}
+      <div class="ship-filter-title">
+        {{ entity_index.ship_filter_label }} ships{% if entity_index.ship_filter_pilot_count is defined and entity_index.ship_filter_pilot_count is not none %} <span class="muted-line">({{ entity_index.ship_filter_pilot_count }} pilots)</span>{% endif %}
+      </div>
+
+      <div class="ship-filter-grid">
+        {% for entity in recent_entities %}
+          <div class="ship-filter-card">
+            <div class="ship-filter-main">
+              {% if entity.faction_logo_url %}
+                <a class="ship-filter-faction-link" href="{{ ship_filter_base_url }}faction={{ entity.faction_name|urlencode }}" title="{{ entity.faction_name or 'Other' }}" aria-label="{{ entity.faction_name or 'Other' }}">
+                  <img class="ship-filter-faction-icon" src="{{ entity.faction_logo_url }}" alt="{{ entity.faction_name or 'Other' }}" loading="lazy" onerror="this.style.display='none'">
+                </a>
+              {% endif %}
+
+              <a class="ship-tree-link" href="{{ entity.url }}">
+                {% if entity.image_url %}
+                  <img class="ship-tree-icon" src="{{ entity.image_url }}" alt="" loading="lazy" onerror="this.style.display='none'">
+                {% endif %}
+                <span>{{ entity.name }}{% if entity.pilot_count is defined %} <span class="muted-line">({{ entity.pilot_count }})</span>{% endif %}</span>
+              </a>
+            </div>
+            <div class="ship-filter-meta">
+              {{ entity.faction_name or "Other" }}
+              {% if entity.ship_display_size %} · <a class="ship-tree-title-link" href="{{ ship_filter_base_url }}size={{ entity.ship_display_size|urlencode }}">{{ entity.ship_display_size }}</a>{% endif %}
+              {% if entity.ship_tier %} · <a class="ship-tree-title-link" href="{{ ship_filter_base_url }}tier={{ entity.ship_tier|urlencode }}">{{ entity.ship_tier }}</a>{% endif %}
+              {% if entity.ship_size %} · <a class="ship-tree-title-link" href="{{ ship_filter_base_url }}group={{ entity.ship_size|urlencode }}">{{ entity.ship_size }}</a>{% endif %}
+              {% if entity.group_name %} · {{ entity.group_name }}{% endif %}
+            </div>
+          </div>
+        {% endfor %}
+      </div>
+
+    {% else %}
+
+    {% set factions = [] %}
+    {% for entity in recent_entities %}
+      {% if entity.faction_name not in factions %}
+        {% set _ = factions.append(entity.faction_name) %}
+      {% endif %}
+    {% endfor %}
+
+    <div class="ship-tree-tabs" data-ship-tree-tabs>
+      {% for faction in factions %}
+        {% set ns = namespace(faction_logo_url=none) %}
+        {% for entity in recent_entities %}
+          {% if entity.faction_name == faction and entity.faction_logo_url and ns.faction_logo_url is none %}
+            {% set ns.faction_logo_url = entity.faction_logo_url %}
+          {% endif %}
+        {% endfor %}
+        <button
+          type="button"
+          class="ship-tree-tab {% if loop.first %}active{% endif %}"
+          data-ship-faction-tab="{{ loop.index0 }}"
+          title="{{ faction or 'Other' }}"
+          aria-label="{{ faction or 'Other' }}">
+          {% if ns.faction_logo_url %}
+            <img class="ship-tree-faction-logo" src="{{ ns.faction_logo_url }}" alt="{{ faction or 'Other' }}" loading="lazy" onerror="this.style.visibility='hidden';">
+          {% endif %}
+        </button>
+      {% endfor %}
+    </div>
+
+    {% for faction in factions %}
+      <section class="ship-tree-faction {% if loop.first %}active{% endif %}" data-ship-faction-panel="{{ loop.index0 }}">
+        <div class="ship-tree-faction-title">
+          <a class="ship-tree-title-link" href="{{ ship_filter_base_url }}faction={{ faction|urlencode }}">{{ faction or "Other" }}{{ pilot_count_suffix('faction', faction or 'Other') }}</a>
+        </div>
+
+        {% set combat_sizes = [] %}
+        {% set industrial_sizes = [] %}
+
+        {% for entity in recent_entities %}
+          {% if entity.faction_name == faction %}
+            {% if entity.ship_tree_row == "industrial" %}
+              {% if entity.ship_size not in industrial_sizes %}
+                {% set _ = industrial_sizes.append(entity.ship_size) %}
+              {% endif %}
+            {% else %}
+              {% if entity.ship_size not in combat_sizes %}
+                {% set _ = combat_sizes.append(entity.ship_size) %}
+              {% endif %}
+            {% endif %}
+          {% endif %}
+        {% endfor %}
+
+        {% for row_name, row_sizes in [("Combat", combat_sizes), ("Industrial / Hauler / Capital Industrial", industrial_sizes)] %}
+          {% if row_sizes %}
+            <div class="ship-tree-row-title">{{ row_name }}</div>
+
+            <div class="ship-tree-size-blocks">
+              {% for size_label in ["S", "M", "L", "XL", "UNKNOWN SIZE"] %}
+                {% set label_sizes = [] %}
+                {% for size in row_sizes %}
+                  {% for entity in recent_entities %}
+                    {% if entity.faction_name == faction and entity.ship_size == size and (entity.ship_display_size or "UNKNOWN SIZE") == size_label and size not in label_sizes %}
+                      {% set _ = label_sizes.append(size) %}
+                    {% endif %}
+                  {% endfor %}
+                {% endfor %}
+
+                {% if label_sizes %}
+                  <div class="ship-tree-size-block" data-size-label="{{ size_label }}">
+                    <div class="ship-tree-size-block-header">
+                      <a class="ship-tree-title-link" href="{{ ship_filter_base_url }}size={{ size_label|urlencode }}">{{ size_label }}{{ pilot_count_suffix('ship_display_size', size_label) }}</a>
+                      {% if size_label == "S" %}
+                        <small>Small</small>
+                      {% elif size_label == "M" %}
+                        <small>Medium</small>
+                      {% elif size_label == "L" %}
+                        <small>Large</small>
+                      {% elif size_label == "XL" %}
+                        <small>Extra Large</small>
+                      {% else %}
+                        <small>Unknown Size</small>
+                      {% endif %}
+                    </div>
+
+                    <div class="ship-tree-size-inner">
+                      {% for size in label_sizes %}
+                        <div class="ship-tree-size">
+                          <div class="ship-tree-size-title"><a class="ship-tree-title-link" href="{{ ship_filter_base_url }}group={{ size|urlencode }}">{{ size }}{{ pilot_count_suffix('filter_group', size) }}</a></div>
+
+                          {% set tiers = [] %}
+                          {% for entity in recent_entities %}
+                            {% if entity.faction_name == faction and entity.ship_size == size and (entity.ship_display_size or "UNKNOWN SIZE") == size_label and entity.ship_tier not in tiers %}
+                              {% set _ = tiers.append(entity.ship_tier) %}
+                            {% endif %}
+                          {% endfor %}
+
+                          {% for tier in tiers %}
+                            <div class="ship-tree-tier">
+                              <div class="ship-tree-tier-title"><a class="ship-tree-title-link" href="{{ ship_filter_base_url }}tier={{ tier|urlencode }}">{{ tier }}{{ pilot_count_suffix('ship_tier', tier) }}</a></div>
+
+                              {% set groups = [] %}
+                              {% for entity in recent_entities %}
+                                {% if entity.faction_name == faction and entity.ship_size == size and (entity.ship_display_size or "UNKNOWN SIZE") == size_label and entity.ship_tier == tier and entity.group_name not in groups %}
+                                  {% set _ = groups.append(entity.group_name) %}
+                                {% endif %}
+                              {% endfor %}
+
+                              {% for group in groups %}
+                                <div class="ship-tree-subgroup-title"><a class="ship-tree-title-link" href="{{ ship_filter_base_url }}group={{ group|urlencode }}">{{ group or "Other" }}{{ pilot_count_suffix('filter_group', group or 'Other') }}</a></div>
+
+                                <div class="ship-tree-list">
+                                  {% for entity in recent_entities %}
+                                    {% if entity.faction_name == faction and entity.ship_size == size and (entity.ship_display_size or "UNKNOWN SIZE") == size_label and entity.ship_tier == tier and entity.group_name == group %}
+                                      <a class="ship-tree-link" href="{{ entity.url }}">
+                                        {% if entity.image_url %}
+                                          <img class="ship-tree-icon" src="{{ entity.image_url }}" alt="" loading="lazy" onerror="this.style.display='none'">
+                                        {% endif %}
+                                        <span>{{ entity.name }}{% if entity.pilot_count is defined %} <span class="muted-line">({{ entity.pilot_count }})</span>{% endif %}</span>
+                                      </a>
+                                    {% endif %}
+                                  {% endfor %}
+                                </div>
+                              {% endfor %}
+                            </div>
+                          {% endfor %}
+                        </div>
+                      {% endfor %}
+                    </div>
+                  </div>
+                {% endif %}
+              {% endfor %}
+            </div>
+          {% endif %}
+        {% endfor %}
+      </section>
+    {% endfor %}
+
+    {% endif %}
+
+  {% else %}
+    <div class="table-responsive">
+      <table class="table table-dark table-hover align-middle mb-0">
+        <thead>
+          <tr>
+            <th>Entity</th>
+            {% if entity_index.entity_type == "constellation" %}
+              <th>Region</th>
+            {% elif entity_index.entity_type == "system" %}
+              <th>Constellation</th>
+              <th>Region</th>
+            {% endif %}
+          </tr>
+        </thead>
+        <tbody>
+          {% for entity in recent_entities %}
+            <tr>
+              <td>
+                <a class="text-decoration-none fw-semibold d-inline-flex align-items-center gap-2" href="{{ entity.url }}">
+                  {% if entity.image_url %}
+                    <img src="{{ entity.image_url }}" alt="" loading="lazy" onerror="this.style.display='none'" style="width:32px;height:32px;border-radius:50%;object-fit:cover;background:rgba(255,255,255,0.06);">
+                  {% endif %}
+                  <span>{{ entity.name }}{% if entity.pilot_count is defined %} <span class="muted-line">({{ entity.pilot_count }})</span>{% endif %}</span>
+                  {% if entity.ticker %}<span class="muted-line">[{{ entity.ticker }}]</span>{% endif %}
+                </a>
+              </td>
+              {% if entity_index.entity_type == "constellation" %}
+                <td class="muted-line">{{ entity.region_name or "-" }}</td>
+              {% elif entity_index.entity_type == "system" %}
+                <td class="muted-line">{{ entity.group_name or "-" }}</td>
+                <td class="muted-line">{{ entity.region_name or "-" }}</td>
+              {% endif %}
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% endif %}
+{% else %}
+  <div class="muted-line">Under construction.</div>
+{% endif %}

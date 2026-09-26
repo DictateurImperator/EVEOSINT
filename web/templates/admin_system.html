@@ -1,0 +1,186 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-start mb-4">
+  <div>
+    <h1 class="h3 fw-bold mb-1">System</h1>
+    <div class="muted-line">État serveur et application.</div>
+  </div>
+</div>
+
+<div class="row g-4">
+  <div class="col-12 col-xl-4">
+    <section class="content-card p-3 p-md-4 h-100">
+      <h2 class="h5 mb-3">Uptime</h2>
+      <div>{{ system.uptime }}</div>
+    </section>
+  </div>
+
+  <div class="col-12 col-xl-4">
+    <section class="content-card p-3 p-md-4 h-100">
+      <h2 class="h5 mb-3">Disque /</h2>
+      <div class="mb-2">Utilisé : {{ system.disk.used_gb }} Go / {{ system.disk.total_gb }} Go</div>
+      <div class="progress" role="progressbar" aria-label="Disk usage">
+        <div class="progress-bar" style="width: {{ system.disk.percent }}%">{{ system.disk.percent }}%</div>
+      </div>
+      <div class="muted-line mt-2">Libre : {{ system.disk.free_gb }} Go</div>
+    </section>
+  </div>
+
+  <div class="col-12 col-xl-4">
+    <section class="content-card p-3 p-md-4 h-100">
+      <h2 class="h5 mb-3">DB size</h2>
+      <div>{{ system.db_size.pretty }}</div>
+    </section>
+  </div>
+</div>
+
+<section class="content-card p-3 p-md-4 mt-4">
+  <div class="d-flex justify-content-between align-items-start mb-3">
+    <div>
+      <h2 class="h5 mb-1">Réseau serveur live</h2>
+      <div class="muted-line small">Débit instantané mesuré sur {{ system.network_live.interval_seconds }} seconde.</div>
+    </div>
+  </div>
+
+  <div class="row g-3 mb-3">
+    <div class="col-12 col-md-3">
+      <div class="border border-secondary-subtle rounded-3 p-3 h-100">
+        <div class="muted-line small mb-1">Entrant actuel</div>
+        <div class="fw-semibold">{{ system.network_live.rx_rate_pretty }}</div>
+      </div>
+    </div>
+
+    <div class="col-12 col-md-3">
+      <div class="border border-secondary-subtle rounded-3 p-3 h-100">
+        <div class="muted-line small mb-1">Sortant actuel</div>
+        <div class="fw-semibold">{{ system.network_live.tx_rate_pretty }}</div>
+      </div>
+    </div>
+
+    <div class="col-12 col-md-3">
+      <div class="border border-secondary-subtle rounded-3 p-3 h-100">
+        <div class="muted-line small mb-1">Entrant total depuis boot</div>
+        <div class="fw-semibold">{{ system.network_live.rx_total_pretty }}</div>
+      </div>
+    </div>
+
+    <div class="col-12 col-md-3">
+      <div class="border border-secondary-subtle rounded-3 p-3 h-100">
+        <div class="muted-line small mb-1">Sortant total depuis boot</div>
+        <div class="fw-semibold">{{ system.network_live.tx_total_pretty }}</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="table-responsive">
+    <table class="table table-dark table-hover align-middle mb-0">
+      <thead>
+        <tr>
+          <th>Interface</th>
+          <th>Sortant actuel</th>
+          <th>Entrant actuel</th>
+          <th>Sortant total</th>
+          <th>Entrant total</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for interface in system.network_live.interfaces %}
+          <tr>
+            <td class="fw-semibold">{{ interface.name }}</td>
+            <td>{{ interface.rx_rate_pretty }}</td>
+            <td>{{ interface.tx_rate_pretty }}</td>
+            <td>{{ interface.rx_total_pretty }}</td>
+            <td>{{ interface.tx_total_pretty }}</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section class="content-card p-3 p-md-4 mt-4">
+  <div class="d-flex justify-content-between align-items-start mb-3">
+    <div>
+      <h2 class="h5 mb-1">Trafic HTTP Nginx</h2>
+      <div class="muted-line small">Volume HTTP servi par Nginx, pas le trafic réseau total.</div>
+    </div>
+  </div>
+
+  <div class="table-responsive">
+    <table class="table table-dark table-hover align-middle mb-0">
+      <thead>
+        <tr>
+          <th>Période</th>
+          <th>Requêtes</th>
+          <th>Total</th>
+          <th>Moyenne</th>
+          <th>Pic</th>
+          <th>Fenêtre pic</th>
+          <th>Top IP</th>
+          <th>Top IP volume</th>
+          <th>Top user</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for period in system.bandwidth.periods %}
+          <tr>
+            <td class="fw-semibold">{{ period.label }}</td>
+            <td>{{ period.requests }}</td>
+            <td>{{ period.total_pretty }}</td>
+            <td>{{ period.avg_rate_pretty }}</td>
+            <td>{{ period.peak_rate_pretty }}</td>
+            <td>{{ period.peak_window }}</td>
+            <td>{{ period.top_ip }}</td>
+            <td>{{ period.top_ip_pretty }}</td>
+            <td class="muted-line">{{ period.top_user }}</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  <div class="muted-line small mt-3">
+    {{ system.bandwidth.note }}
+  </div>
+</section>
+
+<section class="content-card p-3 p-md-4 mt-4">
+  <h2 class="h5 mb-3">Services</h2>
+
+  <div class="table-responsive">
+    <table class="table table-dark table-hover align-middle mb-0">
+      <thead>
+        <tr>
+          <th>Service</th>
+          <th>Load</th>
+          <th>Active</th>
+          <th>Sub</th>
+          <th>PID</th>
+          <th>Started</th>
+          <th>Erreur</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for svc in system.services %}
+          <tr>
+            <td class="fw-semibold">{{ svc.name }}</td>
+            <td>{{ svc.load_state or "-" }}</td>
+            <td>
+              {% if svc.active_state == "active" %}
+                <span class="badge text-bg-success">active</span>
+              {% else %}
+                <span class="badge text-bg-secondary">{{ svc.active_state or "unknown" }}</span>
+              {% endif %}
+            </td>
+            <td>{{ svc.sub_state or "-" }}</td>
+            <td>{{ svc.main_pid or "-" }}</td>
+            <td>{{ svc.started_at or "-" }}</td>
+            <td class="small muted-line">{{ svc.error or "" }}</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endblock %}

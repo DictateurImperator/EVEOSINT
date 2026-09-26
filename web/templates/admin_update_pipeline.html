@@ -1,0 +1,331 @@
+{% extends "base.html" %}
+
+{% block content %}
+<style>
+  .pipeline-grid { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:12px; }
+  .pipeline-stat { background:rgba(255,255,255,.035); border:1px solid rgba(255,255,255,.08); border-radius:10px; padding:14px; }
+  .pipeline-stat .value { font-size:1.05rem; font-weight:700; }
+  .pipeline-step { display:grid; grid-template-columns:38px minmax(0,1fr) 110px 110px; gap:12px; align-items:center; padding:11px 0; border-bottom:1px solid rgba(255,255,255,.07); }
+  .pipeline-step:last-child { border-bottom:0; }
+  .pipeline-num { width:30px; height:30px; border-radius:50%; display:flex; align-items:center; justify-content:center; background:rgba(255,255,255,.06); font-size:.8rem; }
+  .pipeline-command { color:#8f9aab; font-size:.75rem; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .log-viewer { height:520px; overflow:auto; margin:0; padding:14px; border:1px solid rgba(255,255,255,.10); border-radius:8px; background:#080b10; color:#d8dee9; font-size:.78rem; line-height:1.5; white-space:pre-wrap; word-break:break-word; }
+  .history-table td, .history-table th { vertical-align:middle; }
+  .run-summary { display:flex; flex-wrap:wrap; gap:8px; margin:12px 0 4px; }
+  .run-summary-item { min-width:150px; background:rgba(255,255,255,.035); border:1px solid rgba(255,255,255,.08); border-radius:8px; padding:8px 10px; }
+  .run-summary-item .metric-value { font-size:1rem; font-weight:700; }
+  .step-metrics { display:flex; flex-wrap:wrap; gap:6px; margin-top:7px; }
+  .metric-pill { display:inline-flex; gap:5px; align-items:center; padding:3px 7px; border-radius:999px; background:rgba(95,170,255,.08); border:1px solid rgba(95,170,255,.16); color:#b9c6d8; font-size:.72rem; }
+  .metric-pill strong { color:#f1f5f9; font-weight:700; }
+  @media (max-width: 1100px) { .pipeline-grid { grid-template-columns:repeat(2,minmax(0,1fr)); } .pipeline-step { grid-template-columns:38px minmax(0,1fr) 100px; } .pipeline-step .step-time { display:none; } }
+  @media (max-width: 700px) { .pipeline-grid { grid-template-columns:1fr; } .pipeline-step { grid-template-columns:34px minmax(0,1fr); } .pipeline-step .step-status, .pipeline-step .step-time { grid-column:2; } }
+</style>
+
+<div class="d-flex flex-wrap justify-content-between align-items-start gap-3 mb-4">
+  <div>
+    <h1 class="h3 fw-bold mb-1">Update Pipeline</h1>
+    <div class="muted-line">Unified update pipeline and live logs.</div>
+  </div>
+  {% if can_run %}
+  <div class="d-flex gap-2">
+    <form method="post" action="/admin/update-pipeline/run/weekly">
+      <button class="btn btn-outline-light" type="submit" {% if pipeline.running %}disabled{% endif %}>Run update now</button>
+    </form>
+  </div>
+  {% endif %}
+</div>
+
+{% if error %}
+<div class="alert alert-danger py-2">
+  {% if error == 'already_running' %}Pipeline already running.{% else %}Pipeline could not be started.{% endif %}
+</div>
+{% endif %}
+{% if success %}
+<div class="alert alert-success py-2">Pipeline started.</div>
+{% endif %}
+
+<section class="content-card p-3 p-md-4 mb-4">
+  <div class="pipeline-grid">
+    <div class="pipeline-stat"><div class="muted-line small">Pipeline</div><div id="statStatus" class="value">{{ pipeline.pipeline_status or 'idle' }}</div></div>
+    <div class="pipeline-stat"><div class="muted-line small">Current step</div><div id="statCurrent" class="value">{{ pipeline.current_step or '-' }}</div></div>
+    <div class="pipeline-stat"><div class="muted-line small">Next scheduled run</div><div id="statNext" class="value">{{ pipeline.timer.next_run or 'not installed' }}</div></div>
+    <div class="pipeline-stat"><div class="muted-line small">Timer</div><div id="statTimer" class="value">{% if pipeline.timer.active %}active{% else %}inactive{% endif %}</div></div>
+  </div>
+  <div class="small muted-line mt-3">
+    Every day at 15:30 Europe/Paris · unified pipeline: SDE, SuperINTEL, skills, 30-year affiliation refresh, entity audit and pilotable ships refresh.
+  </div>
+</section>
+
+<section class="content-card p-3 p-md-4 mb-4">
+  <div class="d-flex justify-content-between align-items-center mb-2">
+    <div>
+      <h2 class="h5 mb-1">Current / latest run</h2>
+      <div id="runMeta" class="muted-line small">{{ pipeline.run_id or 'No run yet' }}</div>
+    </div>
+    <div id="runDuration" class="muted-line small">{% if pipeline.duration_seconds is not none %}{{ pipeline.duration_seconds }}s{% endif %}</div>
+  </div>
+  <div id="runSummary" class="run-summary"></div>
+  <div id="stepsContainer"></div>
+</section>
+
+<section class="content-card p-3 p-md-4 mb-4">
+  <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
+    <div>
+      <h2 class="h5 mb-1">Pipeline log</h2>
+      <div class="muted-line small">Readable combined log for the selected run.</div>
+    </div>
+    <div class="d-flex flex-wrap gap-2 align-items-center">
+      <select id="logRun" class="form-select form-select-sm" style="width:auto">
+        <option value="">Current / latest</option>
+        {% for item in pipeline.history %}
+          <option value="{{ item.run_id }}">{{ item.run_id }} · {{ item.pipeline_status }}</option>
+        {% endfor %}
+      </select>
+      <select id="logFilter" class="form-select form-select-sm" style="width:auto">
+        <option value="all">All</option>
+        <option value="sync_sde">SDE</option>
+        <option value="superintel">SuperINTEL</option>
+        <option value="character_skill_inference">Skills</option>
+        <option value="affiliation">Affiliation</option>
+        <option value="pilotable">Pilotable</option>
+        <option value="weekly">Weekly</option>
+      </select>
+      <label class="small muted-line d-flex gap-1 align-items-center"><input id="autoScroll" type="checkbox" checked> Auto-scroll</label>
+      <button id="refreshLog" type="button" class="btn btn-sm btn-outline-light">Refresh</button>
+    </div>
+  </div>
+  <pre id="logViewer" class="log-viewer">Loading…</pre>
+</section>
+
+<section class="content-card p-3 p-md-4">
+  <h2 class="h5 mb-3">Recent runs</h2>
+  <div class="table-responsive">
+    <table class="table table-dark table-hover align-middle history-table mb-0">
+      <thead><tr><th>Run</th><th>Mode</th><th>Status</th><th>Started</th><th>Duration</th><th>Failed step</th><th></th></tr></thead>
+      <tbody id="historyBody"></tbody>
+    </table>
+  </div>
+</section>
+
+<script>
+const initialPipeline = {{ pipeline | tojson }};
+let currentState = initialPipeline;
+let rawLog = '';
+
+function esc(value) {
+  return String(value ?? '').replace(/[&<>'"]/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[ch]));
+}
+function badge(status) {
+  const map = {done:'success',running:'warning',failed:'danger',waiting:'secondary',blocked:'secondary',skipped:'info'};
+  return `<span class="badge text-bg-${map[status] || 'secondary'}">${esc(status || 'waiting')}</span>`;
+}
+function fmtDuration(value) {
+  if (value === null || value === undefined || value === '') return '-';
+  const seconds = Number(value);
+  if (!Number.isFinite(seconds)) return '-';
+  if (seconds < 60) return `${seconds.toFixed(1)}s`;
+  const minutes = Math.floor(seconds / 60);
+  return `${minutes}m ${Math.round(seconds % 60)}s`;
+}
+function stepPrefix(group) {
+  return group === 'superintel' ? '↳' : group === 'weekly' ? 'W' : '';
+}
+const metricLabels = {
+  sde_build: 'SDE build',
+  sde_already_current: 'Already current',
+  sde_tables_done: 'SDE tables done',
+  sde_tables_total: 'SDE tables total',
+  killmail_days_loaded: 'Days loaded',
+  killmail_days_skipped: 'Days skipped',
+  killmail_days_missing: 'Days missing',
+  killmails_scanned: 'KM scanned',
+  victim_events_inserted: 'Victim events',
+  attacker_events_inserted: 'Attacker events',
+  events_inserted: 'Events inserted',
+  super_killmails: 'Super KM',
+  super_pilots_upserted: 'Super pilots upserted',
+  last_activity_upserted: 'Last activity upserted',
+  ship_sessions_upserted: 'Ship sessions upserted',
+  recent_pilots: 'Pilots in period',
+  source_pilots: 'Pilots checked',
+  new_pilots_pending: 'New pilots detected',
+  public_characters_processed: 'New pilots processed',
+  public_characters_total: 'New pilots total',
+  new_pilots: 'New pilots',
+  affiliation_candidates: 'Affiliation candidates',
+  affiliation_batches_processed: 'Affiliation batches done',
+  affiliation_batches_total: 'Affiliation batches total',
+  initial_histories_processed: 'Initial histories done',
+  initial_histories_total: 'Initial histories total',
+  character_histories_processed: 'Target histories done',
+  character_histories_total: 'Target histories total',
+  deleted_pilots: 'Deleted pilots',
+  pilot_affiliation_changes: 'Affiliation changes',
+  new_character_histories: 'New histories',
+  character_histories_refreshed: 'Histories refreshed',
+  new_corporations: 'New corporations',
+  deleted_corporations: 'Deleted corporations',
+  corporation_histories_queued: 'Corp histories queued',
+  corporation_histories_refreshed: 'Corp histories refreshed',
+  new_alliances: 'New alliances',
+  deleted_alliances: 'Deleted alliances',
+  api_failures: 'API failures',
+  current_period: 'Current period',
+  current_phase: 'Current phase',
+  skill_killmails_processed: 'Skill KM processed',
+  pilotable_processed: 'Pilotable processed',
+  pilotable_total: 'Pilotable total',
+  pilotable_upserted: 'Pilotable upserted',
+  reports_character: 'Character reports',
+  reports_corporation: 'Corporation reports',
+  reports_alliance: 'Alliance reports',
+  history_corporations: 'History corporations',
+  unknown_corporations: 'Unknown corporations',
+  history_alliances: 'History alliances',
+  unknown_alliances: 'Unknown alliances',
+  corporation_profiles_processed: 'Corporation profiles processed',
+  corporation_profiles_total: 'Corporation profiles total',
+  corporation_histories_processed: 'Corporation histories processed',
+  corporation_histories_total: 'Corporation histories total',
+  alliance_profiles_processed: 'Alliance profiles processed',
+  alliance_profiles_total: 'Alliance profiles total'
+};
+const metricOrder = Object.keys(metricLabels);
+const summaryOrder = [
+  'killmails_scanned', 'events_inserted', 'new_pilots', 'pilot_affiliation_changes',
+  'new_character_histories', 'character_histories_refreshed', 'skill_killmails_processed',
+  'new_corporations', 'new_alliances', 'pilotable_processed', 'api_failures'
+];
+function fmtMetric(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return esc(value);
+  return new Intl.NumberFormat('en-US').format(n);
+}
+function renderMetricPills(metrics) {
+  const source = metrics || {};
+  return metricOrder.filter(key => source[key] !== undefined && source[key] !== null).map(key => {
+    let value = source[key];
+    if (key === 'sde_already_current') value = Number(value) ? 'yes' : 'no';
+    else value = fmtMetric(value);
+    return `<span class="metric-pill"><span>${esc(metricLabels[key] || key)}</span><strong>${esc(value)}</strong></span>`;
+  }).join('');
+}
+function renderRunSummary(summary) {
+  const container = document.getElementById('runSummary');
+  const source = summary || {};
+  const keys = summaryOrder.filter(key => source[key] !== undefined && source[key] !== null);
+  if (!keys.length) {
+    container.innerHTML = '<div class="muted-line small">Run metrics will appear here as the logs produce counters.</div>';
+    return;
+  }
+  container.innerHTML = keys.map(key => `
+    <div class="run-summary-item">
+      <div class="muted-line small">${esc(metricLabels[key] || key)}</div>
+      <div class="metric-value">${fmtMetric(source[key])}</div>
+    </div>`).join('');
+}
+function renderState(state) {
+  currentState = state;
+  document.getElementById('statStatus').textContent = state.pipeline_status || 'idle';
+  document.getElementById('statCurrent').textContent = state.current_step || '-';
+  document.getElementById('statNext').textContent = state.timer?.next_run || 'not installed';
+  document.getElementById('statTimer').textContent = state.timer?.active ? 'active' : 'inactive';
+  document.getElementById('runMeta').textContent = state.run_id ? `${state.run_id} · ${state.mode || ''} · ${state.trigger || ''}` : 'No run yet';
+  document.getElementById('runDuration').textContent = fmtDuration(state.duration_seconds);
+  renderRunSummary(state.summary || {});
+
+  const steps = state.steps || [];
+  const container = document.getElementById('stepsContainer');
+  if (!steps.length) {
+    container.innerHTML = '<div class="muted-line py-3">No pipeline run recorded yet.</div>';
+  } else {
+    container.innerHTML = steps.map((s, index) => `
+      <div class="pipeline-step">
+        <div class="pipeline-num">${stepPrefix(s.group) || (index + 1)}</div>
+        <div class="min-w-0">
+          <div class="fw-semibold">${esc(s.label)}</div>
+          <div class="pipeline-command" title="${esc((s.command || []).join(' '))}">${esc((s.command || []).join(' '))}</div>
+          ${Object.keys(s.metrics || {}).length ? `<div class="step-metrics">${renderMetricPills(s.metrics)}</div>` : ''}
+          ${s.error ? `<div class="small text-danger">${esc(s.error)}</div>` : ''}
+        </div>
+        <div class="step-status">${badge(s.status)}</div>
+        <div class="step-time text-end small muted-line">${fmtDuration(s.duration_seconds)}</div>
+      </div>`).join('');
+  }
+  renderHistory(state.history || []);
+  syncRunSelect(state.history || []);
+}
+function renderHistory(history) {
+  const body = document.getElementById('historyBody');
+  if (!history.length) {
+    body.innerHTML = '<tr><td colspan="7" class="muted-line">No previous run.</td></tr>';
+    return;
+  }
+  body.innerHTML = history.map(item => `
+    <tr>
+      <td class="small">${esc(item.run_id)}</td>
+      <td>${esc(item.mode || '-')}</td>
+      <td>${badge(item.pipeline_status)}</td>
+      <td class="small">${esc(item.started_at || '-')}</td>
+      <td>${fmtDuration(item.duration_seconds)}</td>
+      <td class="small ${item.failed_step ? 'text-danger' : ''}">${esc(item.failed_step || '-')}</td>
+      <td><button type="button" class="btn btn-sm btn-outline-light" data-log-run="${esc(item.run_id)}">Log</button></td>
+    </tr>`).join('');
+  body.querySelectorAll('[data-log-run]').forEach(btn => btn.addEventListener('click', () => {
+    document.getElementById('logRun').value = btn.dataset.logRun;
+    refreshLog();
+  }));
+}
+function syncRunSelect(history) {
+  const select = document.getElementById('logRun');
+  const selected = select.value;
+  const options = ['<option value="">Current / latest</option>'].concat(history.map(item => `<option value="${esc(item.run_id)}">${esc(item.run_id)} · ${esc(item.pipeline_status || '')}</option>`));
+  select.innerHTML = options.join('');
+  if ([...select.options].some(o => o.value === selected)) select.value = selected;
+}
+function applyLogFilter() {
+  const filter = document.getElementById('logFilter').value;
+  let lines = rawLog.split('\n');
+  if (filter !== 'all') {
+    lines = lines.filter(line => {
+      if (filter === 'superintel') return line.includes('[superintel') || line.includes('[superintel]');
+      if (filter === 'affiliation') return line.includes('affiliation');
+      if (filter === 'pilotable') return line.includes('pilotable');
+      if (filter === 'weekly') return line.includes('[weekly_');
+      return line.includes(`[${filter}]`);
+    });
+  }
+  const viewer = document.getElementById('logViewer');
+  viewer.textContent = lines.join('\n') || 'No matching log lines.';
+  if (document.getElementById('autoScroll').checked) viewer.scrollTop = viewer.scrollHeight;
+}
+async function refreshLog() {
+  const runId = document.getElementById('logRun').value;
+  const query = new URLSearchParams({lines:'1200'});
+  if (runId) query.set('run_id', runId);
+  try {
+    const response = await fetch(`/admin/update-pipeline/api/log?${query.toString()}`, {cache:'no-store'});
+    rawLog = response.ok ? await response.text() : `Erreur ${response.status}`;
+  } catch (error) {
+    rawLog = `Log error: ${error}`;
+  }
+  applyLogFilter();
+}
+async function refreshStatus() {
+  try {
+    const response = await fetch('/admin/update-pipeline/api/status', {cache:'no-store'});
+    if (response.ok) renderState(await response.json());
+  } catch (_) {}
+}
+
+document.getElementById('refreshLog').addEventListener('click', refreshLog);
+document.getElementById('logRun').addEventListener('change', refreshLog);
+document.getElementById('logFilter').addEventListener('change', applyLogFilter);
+renderState(initialPipeline);
+refreshLog();
+setInterval(async () => {
+  await refreshStatus();
+  if (!document.getElementById('logRun').value && currentState.running) await refreshLog();
+}, 3000);
+</script>
+{% endblock %}

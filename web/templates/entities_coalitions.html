@@ -1,0 +1,250 @@
+{% extends "base.html" %}
+
+{% macro entity_type_label(member_type) -%}
+{% if member_type == 'alliance' %}Alliance{% elif member_type == 'corporation' %}Corporation{% elif member_type == 'coalition' %}Coalition{% else %}{{ member_type }}{% endif %}
+{%- endmacro %}
+
+{% macro coalition_row(coalition, closed=false) -%}
+<tr class="coalition-summary-row">
+  <td>
+    <div class="d-flex align-items-center gap-2">
+      {% if coalition.logo_url %}
+        <img
+          src="{{ coalition.logo_url }}"
+          alt=""
+          width="42"
+          height="42"
+          loading="lazy"
+          class="rounded flex-shrink-0 coalition-logo"
+          onerror="this.remove();"
+        >
+      {% endif %}
+      <div class="min-w-0">
+        <a class="text-decoration-none fw-semibold" href="/coalition/{{ coalition.coalition_id }}">{{ coalition.name }}</a>
+        {% if coalition.short_name %}<span class="muted-line ms-1">[{{ coalition.short_name }}]</span>{% endif %}
+        {% if closed and coalition.closed_at %}
+          <div class="muted-line small">Closed {{ coalition.closed_at }}</div>
+        {% elif closed %}
+          <div class="muted-line small">Closed</div>
+        {% endif %}
+      </div>
+    </div>
+  </td>
+  <td>
+    <div class="fw-semibold">{{ coalition.member_count_display }}</div>
+    <div class="muted-line small">
+      member{% if coalition.member_count != 1 %}s{% endif %}
+      {% if coalition.missing_population_entities %}
+        · {{ coalition.missing_population_entities }} entit{% if coalition.missing_population_entities == 1 %}y{% else %}ies{% endif %} without population data
+      {% endif %}
+    </div>
+  </td>
+  <td>
+    <div class="fw-semibold">{{ coalition.entity_count }}</div>
+    <div class="muted-line small">entit{% if coalition.entity_count == 1 %}y{% else %}ies{% endif %}</div>
+  </td>
+  <td class="text-end">
+    <button
+      class="btn btn-sm btn-outline-light coalition-details-toggle"
+      type="button"
+      data-detail-id="coalition-details-{{ coalition.coalition_id }}"
+      aria-expanded="false"
+      aria-controls="coalition-details-{{ coalition.coalition_id }}"
+    >Details</button>
+  </td>
+</tr>
+<tr id="coalition-details-{{ coalition.coalition_id }}" class="coalition-detail-row" hidden>
+  <td colspan="4" class="p-0 border-0">
+      <div class="p-3 border-top border-secondary-subtle bg-black bg-opacity-25">
+        <div class="d-flex justify-content-between align-items-center gap-2 mb-2 flex-wrap">
+          <div>
+            <div class="fw-semibold">Entities</div>
+            <div class="muted-line small">Membership periods. Current entities are shown first.</div>
+          </div>
+          <a class="btn btn-sm btn-outline-info" href="/coalition/{{ coalition.coalition_id }}">Open coalition</a>
+        </div>
+
+        <div class="table-responsive">
+          <table class="table table-dark table-sm align-middle mb-0">
+            <thead>
+              <tr>
+                <th>Entity</th>
+                <th>Type</th>
+                <th>Joined</th>
+                <th>Left</th>
+                <th>Members now</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for entity in coalition.entity_history %}
+                <tr>
+                  <td>
+                    <div class="d-flex align-items-center gap-2">
+                      {% if entity.logo_url %}
+                        <img
+                          src="{{ entity.logo_url }}"
+                          alt=""
+                          width="32"
+                          height="32"
+                          loading="lazy"
+                          class="rounded flex-shrink-0 entity-logo"
+                          onerror="this.remove();"
+                        >
+                      {% endif %}
+                      <div>
+                        <a class="text-decoration-none fw-semibold" href="{{ entity.url }}">{{ entity.member_name }}</a>
+                        {% if entity.member_ticker %}<span class="muted-line ms-1">[{{ entity.member_ticker }}]</span>{% endif %}
+                        {% if entity.current %}<span class="badge text-bg-success ms-1">current</span>{% endif %}
+                      </div>
+                    </div>
+                  </td>
+                  <td>{{ entity_type_label(entity.member_type) }}</td>
+                  <td>{{ entity.joined or "—" }}</td>
+                  <td>{% if entity.current %}<span class="muted-line">Current</span>{% else %}{{ entity.left or "—" }}{% endif %}</td>
+                  <td>
+                    {% if entity.current and entity.member_count is not none %}{{ "{:,}".format(entity.member_count) }}
+                    {% elif entity.current %}<span class="muted-line">—</span>
+                    {% else %}<span class="muted-line">—</span>{% endif %}
+                  </td>
+                </tr>
+              {% else %}
+                <tr><td colspan="5" class="muted-line text-center py-3">No membership history.</td></tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </div>
+  </td>
+</tr>
+{%- endmacro %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-start gap-3 mb-3">
+  <div>
+    <h1 class="h3 fw-bold mb-1">EntitiesINTEL — Coalition</h1>
+    <div class="muted-line">EVEOSINT coalition entities.</div>
+  </div>
+</div>
+
+<ul class="nav nav-tabs mb-4">
+  <li class="nav-item">
+    <a class="nav-link active" aria-current="page" href="/entities/coalition">Coalitions</a>
+  </li>
+  {% if can_admin_coalitions %}
+  <li class="nav-item">
+    <a class="nav-link" href="/entities/coalition/manage">Manage</a>
+  </li>
+  {% endif %}
+</ul>
+
+{% if error %}
+  <div class="alert alert-danger py-2">
+    {% if error == "coalition_not_found" %}Coalition not found.
+    {% else %}Action failed.{% endif %}
+  </div>
+{% endif %}
+
+<section class="content-card p-3 p-md-4 mb-4">
+  <div class="d-flex justify-content-between align-items-start gap-3 mb-3 flex-wrap">
+    <div>
+      <h2 class="h5 mb-1">Active coalitions</h2>
+      <div class="muted-line small">Sorted by current member population. Expand a coalition to see its entities and membership dates.</div>
+    </div>
+
+    <form method="get" action="/entities/coalition" class="d-flex gap-2" style="min-width:min(420px,100%);">
+      <input class="form-control" type="search" name="q" value="{{ query }}" placeholder="Name or short name">
+      <button class="btn btn-outline-light" type="submit">Search</button>
+      {% if query %}<a class="btn btn-outline-secondary" href="/entities/coalition">Clear</a>{% endif %}
+    </form>
+  </div>
+
+  <div class="table-responsive">
+    <table class="table table-dark table-hover align-middle mb-0 coalition-table">
+      <thead>
+        <tr>
+          <th>Coalition</th>
+          <th>Members now</th>
+          <th>Entities</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for coalition in coalitions %}
+          {{ coalition_row(coalition, false) }}
+        {% else %}
+          <tr><td colspan="4" class="muted-line text-center py-4">No active coalition found.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section class="content-card p-3 p-md-4">
+  <button
+    id="closed-coalitions-toggle"
+    class="btn btn-outline-secondary w-100 d-flex justify-content-between align-items-center"
+    type="button"
+    aria-expanded="false"
+    aria-controls="closed-coalitions"
+  >
+    <span>Closed coalitions</span>
+    <span class="badge text-bg-secondary">{{ closed_coalition_count }}</span>
+  </button>
+
+  <div class="mt-3" id="closed-coalitions" hidden>
+    <div class="muted-line small mb-3">Coalitions with no current resolved members, sorted by closure date (newest first).</div>
+    <div class="table-responsive">
+      <table class="table table-dark table-hover align-middle mb-0 coalition-table">
+        <thead>
+          <tr>
+            <th>Coalition</th>
+            <th>Members now</th>
+            <th>Entities</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for coalition in closed_coalitions %}
+            {{ coalition_row(coalition, true) }}
+          {% else %}
+            <tr><td colspan="4" class="muted-line text-center py-4">No closed coalition found.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<script>
+(() => {
+  document.querySelectorAll('.coalition-details-toggle').forEach((button) => {
+    button.addEventListener('click', () => {
+      const detailId = button.dataset.detailId;
+      const detailRow = detailId ? document.getElementById(detailId) : null;
+      if (!detailRow) return;
+
+      const opening = detailRow.hidden;
+      detailRow.hidden = !opening;
+      button.setAttribute('aria-expanded', opening ? 'true' : 'false');
+      button.textContent = opening ? 'Hide details' : 'Details';
+    });
+  });
+
+  const closedButton = document.getElementById('closed-coalitions-toggle');
+  const closedBlock = document.getElementById('closed-coalitions');
+  if (closedButton && closedBlock) {
+    closedButton.addEventListener('click', () => {
+      const opening = closedBlock.hidden;
+      closedBlock.hidden = !opening;
+      closedButton.setAttribute('aria-expanded', opening ? 'true' : 'false');
+    });
+  }
+})();
+</script>
+
+<style>
+.coalition-logo,.entity-logo{object-fit:contain;background:rgba(255,255,255,.03)}
+.coalition-table>tbody>tr.coalition-summary-row>td{vertical-align:middle}
+.min-w-0{min-width:0}
+</style>
+{% endblock %}

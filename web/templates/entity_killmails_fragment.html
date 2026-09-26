@@ -1,0 +1,291 @@
+{% macro small_entity(entity) -%}
+{% if entity %}
+<a class="killmail-entity text-decoration-none" href="{{ entity.url }}">
+  <span>{{ entity.name }}</span>{% if entity.ticker %}<span class="muted-line"> [{{ entity.ticker }}]</span>{% endif %}
+</a>
+{% else %}
+<span class="muted-line">Unknown</span>
+{% endif %}
+{%- endmacro %}
+{% macro entity_icon(entity) -%}
+{% if entity %}
+<a href="{{ entity.url }}" class="text-decoration-none">
+  {% if entity.image_url %}
+  <img class="killmail-entity-icon" src="{{ entity.image_url }}" alt="" title="{{ entity.name }}" loading="lazy" onerror="this.style.display='none'">
+  {% else %}
+  <span class="killmail-entity-icon killmail-empty-icon" title="{{ entity.name }}"></span>
+  {% endif %}
+</a>
+{% else %}
+<div class="killmail-entity-icon killmail-empty-icon"></div>
+{% endif %}
+{%- endmacro %}
+{% macro portrait_icon(entity) -%}
+{% if entity and entity.image_url %}
+<a href="{{ entity.url }}" class="text-decoration-none">
+  <img class="killmail-portrait-icon" src="{{ entity.image_url }}" alt="" title="{{ entity.name }}" loading="lazy" onerror="this.style.display='none'">
+</a>
+{% endif %}
+{%- endmacro %}
+{% macro secondary_entity_icon(entity) -%}
+{% if entity and entity.image_url %}
+<a href="{{ entity.url }}" class="text-decoration-none">
+  <img class="killmail-secondary-entity-icon" src="{{ entity.image_url }}" alt="" title="{{ entity.name }}" loading="lazy" onerror="this.style.display='none'">
+</a>
+{% endif %}
+{%- endmacro %}
+{% macro stack_portrait_icon(entity) -%}
+{% if entity and entity.image_url %}
+<a href="{{ entity.url }}" class="text-decoration-none">
+  <img class="killmail-stack-portrait-icon" src="{{ entity.image_url }}" alt="" title="{{ entity.name }}" loading="lazy" onerror="this.style.display='none'">
+</a>
+{% endif %}
+{%- endmacro %}
+{% macro location_icon(entity, label) -%}
+{% if entity %}
+<a href="{{ entity.url }}" class="killmail-location-icon text-decoration-none" title="{{ entity.name }}">
+  {% if entity.image_url %}
+  <img src="{{ entity.image_url }}" alt="" loading="lazy" onerror="this.style.display='none'">
+  {% else %}
+  <span>{{ label }}</span>
+  {% endif %}
+</a>
+{% else %}
+<span class="killmail-location-icon killmail-empty-icon"><span>{{ label }}</span></span>
+{% endif %}
+{%- endmacro %}
+{% macro type_icon(item, css_class='killmail-type-icon') -%}
+{% if item and item.image_url %}
+<img class="{{ css_class }}" src="{{ item.image_url }}" alt="" title="{{ item.name }}" loading="lazy" onerror="this.style.display='none'">
+{% else %}
+<div class="{{ css_class }} killmail-empty-icon"></div>
+{% endif %}
+{%- endmacro %}
+
+{% if error %}
+  <div class="alert alert-danger py-2">{{ error }}</div>
+{% elif killmail_page %}
+  {% set pagination = killmail_page.killmail_pagination %}
+  {% set groups = killmail_page.killmail_groups %}
+  {% set current_mode = killmail_mode or killmail_page.killmail_mode or 'api' %}
+  {% set current_participation = killmail_page.killmail_participation or 'both' %}
+
+  {% if killmail_page.location_context and killmail_base_url %}
+  <div class="d-flex flex-wrap gap-2 mb-3">
+    <a class="btn btn-sm {% if current_mode == 'api' %}btn-primary{% else %}btn-outline-primary{% endif %}" href="{{ killmail_base_url }}?mode=api">Killmail via API</a>
+    <a class="btn btn-sm {% if current_mode == 'total' %}btn-primary{% else %}btn-outline-primary{% endif %}" href="{{ killmail_base_url }}?mode=total">Killmail TOTAL</a>
+    <a class="btn btn-sm {% if current_mode == 'hidden' %}btn-primary{% else %}btn-outline-primary{% endif %}" href="{{ killmail_base_url }}?mode=hidden">Only hidden</a>
+  </div>
+  {% elif corporation_id or alliance_id or coalition_id or ship_type_id or killmail_page.ship_type_id or killmail_page.ship_type_ids %}
+  <div class="d-flex flex-wrap gap-2 mb-3">
+    <button type="button" class="btn btn-sm {% if current_mode == 'api' %}btn-primary{% else %}btn-outline-primary{% endif %}" data-killmail-mode="api">Killmail via API</button>
+    <button type="button" class="btn btn-sm {% if current_mode == 'total' %}btn-primary{% else %}btn-outline-primary{% endif %}" data-killmail-mode="total">Killmail TOTAL</button>
+    <button type="button" class="btn btn-sm {% if current_mode == 'hidden' %}btn-primary{% else %}btn-outline-primary{% endif %}" data-killmail-mode="hidden">Only hidden</button>
+  </div>
+  {% endif %}
+
+  {% if not killmail_page.location_context and not killmail_page.global_context %}
+  <div class="d-flex flex-wrap gap-2 mb-3">
+    <button type="button" class="btn btn-sm {% if current_participation == 'kills' %}btn-success{% else %}btn-outline-success{% endif %}" data-killmail-participation="kills">KILL</button>
+    <button type="button" class="btn btn-sm {% if current_participation == 'losses' %}btn-danger{% else %}btn-outline-danger{% endif %}" data-killmail-participation="losses">VICTIM</button>
+    <button type="button" class="btn btn-sm {% if current_participation == 'both' %}btn-primary{% else %}btn-outline-primary{% endif %}" data-killmail-participation="both">ALL</button>
+  </div>
+  {% endif %}
+
+  {% if pagination and not pagination.progressive %}
+  <div class="d-flex justify-content-between align-items-center mb-3">
+    <div class="muted-line">
+      Page {{ pagination.page }} — 100 killmails per page
+    </div>
+    <div class="d-flex gap-2">
+      {% if pagination.has_prev %}
+        {% if killmail_base_url %}
+          <a class="btn btn-sm btn-outline-light" href="{{ killmail_base_url }}?mode={{ current_mode }}&page={{ pagination.prev_page }}">Previous</a>
+        {% else %}
+          <a class="btn btn-sm btn-outline-light" href="#" data-killmail-page="{{ pagination.prev_page }}">Previous</a>
+        {% endif %}
+      {% else %}
+        <span class="btn btn-sm btn-outline-secondary disabled">Previous</span>
+      {% endif %}
+      {% if pagination.has_next %}
+        {% if killmail_base_url %}
+          <a class="btn btn-sm btn-outline-light" href="{{ killmail_base_url }}?mode={{ current_mode }}&page={{ pagination.next_page }}">Next</a>
+        {% else %}
+          <a class="btn btn-sm btn-outline-light" href="#" data-killmail-page="{{ pagination.next_page }}">Next</a>
+        {% endif %}
+      {% else %}
+        <span class="btn btn-sm btn-outline-secondary disabled">Next</span>
+      {% endif %}
+    </div>
+  </div>
+  {% endif %}
+
+  <div class="killmail-table-wrap">
+    <table class="killmail-table">
+      <thead>
+        <tr>
+          <th>Time</th>
+          <th>Ship</th>
+          <th>Location</th>
+          <th>Victim</th>
+          <th>Pilot</th>
+          <th>Final Blow</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% if groups %}
+          {% for group in groups %}
+            <tr class="killmail-date-row" data-killmail-date="{{ group.date }}"><td colspan="6">{{ group.date }}</td></tr>
+            {% for km in group["items"] %}
+            <tr class="{% if km.is_loss %}killmail-row-loss{% else %}killmail-row-kill{% endif %}">
+              <td class="killmail-time-cell">
+                <span class="killmail-status {% if km.is_loss %}killmail-status-loss{% else %}killmail-status-kill{% endif %}">{% if km.is_loss %}✖{% else %}✔{% endif %}</span>
+                <span>{{ km.time_label }}</span>
+                {% if km.source_tag %}
+                  {% if km.tag_url %}
+                    <a href="{{ km.tag_url }}" class="badge text-decoration-none ms-1 {% if km.source_tag == 'API' %}text-bg-info{% elif km.source_tag == 'AMB' %}text-bg-warning{% else %}text-bg-secondary{% endif %}">{{ km.source_tag }}</a>
+                  {% else %}
+                    <span class="badge ms-1 {% if km.source_tag == 'API' %}text-bg-info{% elif km.source_tag == 'AMB' %}text-bg-warning{% else %}text-bg-secondary{% endif %}">{{ km.source_tag }}</span>
+                  {% endif %}
+                {% endif %}
+                {% if km.value_label %}<span class="killmail-isk">{{ km.value_label }}</span>{% endif %}
+              </td>
+              <td class="killmail-ship-cell">
+                {% if km.detail_url %}
+                <a class="killmail-ship-box" href="{{ km.detail_url }}" title="{{ km.victim_ship.name }}">
+                  {{ type_icon(km.victim_ship) }}
+                </a>
+                {% elif km.source_kind != 'mer' and km.killmail_id %}
+                <a class="killmail-ship-box" href="/kill/{{ km.killmail_id }}" title="{{ km.victim_ship.name }}">
+                  {{ type_icon(km.victim_ship) }}
+                </a>
+                {% else %}
+                <span class="killmail-ship-box" title="{{ km.victim_ship.name }}">{{ type_icon(km.victim_ship) }}</span>
+                {% endif %}
+              </td>
+              <td class="killmail-location">
+                <div class="killmail-location-row">
+                  {{ location_icon(km.location.system, 'S') }}
+                  <div>
+                    {% if km.location.system %}<a class="killmail-entity text-decoration-none" href="{{ km.location.system.url }}">{{ km.location.system.name }}</a>{% else %}<span class="muted-line">Unknown system</span>{% endif %}
+                  </div>
+                </div>
+                <div class="killmail-location-row muted-line">
+                  {{ location_icon(km.location.constellation, 'C') }}
+                  <div>{% if km.location.constellation %}<a class="killmail-entity text-decoration-none" href="{{ km.location.constellation.url }}">{{ km.location.constellation.name }}</a>{% else %}Unknown constellation{% endif %}</div>
+                </div>
+                <div class="killmail-location-row muted-line">
+                  {{ location_icon(km.location.region, 'R') }}
+                  <div>{% if km.location.region %}<a class="killmail-entity text-decoration-none" href="{{ km.location.region.url }}">{{ km.location.region.name }}</a>{% else %}Unknown region{% endif %}</div>
+                </div>
+              </td>
+              <td>
+                <div class="killmail-entity-box">
+                  <div class="killmail-main-icon-stack">
+                    {{ entity_icon(km.victim_alliance or km.victim_corporation) }}
+                    {{ stack_portrait_icon(km.victim_character) }}
+                    {% if km.victim_alliance and km.victim_corporation %}{{ secondary_entity_icon(km.victim_corporation) }}{% endif %}
+                  </div>
+                  <div class="killmail-entity-lines">
+                    <div class="killmail-character-line">{% if km.victim_character %}{{ small_entity(km.victim_character) }}{% else %}<span class="muted-line">Unknown character</span>{% endif %}</div>
+                    <div>{% if km.victim_corporation %}{{ small_entity(km.victim_corporation) }}{% endif %}</div>
+                    <div>{% if km.victim_alliance %}{{ small_entity(km.victim_alliance) }}{% endif %}</div>
+                  </div>
+                </div>
+              </td>
+              <td class="killmail-pilot-cell">
+                {% if km.source_kind == 'mer' %}
+                  {% if km.final_ship %}
+                  <div class="killmail-pilot-box">
+                    <div class="killmail-pilot-icons">{{ type_icon(km.final_ship, 'killmail-pilot-icon') }}</div>
+                    <div class="muted-line">MER final blow ship<br>No pilot data</div>
+                  </div>
+                  {% else %}
+                  <span class="muted-line">No pilot data</span>
+                  {% endif %}
+                {% elif km.is_kill %}
+                <div class="killmail-pilot-box">
+                  <div class="killmail-pilot-icons">
+                    {{ type_icon(km.pilot_ship, 'killmail-pilot-icon') }}
+                    {{ type_icon(km.pilot_weapon, 'killmail-pilot-icon') }}
+                  </div>
+                  <div class="killmail-damage">
+                    {% if km.is_corporation_context %}<div class="muted-line">{{ km.pilot_count_label }}</div>{% endif %}
+                    <div class="killmail-damage-main">{{ km.pilot_damage_done }} dmg</div>
+                    <div class="killmail-damage-percent">{{ km.pilot_damage_percent or '—' }}</div>
+                    {% if km.pilot_final_blow %}<div class="muted-line">Final blow</div>{% endif %}
+                  </div>
+                </div>
+                {% else %}
+                <span class="muted-line">Lost ship</span>
+                {% endif %}
+              </td>
+              <td>
+                <div class="killmail-entity-box">
+                  <div class="killmail-main-icon-stack">
+                    {{ entity_icon(km.final_alliance or km.final_corporation) }}
+                    {{ stack_portrait_icon(km.final_character) }}
+                    {% if km.final_alliance and km.final_corporation %}{{ secondary_entity_icon(km.final_corporation) }}{% endif %}
+                  </div>
+                  <div class="killmail-entity-lines">
+                    <div class="killmail-character-line">{% if km.final_character %}{{ small_entity(km.final_character) }}{% else %}<span class="muted-line">Unknown character</span>{% endif %}{% if km.attackers_count %}<span class="muted-line"> ({{ km.attackers_count }})</span>{% endif %}</div>
+                    <div>{% if km.final_corporation %}{{ small_entity(km.final_corporation) }}{% endif %}</div>
+                    <div>{% if km.final_alliance %}{{ small_entity(km.final_alliance) }}{% endif %}</div>
+                  </div>
+                </div>
+              </td>
+            </tr>
+            {% endfor %}
+          {% endfor %}
+        {% else %}
+          <tr class="killmail-empty-result"><td colspan="6" class="muted-line">{% if pagination and pagination.progressive %}No killmails found in the scanned period.{% else %}No killmails found.{% endif %}</td></tr>
+        {% endif %}
+      </tbody>
+    </table>
+  </div>
+
+  {% if pagination and pagination.progressive %}
+  <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mt-3 killmail-progressive-status"
+       data-killmail-progressive-status
+       data-kb-scanned-estimate="{{ pagination.scanned_estimate or 0 }}"
+       data-kb-scanned-month="{{ pagination.scanned_month or '' }}"
+       data-kb-scan-complete="{{ 1 if pagination.scan_complete else 0 }}">
+    <div class="muted-line" data-killmail-scan-text>
+      Search reached {{ pagination.scan_end_label or 'unknown date' }}.
+      {% if pagination.scan_blocked %}This slice hit the query time limit.{% endif %}
+    </div>
+    {% if pagination.scan_has_more %}
+      {% if killmail_base_url %}
+      <a class="btn btn-sm btn-outline-light" href="{{ killmail_base_url }}?mode=hidden{% if pagination.scan_before %}&scan_before={{ pagination.scan_before|urlencode }}{% endif %}{% if pagination.scan_month %}&scan_month={{ pagination.scan_month }}{% endif %}{% if pagination.scan_row is not none %}&scan_row={{ pagination.scan_row }}{% endif %}">Load more</a>
+      {% else %}
+      <a class="btn btn-sm btn-outline-light" href="#"
+         data-killmail-load-more="1"
+         data-scan-before="{{ pagination.scan_before or '' }}"
+         data-scan-month="{{ pagination.scan_month or '' }}"
+         data-scan-row="{{ pagination.scan_row if pagination.scan_row is not none else '' }}">Load more</a>
+      {% endif %}
+    {% else %}
+      <span class="muted-line">End of search.</span>
+    {% endif %}
+  </div>
+  {% elif pagination and (pagination.has_prev or pagination.has_next) %}
+  <div class="d-flex justify-content-end gap-2 mt-3">
+    {% if pagination.has_prev %}
+      {% if killmail_base_url %}
+        <a class="btn btn-sm btn-outline-light" href="{{ killmail_base_url }}?mode={{ current_mode }}&page={{ pagination.prev_page }}">Previous</a>
+      {% else %}
+        <a class="btn btn-sm btn-outline-light" href="#" data-killmail-page="{{ pagination.prev_page }}">Previous</a>
+      {% endif %}
+    {% endif %}
+    {% if pagination.has_next %}
+      {% if killmail_base_url %}
+        <a class="btn btn-sm btn-outline-light" href="{{ killmail_base_url }}?mode={{ current_mode }}&page={{ pagination.next_page }}">Next</a>
+      {% else %}
+        <a class="btn btn-sm btn-outline-light" href="#" data-killmail-page="{{ pagination.next_page }}">Next</a>
+      {% endif %}
+    {% endif %}
+  </div>
+  {% endif %}
+{% else %}
+  <div class="muted-line">No killmails found.</div>
+{% endif %}

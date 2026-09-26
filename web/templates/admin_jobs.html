@@ -1,0 +1,217 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-start mb-4">
+  <div>
+    <h1 class="h3 fw-bold mb-1">Jobs</h1>
+    <div class="muted-line">Synchronisations autorisées.</div>
+  </div>
+</div>
+
+{% if error %}
+  <div class="alert alert-danger py-2">
+    {% if error == "job_already_running" %}
+      Job déjà en cours. Relance bloquée.
+    {% elif error == "job_failed" %}
+      Job non lancé. Vérifie la whitelist et les paramètres.
+    {% else %}
+      Action impossible.
+    {% endif %}
+  </div>
+{% endif %}
+
+{% if success %}
+  <div class="alert alert-success py-2">
+    {% if success == "job_started" %}
+      Job lancé en arrière-plan.
+    {% else %}
+      Action effectuée.
+    {% endif %}
+  </div>
+{% endif %}
+
+<div class="row g-4">
+  {% for job in jobs %}
+    <div class="col-12 col-xl-6">
+      <section class="content-card p-3 p-md-4 h-100 d-flex flex-column">
+        <div class="d-flex justify-content-between align-items-start mb-3">
+          <div>
+            <h2 class="h5 mb-1">{{ job.label }}</h2>
+            <div class="muted-line small">{{ job.key }}</div>
+          </div>
+
+          <div class="text-end">
+            {% if job.running %}
+              <span class="badge text-bg-warning">running</span>
+              {% if job.started_at %}
+                <div class="small muted-line mt-1">Depuis {{ job.started_at }}</div>
+              {% endif %}
+            {% elif not job.enabled %}
+              <span class="badge text-bg-secondary">disabled</span>
+            {% else %}
+              <span class="badge text-bg-success">idle</span>
+            {% endif %}
+          </div>
+        </div>
+
+        {% if job.type == "population_alliances_init" %}
+          <div class="small muted-line mb-3">
+            Initialise l’historique des alliances DOTLAN dans le schéma <code>population</code>.
+            Le job est reprenable et limite DOTLAN à une requête toutes les 3 secondes.
+          </div>
+          <form method="post" action="/admin/jobs/population-alliances-init/run" class="mb-3">
+            <button type="submit" class="btn btn-primary" {% if not job.enabled or job.running %}disabled{% endif %}>
+              Lancer l’INIT
+            </button>
+          </form>
+        {% elif job.type == "population_alliances_daily" %}
+          <div class="small muted-line mb-3">
+            Met à jour le point du jour pour toutes les alliances actives via les pages globales DOTLAN.
+            Toute alliance inconnue est résolue puis initialisée historiquement après le snapshot global.
+          </div>
+          <form method="post" action="/admin/jobs/population-alliances-daily/run" class="mb-3">
+            <button type="submit" class="btn btn-primary" {% if not job.enabled or job.running %}disabled{% endif %}>
+              Mettre à jour les alliances actives
+            </button>
+          </form>
+        {% elif job.type == "sde" %}
+          <form method="post" action="/admin/jobs/sde/run" class="mb-3">
+            <button type="submit" class="btn btn-primary" {% if not job.enabled or job.running %}disabled{% endif %}>
+              Lancer
+            </button>
+          </form>
+        {% elif job.type == "killmails" %}
+          <form method="post" action="/admin/jobs/killmails/run" class="mb-3">
+            <div class="row g-3 align-items-end">
+              <div class="col-12 col-md-4">
+                <label class="form-label" for="from_date_{{ job.key }}">Début</label>
+                <input
+                  type="date"
+                  class="form-control"
+                  id="from_date_{{ job.key }}"
+                  name="from_date"
+                  value="{{ job.default_from_date }}"
+                  {% if job.running %}disabled{% endif %}
+                  required>
+              </div>
+
+              <div class="col-12 col-md-4">
+                <label class="form-label" for="to_date_{{ job.key }}">Fin</label>
+                <input
+                  type="date"
+                  class="form-control"
+                  id="to_date_{{ job.key }}"
+                  name="to_date"
+                  value="{{ job.default_to_date }}"
+                  {% if job.running %}disabled{% endif %}
+                  required>
+              </div>
+
+              <div class="col-12 col-md-2">
+                <label class="form-label" for="workers_{{ job.key }}">Workers</label>
+                <input
+                  type="number"
+                  class="form-control"
+                  id="workers_{{ job.key }}"
+                  name="workers"
+                  min="1"
+                  max="16"
+                  value="{{ job.default_workers }}"
+                  {% if job.running %}disabled{% endif %}
+                  required>
+              </div>
+
+              <div class="col-12 col-md-2">
+                <button type="submit" class="btn btn-primary w-100" {% if not job.enabled or job.running %}disabled{% endif %}>
+                  Lancer
+                </button>
+              </div>
+            </div>
+          </form>
+        {% elif job.type == "recent_kill_pilots_affiliation" %}
+          <form method="post" action="/admin/jobs/recent-kill-pilots-affiliation/run" class="mb-3">
+            <div class="row g-3 align-items-end">
+              <div class="col-12 col-md-4">
+                <label class="form-label" for="days_{{ job.key }}">Jours récents</label>
+                <input
+                  type="number"
+                  class="form-control"
+                  id="days_{{ job.key }}"
+                  name="days"
+                  min="1"
+                  value="{{ job.default_days }}"
+                  {% if job.running %}disabled{% endif %}
+                  required>
+              </div>
+
+              <div class="col-12 col-md-4">
+                <label class="form-label" for="workers_{{ job.key }}">Workers</label>
+                <input
+                  type="number"
+                  class="form-control"
+                  id="workers_{{ job.key }}"
+                  name="workers"
+                  min="1"
+                  max="16"
+                  value="{{ job.default_workers }}"
+                  {% if job.running %}disabled{% endif %}
+                  required>
+              </div>
+
+              <div class="col-12 col-md-4">
+                <button type="submit" class="btn btn-primary w-100" {% if not job.enabled or job.running %}disabled{% endif %}>
+                  Lancer
+                </button>
+              </div>
+            </div>
+          </form>
+        {% elif job.type == "character_skill_inference" %}
+          <form method="post" action="/admin/jobs/character-skill-inference/run" class="mb-3">
+            <div class="row g-3 align-items-end">
+              <div class="col-12 col-md-4">
+                <label class="form-label" for="progress_batch_size_{{ job.key }}">Progress batch</label>
+                <input
+                  type="number"
+                  class="form-control"
+                  id="progress_batch_size_{{ job.key }}"
+                  name="progress_batch_size"
+                  min="1"
+                  max="100000"
+                  value="{{ job.default_progress_batch_size }}"
+                  {% if job.running %}disabled{% endif %}
+                  required>
+              </div>
+
+              <div class="col-12 col-md-4">
+                <label class="form-label" for="limit_{{ job.key }}">Limit optionnel</label>
+                <input
+                  type="number"
+                  class="form-control"
+                  id="limit_{{ job.key }}"
+                  name="limit"
+                  min="1"
+                  value="{{ job.default_limit }}"
+                  {% if job.running %}disabled{% endif %}>
+              </div>
+
+              <div class="col-12 col-md-4">
+                <button type="submit" class="btn btn-primary w-100" {% if not job.enabled or job.running %}disabled{% endif %}>
+                  Lancer
+                </button>
+              </div>
+            </div>
+          </form>
+        {% endif %}
+
+        <div class="mt-auto pt-3 d-flex justify-content-start">
+          {% if job.log_exists %}
+            <a class="btn btn-sm btn-outline-light" href="/admin/jobs/{{ job.key }}/log" target="_blank" rel="noopener noreferrer">
+              Voir log
+            </a>
+          {% endif %}
+        </div>
+      </section>
+    </div>
+  {% endfor %}
+</div>
+{% endblock %}

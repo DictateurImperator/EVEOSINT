@@ -1,0 +1,380 @@
+{% extends "base.html" %}
+
+{% block content %}
+{% set population_entity_type = pilot_list.entity_type if pilot_list and pilot_list.entity_type else (profile.entity_type if profile else 'alliance') %}
+{% set population_entity_id = pilot_list.entity_id if pilot_list and pilot_list.entity_id else (profile.entity_id if profile else (alliance_id if alliance_id is defined else corporation_id)) %}
+{% macro context_url(target_view) -%}
+/api/{{ population_entity_type }}/{{ population_entity_id }}/population/pilots?metric={{ pilot_list.metric|urlencode }}&date={{ pilot_list.date|urlencode }}&window={{ pilot_list.activity_window_days }}&mode={{ pilot_list.activity_mode|urlencode }}&core_months={{ pilot_list.core_months }}{% if population_entity_type in ['alliance', 'coalition'] %}&view={{ target_view|urlencode }}{% endif %}
+{%- endmacro %}
+{% macro pilot_list_url(target_page, target_sort, target_direction) -%}
+{{ context_url('pilots') }}&page={{ target_page }}&sort={{ target_sort|urlencode }}&direction={{ target_direction|urlencode }}{% if pilot_list.query %}&q={{ pilot_list.query|urlencode }}{% endif %}
+{%- endmacro %}
+{% macro pilot_sort_url(field) -%}
+{% set next_dir = 'desc' if pilot_list.sort == field and pilot_list.direction == 'asc' else 'asc' %}
+{{ pilot_list_url(1, field, next_dir) }}
+{%- endmacro %}
+{% macro corp_sort_url(field) -%}
+{% set next_dir = 'desc' if pilot_list.sort == field and pilot_list.direction == 'asc' else 'asc' %}
+{{ context_url('corporations') }}&sort={{ field|urlencode }}&direction={{ next_dir|urlencode }}{% if pilot_list.query %}&q={{ pilot_list.query|urlencode }}{% endif %}
+{%- endmacro %}
+{% macro alliance_sort_url(field) -%}
+{% set next_dir = 'desc' if pilot_list.sort == field and pilot_list.direction == 'asc' else 'asc' %}
+{{ context_url('alliances') }}&sort={{ field|urlencode }}&direction={{ next_dir|urlencode }}{% if pilot_list.query %}&q={{ pilot_list.query|urlencode }}{% endif %}
+{%- endmacro %}
+{% macro subset_url(corporation_id=None, outside=False, target_page=1) -%}
+/api/alliance/{{ pilot_list.alliance_id }}/population/pilots/subset?metric={{ pilot_list.metric|urlencode }}&date={{ pilot_list.date|urlencode }}&window={{ pilot_list.activity_window_days }}&mode={{ pilot_list.activity_mode|urlencode }}&core_months={{ pilot_list.core_months }}&page={{ target_page }}{% if corporation_id is not none %}&corporation_id={{ corporation_id }}{% endif %}{% if outside %}&outside=1{% endif %}
+{%- endmacro %}
+
+<style>
+  .population-pilot-icon {
+    width: 36px; height: 36px; border-radius: 50%; object-fit: cover;
+    background: rgba(255,255,255,.06); flex: 0 0 auto;
+  }
+  .population-pilot-entity { display:inline-flex; align-items:center; gap:.55rem; color:#7cc7ff; font-weight:700; }
+  .population-org-entity { display:inline-flex; align-items:center; gap:.5rem; }
+  .population-org-icon {
+    width:28px; height:28px; object-fit:contain; flex:0 0 auto;
+    background:rgba(255,255,255,.04); border-radius:4px;
+  }
+  .population-pilot-entity:hover { color:#b9e3ff; text-decoration:underline !important; }
+  .population-sort-link { color:#cbd5e1; text-decoration:none; white-space:nowrap; }
+  .population-sort-link:hover { color:#fff; text-decoration:underline; }
+  .population-context-pill {
+    display:inline-block; border:1px solid rgba(148,163,184,.2); border-radius:.4rem;
+    padding:.2rem .45rem; background:rgba(15,23,42,.55); color:#cbd5e1; font-size:.8rem;
+  }
+  .population-view-tabs { display:flex; gap:.4rem; flex-wrap:wrap; }
+  .population-view-tabs .btn.active { background:rgba(37,99,235,.28); border-color:rgba(96,165,250,.8); color:#fff; }
+  .population-corp-row { cursor:pointer; }
+  .population-corp-row:hover td { background:rgba(96,165,250,.07) !important; }
+  .population-corp-caret { display:inline-block; width:1.15rem; color:#94a3b8; font-size:.82rem; }
+  .population-corp-count { font-weight:800; font-variant-numeric:tabular-nums; white-space:nowrap; }
+  .population-corp-detail td { background:rgba(2,6,23,.48) !important; padding:0 !important; }
+  .population-corp-detail-inner { padding:1rem; border-left:2px solid rgba(96,165,250,.28); }
+  .population-outside-row td { border-top:2px solid rgba(148,163,184,.24); background:rgba(127,29,29,.08) !important; }
+  .population-inline-profile { color:#64748b; font-size:.78rem; text-decoration:none; margin-left:.45rem; }
+  .population-inline-profile:hover { color:#cbd5e1; text-decoration:underline; }
+</style>
+
+<div class="d-flex justify-content-between align-items-start gap-3 flex-wrap mb-4">
+  <div>
+    <h1 class="h3 fw-bold mb-1">{{ pilot_list.metric_label if pilot_list else 'Population Intelligence detail' }}</h1>
+    {% if profile %}
+      <div class="muted-line">{{ profile.name }}{% if profile.ticker %} [{{ profile.ticker }}]{% endif %}</div>
+    {% endif %}
+  </div>
+  <a class="btn btn-outline-light" href="/{{ population_entity_type }}/{{ population_entity_id }}?tab=population&restore_population=1">Back to Population</a>
+</div>
+
+{% if error %}
+  <div class="alert alert-danger py-2">{{ error }}</div>
+{% elif pilot_list %}
+  <section class="content-card p-3 p-md-4 mb-4">
+    <div class="d-flex flex-wrap gap-2 align-items-center">
+      <span class="population-context-pill">Date: {{ pilot_list.date }}</span>
+      <span class="population-context-pill">Window: {{ pilot_list.activity_window_days }} days</span>
+      <span class="population-context-pill">PvP: {{ 'Attacker only' if pilot_list.activity_mode == 'attacker' else ('Loss only' if pilot_list.activity_mode == 'loss' else 'Any involvement') }}</span>
+      {% if pilot_list.metric in ['core_pvp_count'] %}<span class="population-context-pill">Core: {{ pilot_list.core_months }} month{% if pilot_list.core_months != 1 %}s{% endif %}</span>{% endif %}
+    </div>
+    <div class="muted-line mt-2">This is the exact character set used for the selected indicator and date. Corporation and alliance are resolved at the analysed date.</div>
+  </section>
+
+  <section class="content-card p-3 p-md-4">
+    <div class="d-flex justify-content-between align-items-center gap-3 flex-wrap mb-3">
+      <div class="population-view-tabs">
+        {% if population_entity_type == 'coalition' %}
+          <a class="btn btn-sm btn-outline-primary {% if pilot_list.view == 'alliances' %}active{% endif %}" href="{{ context_url('alliances') }}">Alliances</a>
+          <a class="btn btn-sm btn-outline-primary {% if pilot_list.view == 'corporations' %}active{% endif %}" href="{{ context_url('corporations') }}">Corporations</a>
+        {% elif population_entity_type == 'alliance' %}
+          <a class="btn btn-sm btn-outline-primary {% if pilot_list.view == 'corporations' %}active{% endif %}" href="{{ context_url('corporations') }}">Corporations</a>
+        {% endif %}
+        <a class="btn btn-sm btn-outline-primary {% if pilot_list.view == 'pilots' %}active{% endif %}" href="{{ context_url('pilots') }}">Pilots</a>
+      </div>
+      <div class="muted-line small">{{ pilot_list.total_pilots }} characters in this indicator.</div>
+    </div>
+
+    {% if population_entity_type == 'coalition' and pilot_list.view == 'alliances' %}
+      <div class="d-flex justify-content-between align-items-end gap-3 flex-wrap mb-3">
+        <div>
+          <h2 class="h5 fw-bold mb-1">Alliances</h2>
+          <div class="muted-line">Pilots grouped by alliance on {{ pilot_list.date }}. Direct coalition corporations appear under No alliance.</div>
+        </div>
+        <form method="get" action="/api/{{ population_entity_type }}/{{ population_entity_id }}/population/pilots" class="d-flex gap-2 flex-wrap">
+          <input type="hidden" name="metric" value="{{ pilot_list.metric }}">
+          <input type="hidden" name="date" value="{{ pilot_list.date }}">
+          <input type="hidden" name="window" value="{{ pilot_list.activity_window_days }}">
+          <input type="hidden" name="mode" value="{{ pilot_list.activity_mode }}">
+          <input type="hidden" name="core_months" value="{{ pilot_list.core_months }}">
+          <input type="hidden" name="view" value="alliances">
+          <input type="hidden" name="sort" value="{{ pilot_list.sort }}">
+          <input type="hidden" name="direction" value="{{ pilot_list.direction }}">
+          <input class="form-control" style="min-width:260px" type="search" name="q" value="{{ pilot_list.query }}" placeholder="Search alliance..." autocomplete="off">
+          <button class="btn btn-outline-primary" type="submit">Search</button>
+          {% if pilot_list.query %}<a class="btn btn-outline-light" href="{{ context_url('alliances') }}&sort={{ pilot_list.sort|urlencode }}&direction={{ pilot_list.direction|urlencode }}">Clear</a>{% endif %}
+        </form>
+      </div>
+      <div class="table-responsive">
+        <table class="table table-dark table-hover align-middle mb-0">
+          <thead><tr>
+            <th><a class="population-sort-link" href="{{ alliance_sort_url('alliance') }}">Alliance{% if pilot_list.sort == 'alliance' %} {{ '↓' if pilot_list.direction == 'desc' else '↑' }}{% endif %}</a></th>
+            <th class="text-end"><a class="population-sort-link" href="{{ alliance_sort_url('pilots') }}">Pilots{% if pilot_list.sort == 'pilots' %} {{ '↓' if pilot_list.direction == 'desc' else '↑' }}{% endif %}</a></th>
+          </tr></thead>
+          <tbody>
+            {% for alliance in pilot_list.alliances %}
+              <tr>
+                <td>
+                  {% if alliance.alliance_id %}
+                    <a class="population-org-entity text-decoration-none" href="/alliance/{{ alliance.alliance_id }}">
+                      <img class="population-org-icon" src="https://images.evetech.net/alliances/{{ alliance.alliance_id }}/logo?size=64" alt="" loading="lazy" onerror="this.style.display='none'">
+                      <strong>{{ alliance.name }}{% if alliance.ticker %} [{{ alliance.ticker }}]{% endif %}</strong>
+                    </a>
+                  {% else %}
+                    <strong>No alliance</strong>
+                    <span class="muted-line ms-2">direct coalition corporations</span>
+                  {% endif %}
+                </td>
+                <td class="text-end population-corp-count">{{ alliance.pilot_count }}</td>
+              </tr>
+            {% else %}
+              <tr><td colspan="2" class="muted-line">No matching alliances.</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+
+    {% elif population_entity_type == 'coalition' and pilot_list.view == 'corporations' %}
+      <div class="d-flex justify-content-between align-items-end gap-3 flex-wrap mb-3">
+        <div>
+          <h2 class="h5 fw-bold mb-1">Corporations</h2>
+          <div class="muted-line">Pilots grouped by corporation on {{ pilot_list.date }}. Corporations without an alliance are labelled No alliance.</div>
+        </div>
+        <form method="get" action="/api/{{ population_entity_type }}/{{ population_entity_id }}/population/pilots" class="d-flex gap-2 flex-wrap">
+          <input type="hidden" name="metric" value="{{ pilot_list.metric }}">
+          <input type="hidden" name="date" value="{{ pilot_list.date }}">
+          <input type="hidden" name="window" value="{{ pilot_list.activity_window_days }}">
+          <input type="hidden" name="mode" value="{{ pilot_list.activity_mode }}">
+          <input type="hidden" name="core_months" value="{{ pilot_list.core_months }}">
+          <input type="hidden" name="view" value="corporations">
+          <input type="hidden" name="sort" value="{{ pilot_list.sort }}">
+          <input type="hidden" name="direction" value="{{ pilot_list.direction }}">
+          <input class="form-control" style="min-width:260px" type="search" name="q" value="{{ pilot_list.query }}" placeholder="Search corporation or alliance..." autocomplete="off">
+          <button class="btn btn-outline-primary" type="submit">Search</button>
+          {% if pilot_list.query %}<a class="btn btn-outline-light" href="{{ context_url('corporations') }}&sort={{ pilot_list.sort|urlencode }}&direction={{ pilot_list.direction|urlencode }}">Clear</a>{% endif %}
+        </form>
+      </div>
+      <div class="table-responsive">
+        <table class="table table-dark table-hover align-middle mb-0">
+          <thead><tr>
+            <th><a class="population-sort-link" href="{{ corp_sort_url('corporation') }}">Corporation{% if pilot_list.sort == 'corporation' %} {{ '↓' if pilot_list.direction == 'desc' else '↑' }}{% endif %}</a></th>
+            <th><a class="population-sort-link" href="{{ corp_sort_url('alliance') }}">Alliance{% if pilot_list.sort == 'alliance' %} {{ '↓' if pilot_list.direction == 'desc' else '↑' }}{% endif %}</a></th>
+            <th class="text-end"><a class="population-sort-link" href="{{ corp_sort_url('pilots') }}">Pilots{% if pilot_list.sort == 'pilots' %} {{ '↓' if pilot_list.direction == 'desc' else '↑' }}{% endif %}</a></th>
+          </tr></thead>
+          <tbody>
+            {% for corporation in pilot_list.corporations %}
+              <tr>
+                <td>
+                  {% if corporation.corporation_id %}
+                    <a class="population-org-entity text-decoration-none" href="/corporation/{{ corporation.corporation_id }}">
+                      <img class="population-org-icon" src="https://images.evetech.net/corporations/{{ corporation.corporation_id }}/logo?size=64" alt="" loading="lazy" onerror="this.style.display='none'">
+                      <strong>{{ corporation.name }}{% if corporation.ticker %} [{{ corporation.ticker }}]{% endif %}</strong>
+                    </a>
+                  {% else %}
+                    <strong>Unknown corporation</strong>
+                  {% endif %}
+                </td>
+                <td>
+                  {% if corporation.alliance %}
+                    <a class="population-org-entity text-decoration-none" href="/alliance/{{ corporation.alliance.alliance_id }}">
+                      <img class="population-org-icon" src="https://images.evetech.net/alliances/{{ corporation.alliance.alliance_id }}/logo?size=64" alt="" loading="lazy" onerror="this.style.display='none'">
+                      <span>{{ corporation.alliance.name }}{% if corporation.alliance.ticker %} [{{ corporation.alliance.ticker }}]{% endif %}</span>
+                    </a>
+                  {% else %}
+                    <span class="muted-line">No alliance</span>
+                  {% endif %}
+                </td>
+                <td class="text-end population-corp-count">{{ corporation.pilot_count }}</td>
+              </tr>
+            {% else %}
+              <tr><td colspan="3" class="muted-line">No matching corporations.</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+
+    {% elif population_entity_type == 'alliance' and pilot_list.view == 'corporations' %}
+      <div class="d-flex justify-content-between align-items-end gap-3 flex-wrap mb-3">
+        <div>
+          <h2 class="h5 fw-bold mb-1">Corporations</h2>
+          <div class="muted-line">Corporations belonging to the alliance on {{ pilot_list.date }}. Click a corporation to show or hide its pilots.</div>
+        </div>
+        <form method="get" action="/api/{{ population_entity_type }}/{{ population_entity_id }}/population/pilots" class="d-flex gap-2 flex-wrap">
+          <input type="hidden" name="metric" value="{{ pilot_list.metric }}">
+          <input type="hidden" name="date" value="{{ pilot_list.date }}">
+          <input type="hidden" name="window" value="{{ pilot_list.activity_window_days }}">
+          <input type="hidden" name="mode" value="{{ pilot_list.activity_mode }}">
+          <input type="hidden" name="core_months" value="{{ pilot_list.core_months }}">
+          <input type="hidden" name="view" value="corporations">
+          <input type="hidden" name="sort" value="{{ pilot_list.sort }}">
+          <input type="hidden" name="direction" value="{{ pilot_list.direction }}">
+          <input class="form-control" style="min-width:260px" type="search" name="q" value="{{ pilot_list.query }}" placeholder="Search corporation..." autocomplete="off">
+          <button class="btn btn-outline-primary" type="submit">Search</button>
+          {% if pilot_list.query %}<a class="btn btn-outline-light" href="{{ context_url('corporations') }}&sort={{ pilot_list.sort|urlencode }}&direction={{ pilot_list.direction|urlencode }}">Clear</a>{% endif %}
+        </form>
+      </div>
+
+      <div class="table-responsive">
+        <table class="table table-dark align-middle mb-0">
+          <thead>
+            <tr>
+              <th><a class="population-sort-link" href="{{ corp_sort_url('corporation') }}">Corporation{% if pilot_list.sort == 'corporation' %} {{ '↓' if pilot_list.direction == 'desc' else '↑' }}{% endif %}</a></th>
+              <th class="text-end"><a class="population-sort-link" href="{{ corp_sort_url('pilots') }}">Pilots{% if pilot_list.sort == 'pilots' %} {{ '↓' if pilot_list.direction == 'desc' else '↑' }}{% endif %}</a></th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for corporation in pilot_list.corporations %}
+              {% set detail_id = 'corp-detail-' ~ corporation.corporation_id %}
+              <tr class="population-corp-row" data-target="{{ detail_id }}" data-url="{{ subset_url(corporation.corporation_id, False, 1) }}" tabindex="0" role="button" aria-expanded="false">
+                <td>
+                  <span class="population-corp-caret">▶</span>
+                  <span class="population-org-entity">
+                    <img class="population-org-icon" src="https://images.evetech.net/corporations/{{ corporation.corporation_id }}/logo?size=64" alt="" loading="lazy" onerror="this.style.display='none'">
+                    <strong>{{ corporation.name }}{% if corporation.ticker %} [{{ corporation.ticker }}]{% endif %}</strong>
+                  </span>
+                  <a class="population-inline-profile" href="/corporation/{{ corporation.corporation_id }}" onclick="event.stopPropagation()">profile</a>
+                </td>
+                <td class="text-end population-corp-count">{{ corporation.pilot_count }}</td>
+              </tr>
+              <tr id="{{ detail_id }}" class="population-corp-detail d-none">
+                <td colspan="2"><div class="population-corp-detail-inner" data-subset-container></div></td>
+              </tr>
+            {% else %}
+              <tr><td colspan="2" class="muted-line">No matching corporations.</td></tr>
+            {% endfor %}
+
+            {% if pilot_list.outside_count > 0 %}
+              <tr class="population-corp-row population-outside-row" data-target="outside-alliance-detail" data-url="{{ subset_url(None, True, 1) }}" tabindex="0" role="button" aria-expanded="false">
+                <td>
+                  <span class="population-corp-caret">▶</span>
+                  <strong>Currently outside the alliance</strong>
+                  <span class="muted-line ms-2">at the analysed date</span>
+                </td>
+                <td class="text-end population-corp-count">{{ pilot_list.outside_count }}</td>
+              </tr>
+              <tr id="outside-alliance-detail" class="population-corp-detail d-none">
+                <td colspan="2"><div class="population-corp-detail-inner" data-subset-container></div></td>
+              </tr>
+            {% endif %}
+          </tbody>
+        </table>
+      </div>
+
+    {% else %}
+      <div class="d-flex justify-content-between align-items-end gap-3 flex-wrap mb-3">
+        <div>
+          <h2 class="h5 fw-bold mb-1">Pilots</h2>
+          <div class="muted-line">{{ pilot_list.pagination.total_rows }} matching characters · 50 per page.</div>
+        </div>
+        <form method="get" action="/api/{{ population_entity_type }}/{{ population_entity_id }}/population/pilots" class="d-flex gap-2 flex-wrap">
+          <input type="hidden" name="metric" value="{{ pilot_list.metric }}">
+          <input type="hidden" name="date" value="{{ pilot_list.date }}">
+          <input type="hidden" name="window" value="{{ pilot_list.activity_window_days }}">
+          <input type="hidden" name="mode" value="{{ pilot_list.activity_mode }}">
+          <input type="hidden" name="core_months" value="{{ pilot_list.core_months }}">
+          <input type="hidden" name="view" value="pilots">
+          <input type="hidden" name="sort" value="{{ pilot_list.sort }}">
+          <input type="hidden" name="direction" value="{{ pilot_list.direction }}">
+          <input class="form-control" style="min-width:260px" type="search" name="q" value="{{ pilot_list.query }}" placeholder="Search character name..." autocomplete="off">
+          <button class="btn btn-outline-primary" type="submit">Search</button>
+          {% if pilot_list.query %}<a class="btn btn-outline-light" href="{{ context_url('pilots') }}&page=1&sort={{ pilot_list.sort|urlencode }}&direction={{ pilot_list.direction|urlencode }}">Clear</a>{% endif %}
+        </form>
+      </div>
+
+      <div class="d-flex justify-content-between align-items-center mb-3">
+        <div class="muted-line small">Page {{ pilot_list.pagination.page }} / {{ pilot_list.pagination.total_pages }}</div>
+        <div class="d-flex gap-2">
+          {% if pilot_list.pagination.has_prev %}<a class="btn btn-sm btn-outline-light" href="{{ pilot_list_url(pilot_list.pagination.prev_page, pilot_list.sort, pilot_list.direction) }}">Previous</a>{% else %}<span class="btn btn-sm btn-outline-secondary disabled">Previous</span>{% endif %}
+          {% if pilot_list.pagination.has_next %}<a class="btn btn-sm btn-outline-light" href="{{ pilot_list_url(pilot_list.pagination.next_page, pilot_list.sort, pilot_list.direction) }}">Next</a>{% else %}<span class="btn btn-sm btn-outline-secondary disabled">Next</span>{% endif %}
+        </div>
+      </div>
+
+      <div class="table-responsive">
+        <table class="table table-dark table-hover align-middle mb-0">
+          <thead><tr>
+            <th><a class="population-sort-link" href="{{ pilot_sort_url('name') }}">Character{% if pilot_list.sort == 'name' %} {{ '↓' if pilot_list.direction == 'desc' else '↑' }}{% endif %}</a></th>
+            <th><a class="population-sort-link" href="{{ pilot_sort_url('corporation') }}">Corporation{% if pilot_list.sort == 'corporation' %} {{ '↓' if pilot_list.direction == 'desc' else '↑' }}{% endif %}</a></th>
+            <th><a class="population-sort-link" href="{{ pilot_sort_url('alliance') }}">Alliance{% if pilot_list.sort == 'alliance' %} {{ '↓' if pilot_list.direction == 'desc' else '↑' }}{% endif %}</a></th>
+          </tr></thead>
+          <tbody>
+            {% for pilot in pilot_list.pilots %}
+              <tr>
+                <td><a class="population-pilot-entity text-decoration-none" href="/character/{{ pilot.character_id }}"><img class="population-pilot-icon" src="https://images.evetech.net/characters/{{ pilot.character_id }}/portrait?size=64" alt="" loading="lazy" onerror="this.style.display='none'"><span>{{ pilot.name }}</span></a></td>
+                <td>{% if pilot.corporation %}<a class="population-org-entity text-decoration-none" href="/corporation/{{ pilot.corporation.corporation_id }}"><img class="population-org-icon" src="https://images.evetech.net/corporations/{{ pilot.corporation.corporation_id }}/logo?size=64" alt="" loading="lazy" onerror="this.style.display='none'"><span>{{ pilot.corporation.name }}{% if pilot.corporation.ticker %} [{{ pilot.corporation.ticker }}]{% endif %}</span></a>{% else %}<span class="muted-line">Unknown</span>{% endif %}</td>
+                <td>{% if pilot.alliance %}<a class="population-org-entity text-decoration-none" href="/alliance/{{ pilot.alliance.alliance_id }}"><img class="population-org-icon" src="https://images.evetech.net/alliances/{{ pilot.alliance.alliance_id }}/logo?size=64" alt="" loading="lazy" onerror="this.style.display='none'"><span>{{ pilot.alliance.name }}{% if pilot.alliance.ticker %} [{{ pilot.alliance.ticker }}]{% endif %}</span></a>{% else %}<span class="muted-line">No alliance</span>{% endif %}</td>
+              </tr>
+            {% else %}
+              <tr><td colspan="3" class="muted-line">No matching pilots.</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+
+      <div class="d-flex justify-content-end gap-2 mt-3">
+        {% if pilot_list.pagination.has_prev %}<a class="btn btn-sm btn-outline-light" href="{{ pilot_list_url(pilot_list.pagination.prev_page, pilot_list.sort, pilot_list.direction) }}">Previous</a>{% endif %}
+        {% if pilot_list.pagination.has_next %}<a class="btn btn-sm btn-outline-light" href="{{ pilot_list_url(pilot_list.pagination.next_page, pilot_list.sort, pilot_list.direction) }}">Next</a>{% endif %}
+      </div>
+    {% endif %}
+  </section>
+
+  <script>
+  (() => {
+    async function loadSubset(container, url) {
+      container.innerHTML = '<div class="muted-line py-2">Loading pilots…</div>';
+      try {
+        const response = await fetch(url, {credentials: 'same-origin'});
+        if (!response.ok) throw new Error('Erreur ' + response.status);
+        container.innerHTML = await response.text();
+      } catch (error) {
+        container.innerHTML = '<div class="text-danger py-2">' + window.eveosintPublicError(error) + '</div>';
+      }
+    }
+
+    async function toggleCorporation(row) {
+      const targetId = row.dataset.target;
+      const detail = document.getElementById(targetId);
+      if (!detail) return;
+      const caret = row.querySelector('.population-corp-caret');
+      const opening = detail.classList.contains('d-none');
+      detail.classList.toggle('d-none', !opening);
+      row.setAttribute('aria-expanded', opening ? 'true' : 'false');
+      if (caret) caret.textContent = opening ? '▼' : '▶';
+      if (!opening) return;
+
+      const container = detail.querySelector('[data-subset-container]');
+      if (!container || container.dataset.loaded === '1') return;
+      await loadSubset(container, row.dataset.url);
+      container.dataset.loaded = '1';
+    }
+
+    document.addEventListener('click', (event) => {
+      const paging = event.target.closest('.population-subset-page');
+      if (paging) {
+        event.preventDefault();
+        const container = paging.closest('[data-subset-container]');
+        if (container) loadSubset(container, paging.dataset.url);
+        return;
+      }
+      const row = event.target.closest('.population-corp-row');
+      if (row && !event.target.closest('a')) toggleCorporation(row);
+    });
+
+    document.addEventListener('keydown', (event) => {
+      const row = event.target.closest('.population-corp-row');
+      if (row && (event.key === 'Enter' || event.key === ' ')) {
+        event.preventDefault();
+        toggleCorporation(row);
+      }
+    });
+  })();
+  </script>
+{% endif %}
+{% endblock %}

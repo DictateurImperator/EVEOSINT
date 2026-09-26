@@ -1,0 +1,45 @@
+{% if ranking_error %}
+  <div class="alert alert-danger py-2">{{ ranking_error }}</div>
+{% elif ranking %}
+  <div class="table-responsive">
+    <table class="table table-dark table-hover align-middle mb-0">
+      <thead>
+        <tr>
+          <th>#</th>
+          <th>{% if ranking.ranking_type == 'corporation' %}Corporation{% else %}Alliance{% endif %}</th>
+          <th class="text-end">Pilots</th>
+        </tr>
+      </thead>
+      <tbody data-ranking-body>
+        {% for row in ranking["items"] %}
+          <tr data-ranking-row>
+            <td>{{ row.rank }}</td>
+            <td>
+              <a class="text-decoration-none fw-semibold d-inline-flex align-items-center gap-2" href="{{ row.url }}">
+                {% if row.image_url %}
+                  <img src="{{ row.image_url }}" alt="" loading="lazy" onerror="this.style.display='none'" style="width:32px;height:32px;border-radius:50%;object-fit:cover;background:rgba(255,255,255,0.06);">
+                {% endif %}
+                <span>{{ row.name }}</span>
+                {% if row.ticker %}<span class="muted-line">[{{ row.ticker }}]</span>{% endif %}
+              </a>
+            </td>
+            <td class="text-end fw-semibold">{{ row.pilot_count }}</td>
+          </tr>
+        {% else %}
+          <tr data-ranking-row><td colspan="3" class="muted-line">No ranking row.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  <div class="d-flex justify-content-between align-items-center mt-3" data-ranking-more-wrap>
+    <div class="muted-line small">
+      {% if ranking.q %}Search results{% else %}Ranking{% endif %}: {{ ranking.total_rows }} rows
+    </div>
+    {% if ranking.has_next %}
+      <button class="btn btn-outline-primary btn-sm" type="button" data-ranking-more data-next-offset="{{ ranking.next_offset }}">More</button>
+    {% endif %}
+  </div>
+{% else %}
+  <div class="muted-line">No ranking data.</div>
+{% endif %}

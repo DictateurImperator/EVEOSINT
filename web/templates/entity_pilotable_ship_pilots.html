@@ -1,0 +1,371 @@
+{% extends "base.html" %}
+
+{% block content %}
+{% macro entity_image_url(entity_type, entity_id, size=128) -%}
+{% if entity_type == 'character' or entity_type == 'player' %}https://images.evetech.net/characters/{{ entity_id }}/portrait?size={{ size }}{% elif entity_type == 'corporation' %}https://images.evetech.net/corporations/{{ entity_id }}/logo?size={{ size }}{% elif entity_type == 'alliance' %}https://images.evetech.net/alliances/{{ entity_id }}/logo?size={{ size }}{% elif entity_type == 'ship' %}https://images.evetech.net/types/{{ entity_id }}/icon?size={{ size }}{% endif %}
+{%- endmacro %}
+{% macro entity_profile_block(entity_type, entity_id, name, subtitle, ticker=None, url=None, image_url=None) -%}
+{% set final_image_url = image_url if image_url is not none else entity_image_url(entity_type, entity_id, 128) %}
+<div class="eveosint-profile-block">
+  {% if url %}<a class="text-decoration-none" href="{{ url }}">{% endif %}
+  {% if final_image_url %}
+  <img class="eveosint-profile-image" src="{{ final_image_url }}" alt="" loading="lazy" onerror="this.style.display='none'">
+  {% else %}
+  <span class="eveosint-profile-image eveosint-profile-placeholder">{{ subtitle[:1] }}</span>
+  {% endif %}
+  {% if url %}</a>{% endif %}
+  <div class="eveosint-profile-text">
+    <div class="muted-line mb-1">{{ subtitle }}</div>
+    {% if url %}<a class="eveosint-profile-name text-decoration-none" href="{{ url }}">{{ name }}</a>{% else %}<div class="eveosint-profile-name">{{ name }}</div>{% endif %}
+    {% if ticker %}
+      {% if url %}<a class="eveosint-profile-ticker text-decoration-none" href="{{ url }}">{{ ticker }}</a>{% else %}<span class="eveosint-profile-ticker">{{ ticker }}</span>{% endif %}
+    {% endif %}
+  </div>
+</div>
+{%- endmacro %}
+{% macro small_entity(entity) -%}
+{% if entity %}
+<a class="pilotable-detail-entity text-decoration-none" href="{{ entity.url }}">
+  {% if entity.image_url %}<img class="pilotable-detail-icon" src="{{ entity.image_url }}" alt="" loading="lazy" onerror="this.style.display='none'">{% endif %}
+  <span>{{ entity.name }}</span>{% if entity.ticker %}<span class="muted-line"> [{{ entity.ticker }}]</span>{% endif %}
+</a>
+{% else %}
+<span class="muted-line">Unknown</span>
+{% endif %}
+{%- endmacro %}
+{% macro page_url(target_page) -%}
+/{{ detail.entity_type }}/{{ detail.entity_id }}/pilotable-ships/{{ detail.ship_type_id }}?page={{ target_page }}{% if detail.query %}&q={{ detail.query|urlencode }}{% endif %}
+{%- endmacro %}
+<style>
+  .eveosint-profile-grid {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(260px, 1fr));
+    gap: 1.5rem;
+    align-items: start;
+  }
+  .eveosint-profile-block {
+    color: #f8fafc;
+    display: inline-flex;
+    align-items: center;
+    gap: 1rem;
+    min-height: 72px;
+  }
+  .eveosint-profile-image {
+    width: 72px;
+    height: 72px;
+    border-radius: 50%;
+    object-fit: cover;
+    background: rgba(255,255,255,0.06);
+    flex: 0 0 auto;
+  }
+  .eveosint-profile-placeholder {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    color: #bae6fd;
+    font-weight: 900;
+    font-size: 1.4rem;
+  }
+  .eveosint-profile-text {
+    min-width: 0;
+    line-height: 1.2;
+  }
+  .eveosint-profile-name {
+    color: #7cc7ff;
+    font-size: 1.35rem;
+    font-weight: 700;
+    display: block;
+  }
+  .eveosint-profile-name:hover,
+  .eveosint-profile-ticker:hover {
+    color: #b9e3ff;
+    text-decoration: underline !important;
+  }
+  .eveosint-profile-ticker {
+    color: #b9e3ff;
+    font-size: 0.95rem;
+    font-weight: 600;
+    display: inline-block;
+    margin-top: 0.15rem;
+  }
+  .pilotable-detail-entity {
+    color: #7cc7ff;
+    font-weight: 700;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+  .pilotable-detail-entity:hover {
+    color: #b9e3ff;
+    text-decoration: underline !important;
+  }
+  .pilotable-detail-icon {
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    object-fit: cover;
+    background: rgba(255,255,255,0.06);
+  }
+  @media (max-width: 991.98px) {
+    .eveosint-profile-grid {
+      grid-template-columns: 1fr;
+      gap: 1rem;
+    }
+  }
+</style>
+
+<div class="d-flex justify-content-between align-items-start mb-4">
+  <div>
+    <h1 class="h3 fw-bold mb-1">Pilotable Ship Pilots</h1>
+    <div class="muted-line">Detected pilots able to fly this ship.</div>
+  </div>
+  {% if detail and detail.profile %}
+    <a class="btn btn-outline-light" href="/{{ detail.entity_type }}/{{ detail.entity_id }}?tab=pilotable-ships">Back to Pilotable Ships</a>
+  {% endif %}
+</div>
+
+{% if error %}
+  <div class="alert alert-danger py-2">
+    {% if error == "character_pilotable_ships_missing" %}
+      Pilotable ships table missing. Run build_pilotable_ships.py first.
+    {% elif error == "pilotable_ship_index_missing" %}
+      Pilotable ship index missing. Run build_pilotable_ships.py first.
+    {% elif error == "sde_work.ship_entities_missing" %}
+      SDE ship entities table missing.
+    {% elif error == "ship_not_found" %}
+      Ship not found.
+    {% else %}
+      {{ error }}
+    {% endif %}
+  </div>
+{% endif %}
+
+{% if detail and not error %}
+  <section class="content-card p-3 p-md-4 mb-4">
+    <div class="eveosint-profile-grid">
+      <div>
+        {{ entity_profile_block(detail.profile.entity_type, detail.profile.entity_id, detail.profile.name, detail.profile.subtitle, detail.profile.ticker, '/' ~ detail.profile.entity_type ~ '/' ~ detail.profile.entity_id, detail.profile.image_url) }}
+      </div>
+
+      {% if detail.entity_type == 'corporation' and detail.profile.current_alliance %}
+      <div>
+        {{ entity_profile_block(detail.profile.current_alliance.entity_type, detail.profile.current_alliance.entity_id, detail.profile.current_alliance.name, 'Alliance', detail.profile.current_alliance.ticker, detail.profile.current_alliance.url) }}
+      </div>
+      {% endif %}
+
+      {% if detail.ship %}
+      <div>
+        {{ entity_profile_block('ship', detail.ship.entity_id, detail.ship.name, 'Ship', none, detail.ship.url, detail.ship.image_url) }}
+      </div>
+      {% endif %}
+    </div>
+  </section>
+
+  <section class="content-card p-3 p-md-4">
+    <div class="d-flex flex-wrap justify-content-between align-items-end gap-3 mb-3">
+      <div>
+        <h2 class="h5 fw-bold mb-1">Pilots</h2>
+        <div class="muted-line">
+          {{ detail.matching_pilots }} pilots detected{% if detail.total_members is not none %} / {{ detail.total_members }} current members analysed{% endif %}.
+        </div>
+      </div>
+      <div class="d-flex gap-2" style="min-width: min(460px, 100%);">
+        <input id="pilotablePilotFilter" class="form-control" type="search" value="{{ detail.query or '' }}" placeholder="{% if detail.entity_type == 'coalition' %}Filter visible pilots, corporations or alliances...{% elif detail.entity_type == 'alliance' %}Filter visible pilots or corporations...{% else %}Filter visible pilots...{% endif %}" autocomplete="off">
+        <button id="pilotablePilotFilterClear" class="btn btn-outline-light" type="button">Clear</button>
+      </div>
+    </div>
+
+    {% if detail.pagination %}
+    <div class="d-flex justify-content-between align-items-center mb-3">
+      <div class="muted-line small">
+        Page {{ detail.pagination.page }} / {{ detail.pagination.total_pages }} — {{ detail.pagination.total_rows }} results
+      </div>
+      <div class="d-flex gap-2">
+        {% if detail.pagination.has_prev %}
+          <a class="btn btn-sm btn-outline-light" href="{{ page_url(detail.pagination.prev_page) }}">Previous</a>
+        {% else %}
+          <span class="btn btn-sm btn-outline-secondary disabled">Previous</span>
+        {% endif %}
+        {% if detail.pagination.has_next %}
+          <a class="btn btn-sm btn-outline-light" href="{{ page_url(detail.pagination.next_page) }}">Next</a>
+        {% else %}
+          <span class="btn btn-sm btn-outline-secondary disabled">Next</span>
+        {% endif %}
+      </div>
+    </div>
+    {% endif %}
+
+    <div class="table-responsive">
+      <table class="table table-dark table-hover align-middle mb-0">
+        <thead>
+          <tr>
+            <th>Pilot</th>
+            {% if detail.entity_type in ['alliance', 'coalition'] %}<th>Corporation</th>{% endif %}
+            {% if detail.entity_type == 'coalition' %}<th>Alliance</th>{% endif %}
+            <th class="text-end">Mask updated</th>
+          </tr>
+        </thead>
+        <tbody id="pilotablePilotTableBody">
+          {% for pilot in detail.pilots %}
+            <tr data-pilotable-pilot-row data-filter-text="{{ (pilot.name ~ ' ' ~ (pilot.corporation.name if pilot.corporation else '') ~ ' ' ~ (pilot.alliance.name if pilot.alliance else 'No alliance'))|lower|e }}">
+              <td>{{ small_entity(pilot) }}</td>
+              {% if detail.entity_type in ['alliance', 'coalition'] %}<td>{{ small_entity(pilot.corporation) }}</td>{% endif %}
+              {% if detail.entity_type == 'coalition' %}<td>{% if pilot.alliance %}{{ small_entity(pilot.alliance) }}{% else %}<span class="muted-line">No alliance</span>{% endif %}</td>{% endif %}
+              <td class="text-end muted-line">{{ pilot.updated_at.strftime("%Y-%m-%d %H:%M") if pilot.updated_at else "-" }}</td>
+            </tr>
+          {% else %}
+            <tr>
+              <td colspan="{% if detail.entity_type == 'coalition' %}4{% elif detail.entity_type == 'alliance' %}3{% else %}2{% endif %}" class="muted-line">No pilot detected for this ship.</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+
+
+
+    <div id="pilotablePilotFilterStatus" class="muted-line small mt-2"></div>
+
+    <script>
+      (() => {
+        const input = document.getElementById("pilotablePilotFilter");
+        const clearButton = document.getElementById("pilotablePilotFilterClear");
+        const status = document.getElementById("pilotablePilotFilterStatus");
+        const tbody = document.getElementById("pilotablePilotTableBody");
+
+        if (!input || !status || !tbody) {
+          return;
+        }
+
+        const totalPages = {{ detail.pagination.total_pages if detail.pagination else 1 }};
+        const currentPage = {{ detail.pagination.page if detail.pagination else 1 }};
+        const totalRows = {{ detail.pagination.total_rows if detail.pagination else (detail.pilots|length) }};
+        const loadedPages = new Set([currentPage]);
+        let backgroundLoading = false;
+        let backgroundDone = totalPages <= 1;
+
+        const getRows = () => Array.from(tbody.querySelectorAll("[data-pilotable-pilot-row]"));
+
+        const updateStatus = () => {
+          const rows = getRows();
+          const needle = input.value.trim().toLowerCase();
+          const loadedCount = rows.length;
+
+          if (needle) {
+            const visibleCount = rows.filter((row) => !row.classList.contains("d-none")).length;
+            status.textContent = "Visible matches: " + visibleCount + " / " + loadedCount + (backgroundDone ? " loaded." : " loaded, background loading…");
+            return;
+          }
+
+          if (!backgroundDone) {
+            status.textContent = "Loading remaining pilots in background… " + loadedCount + " / " + totalRows;
+            return;
+          }
+
+          status.textContent = totalPages > 1 ? "All pilots loaded for instant filtering: " + loadedCount + " / " + totalRows + "." : "";
+        };
+
+        const applyFilter = () => {
+          const needle = input.value.trim().toLowerCase();
+
+          getRows().forEach((row) => {
+            const isBackgroundRow = row.getAttribute("data-background-row") === "1";
+            const haystack = row.getAttribute("data-filter-text") || row.textContent.toLowerCase();
+            const match = needle !== "" && haystack.includes(needle);
+
+            if (needle === "") {
+              row.classList.toggle("d-none", isBackgroundRow);
+              return;
+            }
+
+            row.classList.toggle("d-none", !match);
+          });
+
+          updateStatus();
+        };
+
+        const pageUrl = (page) => {
+          const url = new URL(window.location.href);
+          url.searchParams.set("page", String(page));
+          return url.pathname + "?" + url.searchParams.toString();
+        };
+
+        const appendPageRows = async (page) => {
+          const response = await fetch(pageUrl(page), {
+            method: "GET",
+            credentials: "same-origin",
+            cache: "no-store",
+            headers: {"X-Requested-By": "pilotable-background-loader"},
+          });
+
+          if (!response.ok) {
+            throw new Error("Erreur " + response.status);
+          }
+
+          const html = await response.text();
+          const doc = new DOMParser().parseFromString(html, "text/html");
+          const rows = Array.from(doc.querySelectorAll("[data-pilotable-pilot-row]"));
+
+          rows.forEach((row) => {
+            row.setAttribute("data-background-row", "1");
+            row.classList.add("d-none");
+            tbody.appendChild(row);
+          });
+
+          loadedPages.add(page);
+          applyFilter();
+        };
+
+        const loadRemainingPages = async () => {
+          if (backgroundLoading || backgroundDone) {
+            return;
+          }
+
+          backgroundLoading = true;
+          updateStatus();
+
+          try {
+            for (let page = 1; page <= totalPages; page += 1) {
+              if (loadedPages.has(page)) {
+                continue;
+              }
+              await appendPageRows(page);
+            }
+            backgroundDone = true;
+          } catch (error) {
+            status.textContent = window.eveosintPublicError(error);
+            return;
+          } finally {
+            backgroundLoading = false;
+          }
+
+          applyFilter();
+        };
+
+        input.addEventListener("input", applyFilter);
+        if (clearButton) {
+          clearButton.addEventListener("click", () => {
+            input.value = "";
+            input.focus();
+            applyFilter();
+          });
+        }
+
+        applyFilter();
+        window.setTimeout(loadRemainingPages, 100);
+      })();
+    </script>
+
+    {% if detail.pagination and (detail.pagination.has_prev or detail.pagination.has_next) %}
+    <div class="d-flex justify-content-end gap-2 mt-3">
+      {% if detail.pagination.has_prev %}
+        <a class="btn btn-sm btn-outline-light" href="{{ page_url(detail.pagination.prev_page) }}">Previous</a>
+      {% endif %}
+      {% if detail.pagination.has_next %}
+        <a class="btn btn-sm btn-outline-light" href="{{ page_url(detail.pagination.next_page) }}">Next</a>
+      {% endif %}
+    </div>
+    {% endif %}
+  </section>
+{% endif %}
+{% endblock %}

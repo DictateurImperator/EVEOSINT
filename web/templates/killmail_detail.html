@@ -1,0 +1,1616 @@
+{% extends "base.html" %}
+
+{% block content %}
+<!-- EVEOSINT_KILLMAIL_PAGE_V76_STRUCTURE_KILLMAIL_SUPPORT -->
+
+{% macro zkill_item(item, size=32) -%}
+{% if item and item.item and item.item.image_url %}
+<a href="{{ item.item.url }}" rel="tooltip" title="{{ item.item.name }}">
+  <img class="eveimage img-rounded zkill-fit-item" src="{{ item.item.image_url }}" style="height: {{ size }}px; width: {{ size }}px;" alt="{{ item.item.name }}" loading="lazy" decoding="async" fetchpriority="low">
+</a>
+{% endif %}
+{%- endmacro %}
+
+<style>
+  .killmail-page {
+    min-height: calc(100vh - 110px);
+    padding: 1rem;
+    color: #d6e1e5;
+    background:
+      linear-gradient(rgba(2, 6, 8, 0.90), rgba(2, 6, 8, 0.96)),
+      radial-gradient(circle at 28% 10%, rgba(52, 103, 123, 0.28), transparent 38%),
+      radial-gradient(circle at 82% 18%, rgba(105, 48, 40, 0.18), transparent 34%),
+      #030607;
+  }
+
+  .killmail-shell {
+    max-width: 1440px;
+    margin: 0 auto;
+  }
+
+  .eve-window {
+    background: linear-gradient(180deg, rgba(18, 29, 34, 0.95), rgba(7, 12, 15, 0.96));
+    border: 1px solid rgba(137, 169, 178, 0.34);
+    border-radius: 4px;
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.045),
+      0 14px 34px rgba(0, 0, 0, 0.42);
+    overflow: hidden;
+  }
+
+  .eve-window-title {
+    min-height: 38px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.8rem;
+    padding: 0.45rem 0.7rem;
+    color: #d9e6ea;
+    background:
+      linear-gradient(180deg, rgba(57, 79, 88, 0.58), rgba(20, 32, 38, 0.64));
+    border-bottom: 1px solid rgba(151, 183, 192, 0.28);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    font-size: 0.72rem;
+  }
+
+  .eve-window-title .muted {
+    color: #81969f;
+    text-transform: none;
+    letter-spacing: 0;
+  }
+
+  .fitting-title-actions {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 0.45rem;
+    min-width: 0;
+  }
+
+  .eft-copy-button {
+    min-height: 25px;
+    padding: 0.2rem 0.58rem;
+    border: 1px solid rgba(139, 173, 182, 0.38);
+    color: #dce9ec;
+    background: linear-gradient(180deg, rgba(68, 96, 107, 0.72), rgba(22, 38, 45, 0.88));
+    font-size: 0.63rem;
+    line-height: 1;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    cursor: pointer;
+  }
+
+  .eft-copy-button:hover {
+    color: #ffffff;
+    border-color: rgba(176, 205, 212, 0.62);
+    background: linear-gradient(180deg, rgba(82, 118, 131, 0.78), rgba(30, 51, 60, 0.92));
+  }
+
+  .eft-copy-button:disabled {
+    cursor: default;
+    opacity: 0.62;
+  }
+
+  .eft-copy-status {
+    min-width: 68px;
+    color: #8fa5ad;
+    font-size: 0.65rem;
+    text-transform: none;
+    letter-spacing: 0;
+  }
+
+  .eft-copy-status.success {
+    color: #89c99a;
+  }
+
+  .eft-copy-status.error {
+    color: #d98b8b;
+  }
+
+  .killmail-summary {
+    display: grid;
+    grid-template-columns: minmax(0, 1.6fr) repeat(4, minmax(115px, 0.55fr));
+    gap: 1px;
+    margin-bottom: 0.8rem;
+    border: 1px solid rgba(137, 169, 178, 0.32);
+    border-radius: 4px;
+    overflow: hidden;
+    background: rgba(137, 169, 178, 0.16);
+  }
+
+  .summary-main,
+  .summary-stat {
+    background: linear-gradient(180deg, rgba(17, 27, 32, 0.98), rgba(8, 14, 17, 0.98));
+  }
+
+  .summary-main {
+    display: grid;
+    grid-template-columns: 58px minmax(0, 1fr);
+    gap: 0.75rem;
+    align-items: center;
+    padding: 0.7rem 0.8rem;
+  }
+
+  .summary-main img {
+    width: 58px;
+    height: 58px;
+    object-fit: contain;
+    border: 1px solid rgba(147, 176, 184, 0.25);
+    background: rgba(0, 0, 0, 0.34);
+  }
+
+  .summary-main h1 {
+    margin: 0;
+    font-size: 1.08rem;
+    color: #eef7fa;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .summary-main .meta {
+    margin-top: 0.2rem;
+    color: #8fa5ad;
+    font-size: 0.78rem;
+  }
+
+  .summary-stat {
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    padding: 0.65rem 0.75rem;
+  }
+
+  .summary-stat .label {
+    color: #788e97;
+    font-size: 0.64rem;
+    text-transform: uppercase;
+    letter-spacing: 0.075em;
+  }
+
+  .summary-stat .value {
+    margin-top: 0.15rem;
+    color: #edf6f8;
+    font-size: 0.95rem;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .killmail-main-grid {
+    display: grid;
+    grid-template-columns: minmax(760px, 1.55fr) minmax(410px, 0.85fr);
+    gap: 0.8rem;
+    align-items: stretch;
+  }
+
+  .victim-fit-layout {
+    display: grid;
+    grid-template-columns: 560px minmax(180px, 1fr);
+    gap: 0.75rem;
+    padding: 0.75rem;
+    align-items: start;
+  }
+
+  .fit-only-card {
+    width: 560px;
+    height: 545px;
+    background: #000;
+    position: relative;
+    overflow: hidden;
+    border-radius: 12px;
+    border: 1px solid rgba(125, 155, 165, 0.18);
+  }
+
+  #Fitting_Panel {
+    position: relative;
+    height: 398px;
+    width: 398px;
+    z-index: 3;
+    margin: 0 auto;
+    transform: scale(1.18);
+    transform-origin: top center;
+  }
+
+  #mask {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 398px;
+    height: 398px;
+    z-index: -1;
+  }
+
+  #mask img {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 398px;
+    height: 398px;
+    border: 0;
+    opacity: 0.84;
+  }
+
+  #bigship {
+    position: absolute;
+    left: 72px;
+    top: 71px;
+    width: 256px;
+    height: 256px;
+    z-index: -2;
+  }
+
+  #bigship img {
+    height: 256px;
+    width: 256px;
+    object-fit: contain;
+    border: 0;
+    image-rendering: auto;
+    transform: translateZ(0);
+  }
+
+  .eveosint-fit-circle-slot {
+    position: absolute;
+    width: 28px;
+    height: 28px;
+    z-index: 4;
+    border-radius: 50%;
+    box-sizing: border-box;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border: 2px solid rgba(225, 235, 235, 0.70);
+    box-shadow:
+      inset 0 0 5px rgba(0, 0, 0, 0.82),
+      0 0 5px rgba(0, 0, 0, 0.85);
+    overflow: visible;
+  }
+
+  .eveosint-fit-circle-slot.slot-looted,
+  .eveosint-fit-charge-slot.slot-looted {
+    background: rgba(42, 128, 66, 0.62);
+  }
+
+  .eveosint-fit-circle-slot.slot-destroyed,
+  .eveosint-fit-charge-slot.slot-destroyed {
+    background: rgba(145, 38, 38, 0.62);
+  }
+
+  .eveosint-fit-circle-slot.slot-empty {
+    background: rgba(108, 116, 120, 0.72);
+  }
+
+  .eveosint-fit-circle-slot > a {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 21px;
+    height: 21px;
+    position: relative;
+    z-index: 2;
+  }
+
+  .eveosint-fit-circle-slot .zkill-fit-item {
+    width: 21px !important;
+    height: 21px !important;
+    border: 0;
+    border-radius: 0;
+    display: block;
+    object-fit: contain;
+    image-rendering: auto;
+    transform: translateZ(0);
+  }
+
+  .eveosint-fit-charge-slot {
+    position: absolute;
+    width: 13px;
+    height: 13px;
+    z-index: 5;
+    border-radius: 50%;
+    box-sizing: border-box;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border: 1px solid rgba(225, 235, 235, 0.70);
+    box-shadow:
+      inset 0 0 3px rgba(0, 0, 0, 0.82),
+      0 0 3px rgba(0, 0, 0, 0.85);
+    overflow: visible;
+  }
+
+  .eveosint-fit-charge-slot > a {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 9px;
+    height: 9px;
+    position: relative;
+    z-index: 2;
+  }
+
+  .eveosint-fit-charge-slot .zkill-fit-item {
+    width: 9px !important;
+    height: 9px !important;
+    border: 0;
+    border-radius: 0;
+    display: block;
+    object-fit: contain;
+    image-rendering: auto;
+    transform: translateZ(0);
+  }
+
+  .victim-stack {
+    display: grid;
+    gap: 0.45rem;
+  }
+
+  .victim-entity {
+    display: grid;
+    grid-template-columns: 38px minmax(0, 1fr);
+    gap: 0.55rem;
+    align-items: center;
+    padding: 0.5rem;
+    background: linear-gradient(180deg, rgba(35, 47, 52, 0.42), rgba(11, 18, 21, 0.52));
+    border: 1px solid rgba(135, 163, 172, 0.16);
+  }
+
+  .victim-entity img {
+    width: 38px;
+    height: 38px;
+    object-fit: contain;
+    background: rgba(0, 0, 0, 0.34);
+  }
+
+  .victim-entity .kind {
+    color: #738a93;
+    font-size: 0.62rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+  }
+
+  .victim-entity .name {
+    margin-top: 0.08rem;
+    color: #e8f1f4;
+    font-size: 0.83rem;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .victim-entity a,
+  .attacker-name a,
+  .inventory-name a {
+    color: inherit;
+    text-decoration: none;
+  }
+
+  .victim-entity a:hover,
+  .attacker-name a:hover,
+  .inventory-name a:hover {
+    color: #ffffff;
+    text-decoration: underline;
+  }
+
+  .attackers-window {
+    min-height: 100%;
+  }
+
+  .attackers-title-controls {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 0.55rem;
+    min-width: 0;
+  }
+
+  .attacker-view-toggle {
+    display: inline-flex;
+    align-items: center;
+    padding: 2px;
+    border: 1px solid rgba(137, 169, 178, 0.32);
+    background: rgba(2, 7, 9, 0.52);
+  }
+
+  .attacker-view-button {
+    min-height: 24px;
+    padding: 0.15rem 0.48rem;
+    border: 0;
+    color: #8499a1;
+    background: transparent;
+    font-size: 0.62rem;
+    line-height: 1;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    cursor: pointer;
+  }
+
+  .attacker-view-button:hover {
+    color: #dbe8eb;
+    background: rgba(91, 128, 141, 0.18);
+  }
+
+  .attacker-view-button.active {
+    color: #edf7fa;
+    background: linear-gradient(180deg, rgba(79, 112, 124, 0.64), rgba(30, 49, 57, 0.78));
+    box-shadow: inset 0 0 0 1px rgba(171, 198, 205, 0.20);
+  }
+
+  .attacker-row.grouped-attacker .attacker-name {
+    font-weight: 700;
+  }
+
+  .attacker-row.grouped-attacker .attacker-sub.group-member-count {
+    color: #a8bbc1;
+  }
+
+  .attackers-list {
+    max-height: 650px;
+    overflow-y: auto;
+    padding: 0.45rem;
+  }
+
+  .attacker-row {
+    position: relative;
+    display: grid;
+    grid-template-columns: 44px minmax(0, 1fr) 72px;
+    gap: 0.55rem;
+    align-items: center;
+    min-height: 58px;
+    padding: 0.45rem 0.5rem 0.58rem;
+    margin-bottom: 0.35rem;
+    background: linear-gradient(180deg, rgba(31, 43, 48, 0.46), rgba(10, 16, 19, 0.66));
+    border: 1px solid rgba(137, 164, 172, 0.15);
+    overflow: hidden;
+  }
+
+  .attacker-row.final-blow {
+    border-color: rgba(80, 185, 112, 0.58);
+    background: linear-gradient(180deg, rgba(27, 78, 47, 0.34), rgba(10, 24, 17, 0.72));
+    box-shadow: inset 3px 0 0 rgba(66, 190, 105, 0.78);
+  }
+
+  .attacker-row.top-damage:not(.final-blow) {
+    border-color: rgba(205, 164, 72, 0.52);
+    box-shadow: inset 3px 0 0 rgba(205, 164, 72, 0.68);
+  }
+
+  .attacker-tags {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.3rem;
+    margin: 0.18rem 0 0.22rem;
+  }
+
+  .attacker-tag {
+    display: inline-flex;
+    align-items: center;
+    min-height: 17px;
+    padding: 0.05rem 0.38rem;
+    border-radius: 999px;
+    font-size: 0.62rem;
+    font-weight: 700;
+    line-height: 1;
+    letter-spacing: 0.035em;
+    text-transform: uppercase;
+    border: 1px solid transparent;
+  }
+
+  .attacker-tag.final-blow-label {
+    color: #bdf5cb;
+    background: rgba(42, 135, 72, 0.28);
+    border-color: rgba(91, 208, 126, 0.48);
+  }
+
+  .attacker-tag.top-damage-label {
+    color: #f5dda1;
+    background: rgba(155, 112, 28, 0.25);
+    border-color: rgba(218, 173, 74, 0.46);
+  }
+
+  .attacker-ship {
+    position: relative;
+    width: 44px;
+    height: 44px;
+  }
+
+  .attacker-entity-image {
+    width: 44px;
+    height: 44px;
+    object-fit: cover;
+    background: rgba(0, 0, 0, 0.35);
+    border: 1px solid rgba(139, 169, 178, 0.26);
+  }
+
+  .attacker-ship-badge {
+    position: absolute;
+    right: -4px;
+    bottom: -4px;
+    width: 22px;
+    height: 22px;
+    object-fit: contain;
+    background: rgba(2, 6, 8, 0.92);
+    border: 1px solid rgba(170, 194, 201, 0.45);
+    box-shadow: 0 0 5px rgba(0, 0, 0, 0.85);
+  }
+
+  .attacker-main {
+    min-width: 0;
+  }
+
+  .attacker-name {
+    color: #edf5f7;
+    font-size: 0.84rem;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .attacker-sub {
+    margin-top: 0.08rem;
+    color: #879ca4;
+    font-size: 0.7rem;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .attacker-damage {
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .attacker-damage .pct {
+    color: #f0f7f8;
+    font-size: 0.88rem;
+  }
+
+  .attacker-damage .raw {
+    margin-top: 0.08rem;
+    color: #7f949c;
+    font-size: 0.66rem;
+  }
+
+  .damage-track {
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    height: 3px;
+    background: rgba(255, 255, 255, 0.035);
+  }
+
+  .damage-track > span {
+    display: block;
+    height: 100%;
+    background: linear-gradient(90deg, rgba(93, 154, 176, 0.72), rgba(177, 89, 70, 0.88));
+  }
+
+  .inventory-board {
+    margin-top: 0.8rem;
+  }
+
+  .inventory-groups {
+    padding: 0.55rem;
+    display: grid;
+    gap: 0.55rem;
+  }
+
+  .inventory-group {
+    border: 1px solid rgba(137, 164, 172, 0.18);
+    background: rgba(3, 8, 10, 0.46);
+  }
+
+  .inventory-group-title {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    min-height: 30px;
+    padding: 0.35rem 0.55rem;
+    background: linear-gradient(180deg, rgba(51, 69, 76, 0.48), rgba(16, 25, 29, 0.62));
+    border-bottom: 1px solid rgba(137, 164, 172, 0.16);
+    color: #d9e5e8;
+    font-size: 0.72rem;
+    text-transform: uppercase;
+    letter-spacing: 0.075em;
+  }
+
+  .inventory-group-title .count {
+    color: #80969e;
+    font-size: 0.65rem;
+    letter-spacing: 0;
+  }
+
+  .inventory-split {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 1px;
+    background: rgba(123, 151, 159, 0.13);
+  }
+
+  .inventory-side {
+    min-height: 74px;
+    padding: 0.45rem;
+  }
+
+  .inventory-side.looted {
+    background:
+      linear-gradient(180deg, rgba(34, 103, 62, 0.19), rgba(8, 19, 13, 0.30));
+  }
+
+  .inventory-side.destroyed {
+    background:
+      linear-gradient(180deg, rgba(122, 48, 42, 0.19), rgba(23, 10, 9, 0.30));
+  }
+
+  .inventory-side-title {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 0.38rem;
+    color: #a9babf;
+    font-size: 0.66rem;
+    text-transform: uppercase;
+    letter-spacing: 0.07em;
+  }
+
+  .inventory-side.looted .inventory-side-title {
+    color: #8fc9a4;
+  }
+
+  .inventory-side.destroyed .inventory-side-title {
+    color: #d49a91;
+  }
+
+  .inventory-items {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+    gap: 0.35rem;
+  }
+
+  .inventory-item {
+    display: grid;
+    grid-template-columns: 32px minmax(0, 1fr) auto;
+    gap: 0.45rem;
+    align-items: center;
+    min-height: 40px;
+    padding: 0.3rem 0.38rem;
+    background: rgba(7, 12, 14, 0.62);
+    border: 1px solid rgba(143, 167, 174, 0.12);
+  }
+
+  .inventory-item img {
+    width: 32px;
+    height: 32px;
+    object-fit: contain;
+  }
+
+  .inventory-name {
+    min-width: 0;
+    color: #dce8eb;
+    font-size: 0.76rem;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .inventory-qty {
+    color: #8ea3aa;
+    font-size: 0.7rem;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .inventory-empty {
+    color: #60747c;
+    font-size: 0.72rem;
+    padding: 0.35rem 0.15rem;
+  }
+
+  @media (max-width: 1180px) {
+    .killmail-main-grid,
+    .victim-fit-layout {
+      grid-template-columns: 1fr;
+    }
+
+    .fit-only-card {
+      margin: 0 auto;
+    }
+
+    .killmail-summary {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .summary-main {
+      grid-column: 1 / -1;
+    }
+  }
+
+  @media (max-width: 700px) {
+    .killmail-page {
+      padding: 0.45rem;
+    }
+
+    .inventory-split {
+      grid-template-columns: 1fr;
+    }
+
+    .fit-only-card {
+      width: 100%;
+      height: 420px;
+    }
+
+    #Fitting_Panel {
+      transform: scale(0.96);
+      transform-origin: top center;
+      margin-left: calc(50% - 199px);
+    }
+  }
+</style><div class="killmail-page">
+{% if error %}
+  <div class="alert alert-danger py-2">Killmail loading failed: {{ error }}</div>
+{% elif not killmail %}
+  <div class="alert alert-warning py-2">Killmail not found.</div>
+{% else %}
+  {% set ns = namespace(high_items=[], high_charges=[], mid_items=[], mid_charges=[], low_items=[], low_charges=[], rig_items=[], subsystem_items=[], drone_items=[]) %}
+  {% set slot_layout = killmail.slot_layout or {} %}
+  {% for section in killmail.fitting_sections or [] %}
+    {% set section_key = (section.label or '')|lower %}
+    {% if section_key == 'high slots' %}
+      {% for item in section['items'] %}
+        {% if item.total_quantity and item.total_quantity > 1 %}
+          {% set ns.high_charges = ns.high_charges + [item] %}
+        {% else %}
+          {% set ns.high_items = ns.high_items + [item] %}
+        {% endif %}
+      {% endfor %}
+    {% elif section_key == 'mid slots' %}
+      {% for item in section['items'] %}
+        {% if item.total_quantity and item.total_quantity > 1 %}
+          {% set ns.mid_charges = ns.mid_charges + [item] %}
+        {% else %}
+          {% set ns.mid_items = ns.mid_items + [item] %}
+        {% endif %}
+      {% endfor %}
+    {% elif section_key == 'low slots' %}
+      {% for item in section['items'] %}
+        {% if item.total_quantity and item.total_quantity > 1 %}
+          {% set ns.low_charges = ns.low_charges + [item] %}
+        {% else %}
+          {% set ns.low_items = ns.low_items + [item] %}
+        {% endif %}
+      {% endfor %}
+    {% elif section_key == 'rigs' %}
+      {% set ns.rig_items = section['items'] %}
+    {% elif section_key == 'subsystems' %}
+      {% set ns.subsystem_items = section['items'] %}
+    {% elif section_key == 'drones' %}
+      {% set ns.drone_items = section['items'] %}
+    {% endif %}
+  {% endfor %}
+
+  <div class="killmail-shell">
+    <div class="killmail-summary">
+      <div class="summary-main">
+        <div>
+          {% if killmail.victim_ship and killmail.victim_ship.image_url %}
+          <img src="{{ killmail.victim_ship.image_url }}" alt="{{ killmail.victim_ship.name }}" loading="lazy">
+          {% endif %}
+        </div>
+        <div>
+          <h1>{{ killmail.victim_ship.name if killmail.victim_ship else "Unknown ship" }} destroyed</h1>
+          <div class="meta">
+            {{ killmail.date_label }}
+            {% if killmail.location and killmail.location.system %} · {{ killmail.location.system.name }}{% endif %}
+          </div>
+        </div>
+      </div>
+      <div class="summary-stat">
+        <div class="label">{% if killmail.is_structure %}Owner{% else %}Victim{% endif %}</div>
+        <div class="value">
+          {% if killmail.is_structure %}
+            {{ killmail.victim.corporation.name if killmail.victim.corporation else "Unknown owner" }}
+          {% else %}
+            {{ killmail.victim.character.name if killmail.victim.character else "Unknown" }}
+          {% endif %}
+        </div>
+      </div>
+      <div class="summary-stat">
+        <div class="label">Attackers</div>
+        <div class="value">{{ killmail.attackers_count }}</div>
+      </div>
+      <div class="summary-stat">
+        <div class="label">Damage taken</div>
+        <div class="value">{{ "{:,}".format(killmail.victim.damage_taken or 0) }}</div>
+      </div>
+      <div class="summary-stat">
+        <div class="label">Items</div>
+        <div class="value">{{ killmail.dropped_items|length }} / {{ killmail.destroyed_items|length }}</div>
+      </div>
+    </div>
+
+    <div class="killmail-main-grid">
+      <section class="eve-window">
+        <div class="eve-window-title">
+          <span>{% if killmail.is_structure %}Structure & fitting{% else %}Victim & fitting{% endif %}</span>
+          <div class="fitting-title-actions">
+            <span class="muted">{{ killmail.victim_ship.name if killmail.victim_ship else "Unknown ship" }}</span>
+            <button type="button" class="eft-copy-button" id="copy-eft-button">Copy EFT</button>
+            <span class="eft-copy-status" id="eft-copy-status" aria-live="polite"></span>
+          </div>
+        </div>
+
+        <div
+          id="eft-export-data"
+          hidden
+          data-ship-name="{{ (killmail.victim_ship.name if killmail.victim_ship else 'Unknown ship')|e }}"
+          data-fit-name="EVEOSINT Killmail {{ killmail.killmail_id }}"
+        >
+          {% for item in ns.low_items %}
+            {% if item.item %}
+            <span data-eft-kind="module" data-eft-group="low" data-eft-index="{{ loop.index0 }}" data-eft-name="{{ item.item.name|e }}"></span>
+            {% endif %}
+          {% endfor %}
+          {% for item in ns.low_charges %}
+            {% if item.item %}
+            <span data-eft-kind="charge" data-eft-group="low" data-eft-index="{{ loop.index0 }}" data-eft-name="{{ item.item.name|e }}"></span>
+            {% endif %}
+          {% endfor %}
+
+          {% for item in ns.mid_items %}
+            {% if item.item %}
+            <span data-eft-kind="module" data-eft-group="mid" data-eft-index="{{ loop.index0 }}" data-eft-name="{{ item.item.name|e }}"></span>
+            {% endif %}
+          {% endfor %}
+          {% for item in ns.mid_charges %}
+            {% if item.item %}
+            <span data-eft-kind="charge" data-eft-group="mid" data-eft-index="{{ loop.index0 }}" data-eft-name="{{ item.item.name|e }}"></span>
+            {% endif %}
+          {% endfor %}
+
+          {% for item in ns.high_items %}
+            {% if item.item %}
+            <span data-eft-kind="module" data-eft-group="high" data-eft-index="{{ loop.index0 }}" data-eft-name="{{ item.item.name|e }}"></span>
+            {% endif %}
+          {% endfor %}
+          {% for item in ns.high_charges %}
+            {% if item.item %}
+            <span data-eft-kind="charge" data-eft-group="high" data-eft-index="{{ loop.index0 }}" data-eft-name="{{ item.item.name|e }}"></span>
+            {% endif %}
+          {% endfor %}
+
+          {% for item in ns.rig_items %}
+            {% if item.item %}
+            <span data-eft-kind="module" data-eft-group="rig" data-eft-index="{{ loop.index0 }}" data-eft-name="{{ item.item.name|e }}"></span>
+            {% endif %}
+          {% endfor %}
+
+          {% for item in ns.subsystem_items %}
+            {% if item.item %}
+            <span data-eft-kind="module" data-eft-group="subsystem" data-eft-index="{{ loop.index0 }}" data-eft-name="{{ item.item.name|e }}"></span>
+            {% endif %}
+          {% endfor %}
+
+          {% for item in ns.drone_items %}
+            {% if item.item %}
+            <span
+              data-eft-kind="drone"
+              data-eft-name="{{ item.item.name|e }}"
+              data-eft-quantity="{{ item.total_quantity or 1 }}"
+            ></span>
+            {% endif %}
+          {% endfor %}
+        </div>
+
+        <div class="victim-fit-layout">
+          <div class="fit-only-card">
+    <div id="Fitting_Panel">
+      <div id="mask">
+        <img src="https://zkillboard.com/img/panel/tyrannis.png" alt="">
+      </div>
+
+      {% set high_positions = [
+        "left:68px; top:73px;", "left:96px; top:52px;", "left:126px; top:38px;", "left:157px; top:28px;",
+        "left:189px; top:25px;", "left:220px; top:29px;", "left:249px; top:40px;", "left:275px; top:56px;"
+      ] %}
+      {% set high_charge_positions = [
+        "left:78px; top:101px;", "left:106px; top:84px;", "left:135px; top:71px;", "left:165px; top:63px;",
+        "left:195px; top:60px;", "left:224px; top:64px;", "left:251px; top:75px;", "left:276px; top:91px;"
+      ] %}
+      {% set mid_positions = [
+        "left:337px; top:114px;", "left:347px; top:143px;", "left:351px; top:173px;", "left:350px; top:203px;",
+        "left:344px; top:232px;", "left:333px; top:259px;", "left:318px; top:283px;", "left:300px; top:305px;"
+      ] %}
+      {% set mid_charge_positions = [
+        "left:316px; top:140px;", "left:324px; top:167px;", "left:327px; top:193px;", "left:326px; top:220px;",
+        "left:320px; top:246px;", "left:310px; top:270px;", "left:296px; top:292px;", "left:280px; top:312px;"
+      ] %}
+      {% set low_positions = [
+        "left:46px; top:294px;", "left:70px; top:316px;", "left:98px; top:334px;", "left:129px; top:347px;",
+        "left:162px; top:354px;", "left:194px; top:353px;", "left:224px; top:346px;", "left:250px; top:333px;"
+      ] %}
+      {% set low_charge_positions = [
+        "left:62px; top:273px;", "left:86px; top:294px;", "left:113px; top:310px;", "left:144px; top:321px;",
+        "left:176px; top:327px;", "left:206px; top:325px;", "left:234px; top:318px;", "left:259px; top:304px;"
+      ] %}
+      {% set rig_positions = [
+        "left:20px; top:158px;", "left:17px; top:188px;", "left:20px; top:218px;"
+      ] %}
+
+      {% macro slot_state(item) -%}
+        {%- if not item -%}
+          slot-empty
+        {%- elif (item.quantity_dropped is defined and item.quantity_dropped and item.quantity_dropped > 0)
+          or (item.dropped is defined and item.dropped)
+          or (item.total_dropped is defined and item.total_dropped and item.total_dropped > 0)
+          or (item.is_dropped is defined and item.is_dropped) -%}
+          slot-looted
+        {%- else -%}
+          slot-destroyed
+        {%- endif -%}
+      {%- endmacro %}
+
+      {% set high_count = [(slot_layout.get('high', 0) or 0), ns.high_items|length]|max %}
+      {% set mid_count = [(slot_layout.get('mid', 0) or 0), ns.mid_items|length]|max %}
+      {% set low_count = [(slot_layout.get('low', 0) or 0), ns.low_items|length]|max %}
+      {% set rig_count = [(slot_layout.get('rig', 0) or 0), ns.rig_items|length]|max %}
+
+      {% set high_count = [high_count, high_positions|length]|min %}
+      {% set mid_count = [mid_count, mid_positions|length]|min %}
+      {% set low_count = [low_count, low_positions|length]|min %}
+      {% set rig_count = [rig_count, rig_positions|length]|min %}
+
+      {% set high_start = ((high_positions|length - high_count) // 2) if high_count > 0 else 0 %}
+      {% set mid_start = ((mid_positions|length - mid_count) // 2) if mid_count > 0 else 0 %}
+      {% set low_start = ((low_positions|length - low_count) // 2) if low_count > 0 else 0 %}
+      {% set rig_start = ((rig_positions|length - rig_count) // 2) if rig_count > 0 else 0 %}
+
+      {% set high_display_positions = high_positions[high_start:high_start + high_count] %}
+      {% set high_charge_display_positions = high_charge_positions[high_start:high_start + high_count] %}
+      {% set mid_display_positions = mid_positions[mid_start:mid_start + mid_count] %}
+      {% set mid_charge_display_positions = mid_charge_positions[mid_start:mid_start + mid_count] %}
+      {% set low_display_positions = low_positions[low_start:low_start + low_count] %}
+      {% set low_charge_display_positions = low_charge_positions[low_start:low_start + low_count] %}
+      {% set rig_display_positions = rig_positions[rig_start:rig_start + rig_count] %}
+
+      {% for pos in high_display_positions %}
+      {% set item = ns.high_items[loop.index0] if ns.high_items|length > loop.index0 else none %}
+      <div id="high{{ loop.index }}" class="eveosint-fit-circle-slot {{ slot_state(item) }}" style="{{ pos }}">{% if item %}{{ zkill_item(item, 24) }}{% endif %}</div>
+      {% endfor %}
+      {% for pos in high_charge_display_positions %}
+      {% set item = ns.high_charges[loop.index0] if ns.high_charges|length > loop.index0 else none %}
+      {% if item %}<div id="highcharge{{ loop.index }}" class="eveosint-fit-charge-slot {{ slot_state(item) }}" style="{{ pos }}">{{ zkill_item(item, 12) }}</div>{% endif %}
+      {% endfor %}
+
+      {% for pos in mid_display_positions %}
+      {% set item = ns.mid_items[loop.index0] if ns.mid_items|length > loop.index0 else none %}
+      <div id="mid{{ loop.index }}" class="eveosint-fit-circle-slot {{ slot_state(item) }}" style="{{ pos }}">{% if item %}{{ zkill_item(item, 24) }}{% endif %}</div>
+      {% endfor %}
+      {% for pos in mid_charge_display_positions %}
+      {% set item = ns.mid_charges[loop.index0] if ns.mid_charges|length > loop.index0 else none %}
+      {% if item %}<div id="midcharge{{ loop.index }}" class="eveosint-fit-charge-slot {{ slot_state(item) }}" style="{{ pos }}">{{ zkill_item(item, 12) }}</div>{% endif %}
+      {% endfor %}
+
+      {% for pos in low_display_positions %}
+      {% set item = ns.low_items[loop.index0] if ns.low_items|length > loop.index0 else none %}
+      <div id="low{{ loop.index }}" class="eveosint-fit-circle-slot {{ slot_state(item) }}" style="{{ pos }}">{% if item %}{{ zkill_item(item, 24) }}{% endif %}</div>
+      {% endfor %}
+      {% for pos in low_charge_display_positions %}
+      {% set item = ns.low_charges[loop.index0] if ns.low_charges|length > loop.index0 else none %}
+      {% if item %}<div id="lowcharge{{ loop.index }}" class="eveosint-fit-charge-slot {{ slot_state(item) }}" style="{{ pos }}">{{ zkill_item(item, 12) }}</div>{% endif %}
+      {% endfor %}
+
+      {% for pos in rig_display_positions %}
+      {% set item = ns.rig_items[loop.index0] if ns.rig_items|length > loop.index0 else none %}
+      <div id="rig{{ loop.index }}" class="eveosint-fit-circle-slot {{ slot_state(item) }}" style="{{ pos }}">{% if item %}{{ zkill_item(item, 24) }}{% endif %}</div>
+      {% endfor %}
+
+      <div id="bigship">
+        {% if killmail.victim_ship %}
+          {% if killmail.victim_ship.entity_id %}
+            {% set sharp_ship_image_url = "https://images.evetech.net/types/" ~ killmail.victim_ship.entity_id ~ "/render?size=1024" %}
+          {% elif killmail.victim_ship.type_id %}
+            {% set sharp_ship_image_url = "https://images.evetech.net/types/" ~ killmail.victim_ship.type_id ~ "/render?size=1024" %}
+          {% elif killmail.victim_ship.image_url %}
+            {% set sharp_ship_image_url = killmail.victim_ship.image_url
+              | replace('_32.png', '_1024.png')
+              | replace('_64.png', '_1024.png')
+              | replace('_128.png', '_1024.png')
+              | replace('_256.png', '_1024.png')
+              | replace('/64/', '/1024/')
+              | replace('/128/', '/1024/')
+              | replace('/256/', '/1024/')
+              | replace('size=64', 'size=1024')
+              | replace('size=128', 'size=1024')
+              | replace('size=256', 'size=1024')
+            %}
+          {% endif %}
+          {% if sharp_ship_image_url %}
+          <img src="{{ sharp_ship_image_url }}" height="256" width="256" class="eveimage img-rounded" alt="{{ killmail.victim_ship.name }}" loading="eager" decoding="async" fetchpriority="high">
+          {% endif %}
+        {% endif %}
+      </div>
+    </div>
+          </div>
+
+          <div class="victim-stack">
+            {% if not killmail.is_structure %}
+            <div class="victim-entity">
+              <div>{% if killmail.victim.character and killmail.victim.character.image_url %}<img src="{{ killmail.victim.character.image_url }}" alt="">{% endif %}</div>
+              <div><div class="kind">Character</div><div class="name">{% if killmail.victim.character %}<a href="{{ killmail.victim.character.url }}">{{ killmail.victim.character.name }}</a>{% else %}Unknown{% endif %}</div></div>
+            </div>
+            {% endif %}
+            <div class="victim-entity">
+              <div>{% if killmail.victim.corporation and killmail.victim.corporation.image_url %}<img src="{{ killmail.victim.corporation.image_url }}" alt="">{% endif %}</div>
+              <div><div class="kind">{% if killmail.is_structure %}Owner corporation{% else %}Corporation{% endif %}</div><div class="name">{% if killmail.victim.corporation %}<a href="{{ killmail.victim.corporation.url }}">{{ killmail.victim.corporation.name }}</a>{% else %}Unknown{% endif %}</div></div>
+            </div>
+            <div class="victim-entity">
+              <div>{% if killmail.victim.alliance and killmail.victim.alliance.image_url %}<img src="{{ killmail.victim.alliance.image_url }}" alt="">{% endif %}</div>
+              <div><div class="kind">Alliance</div><div class="name">{% if killmail.victim.alliance %}<a href="{{ killmail.victim.alliance.url }}">{{ killmail.victim.alliance.name }}</a>{% else %}No alliance{% endif %}</div></div>
+            </div>
+            <div class="victim-entity">
+              <div>{% if killmail.victim_ship and killmail.victim_ship.image_url %}<img src="{{ killmail.victim_ship.image_url }}" alt="">{% endif %}</div>
+              <div><div class="kind">{% if killmail.is_structure %}Structure{% else %}Ship{% endif %}</div><div class="name">{% if killmail.victim_ship %}<a href="{{ killmail.victim_ship.url }}">{{ killmail.victim_ship.name }}</a>{% else %}Unknown{% endif %}</div></div>
+            </div>
+            <div class="victim-entity">
+              <div></div>
+              <div><div class="kind">System</div><div class="name">{% if killmail.location and killmail.location.system %}<a href="{{ killmail.location.system.url }}">{{ killmail.location.system.name }}</a>{% else %}Unknown{% endif %}</div></div>
+            </div>
+            {% if killmail.location and killmail.location.constellation %}
+            <div class="victim-entity">
+              <div></div>
+              <div><div class="kind">Constellation</div><div class="name"><a href="{{ killmail.location.constellation.url }}">{{ killmail.location.constellation.name }}</a></div></div>
+            </div>
+            {% endif %}
+            {% if killmail.location and killmail.location.region %}
+            <div class="victim-entity">
+              <div></div>
+              <div><div class="kind">Region</div><div class="name"><a href="{{ killmail.location.region.url }}">{{ killmail.location.region.name }}</a></div></div>
+            </div>
+            {% endif %}
+          </div>
+        </div>
+      </section>
+
+      <section class="eve-window attackers-window">
+        <div class="eve-window-title">
+          <span>Attackers</span>
+          <div class="attackers-title-controls">
+            <span class="muted" id="attackers-summary">{{ killmail.attackers_count }} involved</span>
+            <div class="attacker-view-toggle" role="group" aria-label="Attacker grouping">
+              <button type="button" class="attacker-view-button active" data-attacker-mode="individual">Individual</button>
+              <button type="button" class="attacker-view-button" data-attacker-mode="corporation">Corporation</button>
+              <button type="button" class="attacker-view-button" data-attacker-mode="alliance">Alliance</button>
+              <button type="button" class="attacker-view-button" data-attacker-mode="coalition">Coalition</button>
+            </div>
+          </div>
+        </div>
+        <div
+          class="attackers-list"
+          id="attackers-list"
+          data-victim-damage="{{ killmail.victim.damage_taken or 0 }}"
+        >
+          {% for attacker in killmail.attackers %}
+          {% set attacker_pct = (attacker.damage_percent_value or 0)|float %}
+          {% set is_top_damage = killmail.top_damage and attacker.attacker_index == killmail.top_damage.attacker_index %}
+          <div
+            class="attacker-row{% if attacker.final_blow %} final-blow{% endif %}{% if is_top_damage %} top-damage{% endif %}"
+            data-order="{{ loop.index0 }}"
+            data-attacker-index="{{ attacker.attacker_index or loop.index0 }}"
+            data-damage="{{ attacker.damage_done or 0 }}"
+            data-percent="{{ attacker_pct }}"
+            data-final-blow="{% if attacker.final_blow %}1{% else %}0{% endif %}"
+            data-character-name="{{ (attacker.character.name if attacker.character else 'Unknown attacker')|e }}"
+            data-character-url="{{ (attacker.character.url if attacker.character else '')|e }}"
+            data-character-image="{{ (attacker.character.image_url if attacker.character and attacker.character.image_url else '')|e }}"
+            data-corporation-id="{{ attacker.corporation.entity_id if attacker.corporation else '' }}"
+            data-corporation-name="{{ (attacker.corporation.name if attacker.corporation else 'No corporation')|e }}"
+            data-corporation-ticker="{{ (attacker.corporation.ticker if attacker.corporation and attacker.corporation.ticker else '')|e }}"
+            data-corporation-url="{{ (attacker.corporation.url if attacker.corporation else '')|e }}"
+            data-corporation-image="{{ (attacker.corporation.image_url if attacker.corporation and attacker.corporation.image_url else '')|e }}"
+            data-alliance-id="{{ attacker.alliance.entity_id if attacker.alliance else '' }}"
+            data-alliance-name="{{ (attacker.alliance.name if attacker.alliance else 'No alliance')|e }}"
+            data-alliance-ticker="{{ (attacker.alliance.ticker if attacker.alliance and attacker.alliance.ticker else '')|e }}"
+            data-alliance-url="{{ (attacker.alliance.url if attacker.alliance else '')|e }}"
+            data-alliance-image="{{ (attacker.alliance.image_url if attacker.alliance and attacker.alliance.image_url else '')|e }}"
+            data-coalition-id="{{ attacker.coalition.coalition_id if attacker.coalition else '' }}"
+            data-coalition-name="{{ (attacker.coalition.name if attacker.coalition else 'AUTRE')|e }}"
+            data-coalition-ticker="{{ (attacker.coalition.short_name if attacker.coalition and attacker.coalition.short_name else '')|e }}"
+            data-coalition-url="{{ (attacker.coalition.url if attacker.coalition and attacker.coalition.url else '')|e }}"
+            data-coalition-image="{{ (attacker.coalition.image_url if attacker.coalition and attacker.coalition.image_url else '')|e }}"
+            data-ship-name="{{ (attacker.ship.name if attacker.ship else 'Unknown ship')|e }}"
+            data-ship-image="{{ (attacker.ship.image_url if attacker.ship and attacker.ship.image_url else '')|e }}"
+            data-ship-url="{{ (attacker.ship.url if attacker.ship else '')|e }}"
+            data-weapon-name="{{ (attacker.weapon.name if attacker.weapon else '')|e }}"
+          >
+            <div class="attacker-ship">
+              {% if attacker.character and attacker.character.image_url %}
+              <img class="attacker-entity-image" src="{{ attacker.character.image_url }}" alt="{{ attacker.character.name }}" loading="lazy">
+              {% endif %}
+              {% if attacker.ship and attacker.ship.image_url %}
+              <img class="attacker-ship-badge" src="{{ attacker.ship.image_url }}" alt="{{ attacker.ship.name }}" loading="lazy">
+              {% endif %}
+            </div>
+            <div class="attacker-main">
+              <div class="attacker-name">
+                {% if attacker.character %}<a href="{{ attacker.character.url }}">{{ attacker.character.name }}</a>{% else %}Unknown attacker{% endif %}
+              </div>
+              {% if attacker.final_blow or is_top_damage %}
+              <div class="attacker-tags">
+                {% if attacker.final_blow %}<span class="attacker-tag final-blow-label">Final Blow</span>{% endif %}
+                {% if is_top_damage %}<span class="attacker-tag top-damage-label">Top Damage</span>{% endif %}
+              </div>
+              {% endif %}
+              <div class="attacker-sub">{% if attacker.ship %}{{ attacker.ship.name }}{% else %}Unknown ship{% endif %}{% if attacker.weapon %} · {{ attacker.weapon.name }}{% endif %}</div>
+              <div class="attacker-sub">{% if attacker.alliance %}{{ attacker.alliance.ticker or attacker.alliance.name }}{% elif attacker.corporation %}{{ attacker.corporation.ticker or attacker.corporation.name }}{% endif %}</div>
+            </div>
+            <div class="attacker-damage">
+              <div class="pct">{{ "%.1f"|format(attacker_pct) }}%</div>
+              <div class="raw">{{ "{:,}".format(attacker.damage_done or 0) }}</div>
+            </div>
+            <div class="damage-track"><span style="width: {{ attacker_pct }}%;"></span></div>
+          </div>
+          {% else %}
+          <div class="inventory-empty">No attackers.</div>
+          {% endfor %}
+        </div>
+      </section>
+    </div>
+
+    <section class="eve-window inventory-board">
+      <div class="eve-window-title">
+        <span>Ship inventory</span>
+        <span class="muted">Looted / Destroyed by ship area</span>
+      </div>
+      <div class="inventory-groups">
+        {% for section in killmail.fitting_sections or [] %}
+        {% set group_ns = namespace(looted_count=0, destroyed_count=0) %}
+        {% for item in section['items'] %}
+          {% if item.quantity_dropped and item.quantity_dropped > 0 %}{% set group_ns.looted_count = group_ns.looted_count + 1 %}{% endif %}
+          {% if item.quantity_destroyed and item.quantity_destroyed > 0 %}{% set group_ns.destroyed_count = group_ns.destroyed_count + 1 %}{% endif %}
+        {% endfor %}
+        <div class="inventory-group">
+          <div class="inventory-group-title">
+            <span>{{ section.label }}</span>
+            <span class="count">{{ group_ns.looted_count }} / {{ group_ns.destroyed_count }}</span>
+          </div>
+          <div class="inventory-split">
+            <div class="inventory-side looted">
+              <div class="inventory-side-title"><span>Looted</span><span>{{ group_ns.looted_count }}</span></div>
+              <div class="inventory-items">
+                {% for item in section['items'] %}
+                {% if item.quantity_dropped and item.quantity_dropped > 0 %}
+                <div class="inventory-item">
+                  <div>{% if item.item and item.item.image_url %}<img src="{{ item.item.image_url }}" alt="{{ item.item.name }}" loading="lazy">{% endif %}</div>
+                  <div class="inventory-name">{% if item.item %}<a href="{{ item.item.url }}">{{ item.item.name }}</a>{% else %}Unknown item{% endif %}</div>
+                  <div class="inventory-qty">×{{ item.quantity_dropped }}</div>
+                </div>
+                {% endif %}
+                {% else %}
+                <div class="inventory-empty">No looted items.</div>
+                {% endfor %}
+                {% if group_ns.looted_count == 0 %}<div class="inventory-empty">No looted items.</div>{% endif %}
+              </div>
+            </div>
+            <div class="inventory-side destroyed">
+              <div class="inventory-side-title"><span>Destroyed</span><span>{{ group_ns.destroyed_count }}</span></div>
+              <div class="inventory-items">
+                {% for item in section['items'] %}
+                {% if item.quantity_destroyed and item.quantity_destroyed > 0 %}
+                <div class="inventory-item">
+                  <div>{% if item.item and item.item.image_url %}<img src="{{ item.item.image_url }}" alt="{{ item.item.name }}" loading="lazy">{% endif %}</div>
+                  <div class="inventory-name">{% if item.item %}<a href="{{ item.item.url }}">{{ item.item.name }}</a>{% else %}Unknown item{% endif %}</div>
+                  <div class="inventory-qty">×{{ item.quantity_destroyed }}</div>
+                </div>
+                {% endif %}
+                {% else %}
+                <div class="inventory-empty">No destroyed items.</div>
+                {% endfor %}
+                {% if group_ns.destroyed_count == 0 %}<div class="inventory-empty">No destroyed items.</div>{% endif %}
+              </div>
+            </div>
+          </div>
+        </div>
+        {% else %}
+        <div class="inventory-empty">No inventory data.</div>
+        {% endfor %}
+      </div>
+    </section>
+  </div>
+{% endif %}
+</div>
+
+<script>
+(() => {
+  const list = document.getElementById("attackers-list");
+  const summary = document.getElementById("attackers-summary");
+  const buttons = Array.from(document.querySelectorAll("[data-attacker-mode]"));
+
+  if (!list || !summary || buttons.length === 0) {
+    return;
+  }
+
+  const originalHtml = list.innerHTML;
+  const victimDamage = Number(list.dataset.victimDamage || 0);
+  const numberFormatter = new Intl.NumberFormat("en-US");
+
+  const attackers = Array.from(list.querySelectorAll(".attacker-row")).map((row, fallbackOrder) => ({
+    order: Number(row.dataset.order || fallbackOrder),
+    attackerIndex: Number(row.dataset.attackerIndex || fallbackOrder),
+    damage: Number(row.dataset.damage || 0),
+    percent: Number(row.dataset.percent || 0),
+    finalBlow: row.dataset.finalBlow === "1",
+    characterName: row.dataset.characterName || "Unknown attacker",
+    characterUrl: row.dataset.characterUrl || "",
+    characterImage: row.dataset.characterImage || "",
+    corporationId: row.dataset.corporationId || "",
+    corporationName: row.dataset.corporationName || "No corporation",
+    corporationTicker: row.dataset.corporationTicker || "",
+    corporationUrl: row.dataset.corporationUrl || "",
+    corporationImage: row.dataset.corporationImage || "",
+    allianceId: row.dataset.allianceId || "",
+    allianceName: row.dataset.allianceName || "No alliance",
+    allianceTicker: row.dataset.allianceTicker || "",
+    allianceUrl: row.dataset.allianceUrl || "",
+    allianceImage: row.dataset.allianceImage || "",
+    coalitionId: row.dataset.coalitionId || "",
+    coalitionName: row.dataset.coalitionName || "AUTRE",
+    coalitionTicker: row.dataset.coalitionTicker || "",
+    coalitionUrl: row.dataset.coalitionUrl || "",
+    coalitionImage: row.dataset.coalitionImage || "",
+    shipName: row.dataset.shipName || "Unknown ship",
+    shipImage: row.dataset.shipImage || "",
+    shipUrl: row.dataset.shipUrl || "",
+    weaponName: row.dataset.weaponName || "",
+  }));
+
+  function makeLink(text, url) {
+    if (!url) {
+      return document.createTextNode(text);
+    }
+
+    const link = document.createElement("a");
+    link.href = url;
+    link.textContent = text;
+    return link;
+  }
+
+  function addTag(container, label, className) {
+    const tag = document.createElement("span");
+    tag.className = `attacker-tag ${className}`;
+    tag.textContent = label;
+    container.appendChild(tag);
+  }
+
+  function buildGroupedRow(group, isTopDamage) {
+    const row = document.createElement("div");
+    row.className = "attacker-row grouped-attacker";
+    if (group.finalBlow) {
+      row.classList.add("final-blow");
+    }
+    if (isTopDamage) {
+      row.classList.add("top-damage");
+    }
+
+    const ship = document.createElement("div");
+    ship.className = "attacker-ship";
+
+    if (group.image) {
+      const entityImage = document.createElement("img");
+      entityImage.className = "attacker-entity-image";
+      entityImage.src = group.image;
+      entityImage.alt = group.displayName;
+      entityImage.loading = "lazy";
+      ship.appendChild(entityImage);
+    }
+
+    if (group.representative.shipImage) {
+      const shipImage = document.createElement("img");
+      shipImage.className = "attacker-ship-badge";
+      shipImage.src = group.representative.shipImage;
+      shipImage.alt = group.representative.shipName;
+      shipImage.loading = "lazy";
+      ship.appendChild(shipImage);
+    }
+
+    row.appendChild(ship);
+
+    const main = document.createElement("div");
+    main.className = "attacker-main";
+
+    const name = document.createElement("div");
+    name.className = "attacker-name";
+    name.appendChild(makeLink(group.displayName, group.url));
+    main.appendChild(name);
+
+    if (group.finalBlow || isTopDamage) {
+      const tags = document.createElement("div");
+      tags.className = "attacker-tags";
+      if (group.finalBlow) {
+        addTag(tags, "Final Blow", "final-blow-label");
+      }
+      if (isTopDamage) {
+        addTag(tags, "Top Damage", "top-damage-label");
+      }
+      main.appendChild(tags);
+    }
+
+    const shipLine = document.createElement("div");
+    shipLine.className = "attacker-sub";
+    shipLine.textContent = group.representative.weaponName
+      ? `${group.representative.shipName} · ${group.representative.weaponName}`
+      : group.representative.shipName;
+    main.appendChild(shipLine);
+
+    const memberLine = document.createElement("div");
+    memberLine.className = "attacker-sub group-member-count";
+    memberLine.textContent =
+      `${group.members} pilot${group.members === 1 ? "" : "s"} · highest individual: ${group.representative.characterName}`;
+    main.appendChild(memberLine);
+
+    row.appendChild(main);
+
+    const damage = document.createElement("div");
+    damage.className = "attacker-damage";
+
+    const pct = document.createElement("div");
+    pct.className = "pct";
+    pct.textContent = `${group.percent.toFixed(1)}%`;
+    damage.appendChild(pct);
+
+    const raw = document.createElement("div");
+    raw.className = "raw";
+    raw.textContent = numberFormatter.format(group.damage);
+    damage.appendChild(raw);
+
+    row.appendChild(damage);
+
+    const track = document.createElement("div");
+    track.className = "damage-track";
+    const fill = document.createElement("span");
+    fill.style.width = `${Math.max(0, Math.min(100, group.percent))}%`;
+    track.appendChild(fill);
+    row.appendChild(track);
+
+    return row;
+  }
+
+  function groupAttackers(mode) {
+    const grouped = new Map();
+
+    for (const attacker of attackers) {
+      const corporationMode = mode === "corporation";
+      const coalitionMode = mode === "coalition";
+      const id = coalitionMode
+        ? attacker.coalitionId
+        : (corporationMode ? attacker.corporationId : attacker.allianceId);
+      const name = coalitionMode
+        ? attacker.coalitionName
+        : (corporationMode ? attacker.corporationName : attacker.allianceName);
+      const ticker = coalitionMode
+        ? attacker.coalitionTicker
+        : (corporationMode ? attacker.corporationTicker : attacker.allianceTicker);
+      const url = coalitionMode
+        ? attacker.coalitionUrl
+        : (corporationMode ? attacker.corporationUrl : attacker.allianceUrl);
+      const image = coalitionMode
+        ? attacker.coalitionImage
+        : (corporationMode ? attacker.corporationImage : attacker.allianceImage);
+      const key = id ? `${mode}:${id}` : `${mode}:none`;
+      const displayName = coalitionMode && !id
+        ? "AUTRE"
+        : (ticker ? `[${ticker}] ${name}` : name);
+
+      let group = grouped.get(key);
+      if (!group) {
+        group = {
+          key,
+          displayName,
+          url,
+          image,
+          damage: 0,
+          percentFallback: 0,
+          members: 0,
+          finalBlow: false,
+          firstOrder: attacker.order,
+          representative: attacker,
+        };
+        grouped.set(key, group);
+      }
+
+      group.damage += attacker.damage;
+      group.percentFallback += attacker.percent;
+      group.members += 1;
+      group.finalBlow = group.finalBlow || attacker.finalBlow;
+      group.firstOrder = Math.min(group.firstOrder, attacker.order);
+
+      if (
+        attacker.damage > group.representative.damage ||
+        (
+          attacker.damage === group.representative.damage &&
+          attacker.order < group.representative.order
+        )
+      ) {
+        group.representative = attacker;
+      }
+    }
+
+    const groups = Array.from(grouped.values());
+
+    for (const group of groups) {
+      group.percent = victimDamage > 0
+        ? (group.damage / victimDamage) * 100
+        : group.percentFallback;
+    }
+
+    groups.sort((left, right) =>
+      (right.damage - left.damage) ||
+      (left.firstOrder - right.firstOrder)
+    );
+
+    return groups;
+  }
+
+  function setActiveButton(mode) {
+    for (const button of buttons) {
+      button.classList.toggle("active", button.dataset.attackerMode === mode);
+    }
+  }
+
+  function renderIndividual() {
+    list.innerHTML = originalHtml;
+    summary.textContent = `${attackers.length} involved`;
+    setActiveButton("individual");
+  }
+
+  function renderGrouped(mode) {
+    const groups = groupAttackers(mode);
+    list.replaceChildren();
+
+    if (groups.length === 0) {
+      const empty = document.createElement("div");
+      empty.className = "inventory-empty";
+      empty.textContent = "No attackers.";
+      list.appendChild(empty);
+    } else {
+      groups.forEach((group, index) => {
+        list.appendChild(buildGroupedRow(group, index === 0));
+      });
+    }
+
+    const label = mode === "corporation"
+      ? "corporations"
+      : (mode === "coalition" ? "coalitions" : "alliances");
+    summary.textContent = `${groups.length} ${label}`;
+    setActiveButton(mode);
+  }
+
+  for (const button of buttons) {
+    button.addEventListener("click", () => {
+      const mode = button.dataset.attackerMode;
+      if (mode === "individual") {
+        renderIndividual();
+      } else {
+        renderGrouped(mode);
+      }
+    });
+  }
+})();
+</script>
+
+
+<script>
+(() => {
+  const copyButton = document.getElementById("copy-eft-button");
+  const status = document.getElementById("eft-copy-status");
+  const dataRoot = document.getElementById("eft-export-data");
+
+  if (!copyButton || !status || !dataRoot) {
+    return;
+  }
+
+  function orderedEntries(group, kind) {
+    return Array.from(
+      dataRoot.querySelectorAll(
+        `[data-eft-kind="${kind}"][data-eft-group="${group}"]`
+      )
+    )
+      .map((element) => ({
+        index: Number(element.dataset.eftIndex || 0),
+        name: element.dataset.eftName || "",
+      }))
+      .filter((entry) => entry.name)
+      .sort((left, right) => left.index - right.index);
+  }
+
+  function moduleLines(group) {
+    const modules = orderedEntries(group, "module");
+    const charges = new Map(
+      orderedEntries(group, "charge").map((charge) => [charge.index, charge.name])
+    );
+
+    return modules.map((module) => {
+      const charge = charges.get(module.index);
+      return charge ? `${module.name}, ${charge}` : module.name;
+    });
+  }
+
+  function droneLines() {
+    const quantities = new Map();
+
+    for (const element of dataRoot.querySelectorAll('[data-eft-kind="drone"]')) {
+      const name = element.dataset.eftName || "";
+      const quantity = Number(element.dataset.eftQuantity || 0);
+
+      if (!name || quantity <= 0) {
+        continue;
+      }
+
+      quantities.set(name, (quantities.get(name) || 0) + quantity);
+    }
+
+    return Array.from(quantities.entries()).map(
+      ([name, quantity]) => `${name} x${quantity}`
+    );
+  }
+
+  function buildEftText() {
+    const shipName = dataRoot.dataset.shipName || "Unknown ship";
+    const fitName = dataRoot.dataset.fitName || "EVEOSINT Fit";
+
+    const sections = [
+      moduleLines("low"),
+      moduleLines("mid"),
+      moduleLines("high"),
+      moduleLines("rig"),
+      moduleLines("subsystem"),
+    ];
+
+    const lines = [`[${shipName}, ${fitName}]`];
+
+    sections.forEach((section, index) => {
+      lines.push(...section);
+
+      if (index < sections.length - 1) {
+        lines.push("");
+      }
+    });
+
+    const drones = droneLines();
+
+    if (drones.length > 0) {
+      lines.push("");
+      lines.push(...drones);
+    }
+
+    return lines.join("\n").replace(/\n+$/u, "");
+  }
+
+  async function copyEft() {
+    const eftText = buildEftText();
+
+    if (!eftText) {
+      status.textContent = "No fit";
+      status.className = "eft-copy-status error";
+      return;
+    }
+
+    copyButton.disabled = true;
+    status.textContent = "Copying…";
+    status.className = "eft-copy-status";
+
+    try {
+      await navigator.clipboard.writeText(eftText);
+      status.textContent = "Copied";
+      status.className = "eft-copy-status success";
+    } catch (error) {
+      status.textContent = "Copy failed";
+      status.className = "eft-copy-status error";
+      console.error("EFT clipboard copy failed", error);
+    } finally {
+      copyButton.disabled = false;
+    }
+  }
+
+  copyButton.addEventListener("click", copyEft);
+})();
+</script>
+
+{% endblock %}

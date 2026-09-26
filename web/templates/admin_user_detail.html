@@ -1,0 +1,233 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-start mb-4">
+  <div>
+    <h1 class="h3 fw-bold mb-1">{{ target_user.username }}</h1>
+    <div class="muted-line">Détail du compte utilisateur.</div>
+  </div>
+
+  <a href="/admin" class="btn btn-outline-light">
+    Retour
+  </a>
+</div>
+
+{% if error %}
+  <div class="alert alert-danger py-2">
+    {% if error == "cannot_disable_self" %}
+      Tu ne peux pas désactiver ton propre compte.
+    {% elif error == "cannot_remove_last_admin" %}
+      Impossible de retirer le dernier admin actif.
+    {% elif error == "cannot_delete_self" %}
+      Tu ne peux pas supprimer ton propre compte.
+    {% elif error == "cannot_delete_last_admin" %}
+      Impossible de supprimer le dernier admin actif.
+    {% elif error == "password_too_short" %}
+      Mot de passe trop court : minimum 12 caractères.
+    {% elif error == "password_too_long" %}
+      Mot de passe trop long : maximum 72 bytes.
+    {% elif error == "permissions_update_failed" %}
+      Mise à jour des permissions impossible.
+    {% else %}
+      Action impossible.
+    {% endif %}
+  </div>
+{% endif %}
+
+{% if success %}
+  <div class="alert alert-success py-2">
+    {% if success == "user_updated" %}
+      Utilisateur mis à jour.
+    {% elif success == "password_updated" %}
+      Mot de passe mis à jour.
+    {% elif success == "permissions_updated" %}
+      Permissions mises à jour.
+    {% else %}
+      Action effectuée.
+    {% endif %}
+  </div>
+{% endif %}
+
+<div class="row g-4">
+  <div class="col-12 col-xl-5">
+    <section class="content-card p-3 p-md-4 mb-4">
+      <h2 class="h5 mb-3">Compte</h2>
+
+      <div class="mb-2">
+        <span class="muted-line">ID :</span>
+        <span>{{ target_user.id }}</span>
+      </div>
+
+      <div class="mb-2">
+        <span class="muted-line">Username :</span>
+        <span>{{ target_user.username }}</span>
+      </div>
+
+      <div class="mb-2">
+        <span class="muted-line">Statut :</span>
+        {% if target_user.is_active %}
+          <span class="badge text-bg-success">active</span>
+        {% else %}
+          <span class="badge text-bg-secondary">inactive</span>
+        {% endif %}
+      </div>
+
+      <div class="mb-2">
+        <span class="muted-line">Rôles :</span>
+        <span>{{ target_user.roles | join(", ") }}</span>
+      </div>
+
+      <div class="mb-2">
+        <span class="muted-line">Créé :</span>
+        <span>{{ target_user.created_at.strftime("%Y-%m-%d %H:%M") if target_user.created_at else "-" }}</span>
+      </div>
+
+      <div>
+        <span class="muted-line">Dernier login :</span>
+        <span>{{ target_user.last_login_at.strftime("%Y-%m-%d %H:%M") if target_user.last_login_at else "-" }}</span>
+      </div>
+    </section>
+
+    <section class="content-card p-3 p-md-4 mb-4">
+      <h2 class="h5 mb-3">Modifier compte</h2>
+
+      {% if can_edit_users %}
+        <form method="post" action="/admin/users/{{ target_user.id }}/update">
+          <div class="mb-3">
+            <label for="role_key" class="form-label">Rôle principal</label>
+            <select class="form-select" id="role_key" name="role_key" required>
+              {% for role in roles %}
+                <option value="{{ role.role_key }}" {% if role.role_key in target_user.roles %}selected{% endif %}>
+                  {{ role.label }}
+                </option>
+              {% endfor %}
+            </select>
+          </div>
+
+          <div class="form-check form-switch mb-4">
+            <input
+              class="form-check-input"
+              type="checkbox"
+              role="switch"
+              id="is_active"
+              name="is_active"
+              {% if target_user.is_active %}checked{% endif %}>
+            <label class="form-check-label" for="is_active">Compte actif</label>
+          </div>
+
+          <button type="submit" class="btn btn-primary w-100">
+            Enregistrer
+          </button>
+        </form>
+      {% else %}
+        <div class="muted-line">Droit insuffisant.</div>
+      {% endif %}
+    </section>
+
+    <section class="content-card p-3 p-md-4">
+      <h2 class="h5 mb-3">Reset mot de passe</h2>
+
+      {% if can_edit_users %}
+        <form method="post" action="/admin/users/{{ target_user.id }}/password">
+          <div class="mb-3">
+            <label for="password" class="form-label">Nouveau mot de passe</label>
+            <input
+              type="text"
+              class="form-control"
+              id="password"
+              name="password"
+              minlength="12"
+              required>
+            <div class="form-text">Minimum 12 caractères.</div>
+          </div>
+
+          <button type="submit" class="btn btn-outline-light">
+            Reset password
+          </button>
+        </form>
+      {% else %}
+        <div class="muted-line">Droit insuffisant.</div>
+      {% endif %}
+    </section>
+  </div>
+
+  <div class="col-12 col-xl-7">
+    <section class="content-card p-3 p-md-4 mb-4">
+      <h2 class="h5 mb-3">Permissions</h2>
+
+      {% if can_edit_users %}
+        <form method="post" action="/admin/users/{{ target_user.id }}/permissions">
+          {% for group in permission_groups %}
+            <details class="mb-3" {% if group.open %}open{% endif %}>
+              <summary class="fw-semibold mb-2">
+                {{ group.label }}
+              </summary>
+
+              <div class="row g-2 mt-1">
+                {% for permission in group.permissions %}
+                  <div class="col-12 col-md-6">
+                    <label class="border border-secondary-subtle rounded-3 p-3 d-block h-100">
+                      <div class="form-check">
+                        {% if permission.locked %}
+                          <input
+                            type="hidden"
+                            name="permission_keys"
+                            value="{{ permission.permission_key }}">
+                        {% endif %}
+
+                        <input
+                          class="form-check-input"
+                          type="checkbox"
+                          name="permission_keys"
+                          value="{{ permission.permission_key }}"
+                          {% if permission.permission_key in effective_permissions %}checked{% endif %}
+                          {% if permission.locked %}disabled{% endif %}>
+
+                        <span class="form-check-label fw-semibold">
+                          {{ permission.permission_key }}
+                        </span>
+                      </div>
+
+                      <div class="small muted-line mt-1">
+                        {{ permission.description or permission.label }}
+                      </div>
+
+                      {% if permission.permission_key in direct_permissions %}
+                        <div class="small text-primary mt-1">
+                          direct
+                        </div>
+                      {% elif target_user.has_role_inheritance and permission.permission_key in effective_permissions %}
+                        <div class="small text-secondary mt-1">
+                          inherited
+                        </div>
+                      {% endif %}
+                    </label>
+                  </div>
+                {% endfor %}
+              </div>
+            </details>
+          {% endfor %}
+
+          <button type="submit" class="btn btn-primary mt-3">
+            Sauvegarder les permissions
+          </button>
+        </form>
+      {% else %}
+        <div class="muted-line">Droit insuffisant.</div>
+      {% endif %}
+    </section>
+
+    {% if can_delete_users and target_user.id != user.id %}
+      <section class="content-card p-3 p-md-4 border border-danger-subtle">
+        <h2 class="h5 mb-3 text-danger">Danger zone</h2>
+
+        <form method="post" action="/admin/users/{{ target_user.id }}/delete">
+          <button type="submit" class="btn btn-outline-danger">
+            Supprimer ce compte
+          </button>
+        </form>
+      </section>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}
