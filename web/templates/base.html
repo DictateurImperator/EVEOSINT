@@ -639,13 +639,20 @@
         return `Erreur ${fallbackStatus}`;
       };
 
-      window.fetch = async (...args) => {
+      window.fetch = async (input, init) => {
+        const silentError = Boolean(init && init.eveosintSilentError);
+        let nativeInit = init;
+        if (silentError) {
+          nativeInit = {...init};
+          delete nativeInit.eveosintSilentError;
+        }
+
         try {
-          const response = await nativeFetch(...args);
-          if (!response.ok) showPublicError(`Erreur ${response.status}`);
+          const response = await nativeFetch(input, nativeInit);
+          if (!response.ok && !silentError) showPublicError(`Erreur ${response.status}`);
           return response;
         } catch (error) {
-          if (!(error && error.name === "AbortError")) showPublicError("Erreur réseau");
+          if (!silentError && !(error && error.name === "AbortError")) showPublicError("Erreur réseau");
           throw error;
         }
       };
@@ -672,6 +679,7 @@
             headers: {"Accept": "application/json"},
             credentials: "same-origin",
             cache: "no-store",
+            eveosintSilentError: true,
           });
           if (!response.ok) {
             hideBanner();
