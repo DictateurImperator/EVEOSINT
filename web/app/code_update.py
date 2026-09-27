@@ -421,7 +421,7 @@ def _overlay_restore_plan(from_sha, to_sha, overlay):
     return restore_overlay, sorted(conflicts)
 
 
-def _commit_exists(def _commit_exists(sha):
+def _commit_exists(sha):
     if not sha or not re.fullmatch(r"[0-9a-fA-F]{7,40}", sha):
         return False
     result = _git(["cat-file", "-e", f"{sha}^{{commit}}"], check=False)
@@ -680,7 +680,7 @@ def queue_code_action(action, target_ref):
         raise CodeUpdateError("update_service_start_failed")
 
 
-def _restart_web_service(def _restart_web_service():
+def _restart_web_service():
     result = _run(
         ["sudo", "-n", SYSTEMCTL, "restart", WEB_SERVICE],
         timeout=30,
