@@ -902,7 +902,7 @@ def run_pending_request():
             raise
 
 
-def self_test():def self_test():
+def self_test():
     checks = []
 
     checks.append(("repository_path", REPO_ROOT.exists(), str(REPO_ROOT)))
