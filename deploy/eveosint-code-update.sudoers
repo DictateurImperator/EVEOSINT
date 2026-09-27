@@ -1,0 +1,2 @@
+ubuntu ALL=(root) NOPASSWD: /usr/bin/systemctl --no-block start eveosint-code-update.service
+ubuntu ALL=(root) NOPASSWD: /usr/bin/systemctl restart eveosint-web.service
