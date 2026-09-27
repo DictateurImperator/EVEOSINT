@@ -1,0 +1,13 @@
+[Unit]
+Description=EVEOSINT code update worker
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=ubuntu
+Group=ubuntu
+WorkingDirectory=/home/ubuntu/eveosint
+ExecStart=/home/ubuntu/eveosint/venv/bin/python /home/ubuntu/eveosint/web/app/code_update.py run-request
+Environment=PYTHONUNBUFFERED=1
+TimeoutStartSec=15min
