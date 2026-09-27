@@ -61,7 +61,18 @@
     position:relative; width:100%; min-height:540px; overflow-x:auto;
     border:1px solid #263449; border-radius:.65rem; background:#080f1d;
   }
-  #evolutionChart { display:block; width:100%; min-width:780px; height:540px; }
+  #evolutionChart { display:block; width:100%; min-width:780px; height:540px; cursor:crosshair; }
+  #evolutionChart.evo-dragging { cursor:grabbing; user-select:none; }
+  .evo-chart-tooltip {
+    position:absolute; display:none; z-index:5; pointer-events:none;
+    min-width:150px; max-width:340px; padding:.45rem .55rem;
+    border:1px solid #334155; border-radius:.45rem; background:rgba(8,15,29,.96);
+    box-shadow:0 8px 24px rgba(0,0,0,.35); color:#cbd5e1; font-size:.72rem;
+    line-height:1.35; white-space:nowrap;
+  }
+  .evo-chart-tooltip strong { color:#f8fafc; }
+  .evo-chart-tooltip-row { display:flex; align-items:center; gap:.35rem; margin-top:.18rem; }
+  .evo-chart-tooltip-swatch { width:9px; height:9px; border-radius:50%; flex:0 0 9px; }
   .evo-legend { display:flex; flex-wrap:wrap; gap:.7rem 1rem; margin-top:.75rem; }
   .evo-legend-item { display:flex; align-items:center; gap:.35rem; font-size:.78rem; color:#cbd5e1; }
   .evo-legend-swatch { width:18px; height:3px; border-radius:3px; }
@@ -218,6 +229,7 @@
         <div id="evoGraphView">
           <div id="evoChartWrap" class="evo-chart-wrap">
             <svg id="evolutionChart" viewBox="0 0 1200 540" preserveAspectRatio="none"></svg>
+            <div id="evoChartTooltip" class="evo-chart-tooltip"></div>
           </div>
           <div id="evoLegend" class="evo-legend"></div>
         </div>
@@ -262,6 +274,8 @@
   const graphView = document.getElementById("evoGraphView");
   const csvView = document.getElementById("evoCsvView");
   const svg = document.getElementById("evolutionChart");
+  const chartWrap = document.getElementById("evoChartWrap");
+  const chartTooltip = document.getElementById("evoChartTooltip");
   const legend = document.getElementById("evoLegend");
   const csvHead = document.getElementById("evoCsvHead");
   const csvBody = document.getElementById("evoCsvBody");
@@ -290,6 +304,13 @@
   let searchTimer = null;
   let searchAbort = null;
   let percentMode = savedEvolutionState ? savedEvolutionState.percentMode === true : false;
+  let chartViewStart = 0;
+  let chartViewEnd = -1;
+  let chartViewDataLength = 0;
+  let chartGeometry = null;
+  let chartDragging = false;
+  let chartDragStartX = 0;
+  let chartDragStartViewStart = 0;
 
   function makeSeriesUid() {
     if (window.crypto && typeof window.crypto.randomUUID === "function") {
@@ -977,9 +998,207 @@
     return node;
   }
 
+  function resetChartViewState(data=null) {
+    const length = data && Array.isArray(data.rows) ? data.rows.length : 0;
+    chartViewStart = 0;
+    chartViewEnd = length ? length - 1 : -1;
+    chartViewDataLength = length;
+    chartGeometry = null;
+    hideChartTooltip();
+  }
+
+  function syncChartView(data) {
+    const length = data && Array.isArray(data.rows) ? data.rows.length : 0;
+    if (!length) {
+      chartViewStart = 0;
+      chartViewEnd = -1;
+      chartViewDataLength = 0;
+      return;
+    }
+
+    if (!chartViewDataLength || chartViewEnd < chartViewStart) {
+      chartViewStart = 0;
+      chartViewEnd = length - 1;
+      chartViewDataLength = length;
+      return;
+    }
+
+    const wasAtRightEdge = chartViewEnd >= chartViewDataLength - 1;
+    chartViewStart = Math.max(0, Math.min(chartViewStart, length - 1));
+    chartViewEnd = Math.max(chartViewStart, Math.min(chartViewEnd, length - 1));
+    if (wasAtRightEdge) chartViewEnd = length - 1;
+    chartViewDataLength = length;
+  }
+
+  function resetChartZoom() {
+    if (!currentData || !currentData.rows || !currentData.rows.length) return;
+    chartViewStart = 0;
+    chartViewEnd = currentData.rows.length - 1;
+    chartViewDataLength = currentData.rows.length;
+    hideChartTooltip();
+    renderChart(currentData);
+  }
+
+  function chartPointerRatio(clientX) {
+    if (!chartGeometry) return 0.5;
+    const rect = svg.getBoundingClientRect();
+    if (!rect.width) return 0.5;
+    const svgX = ((clientX - rect.left) / rect.width) * chartGeometry.width;
+    return Math.max(0, Math.min(1, (svgX - chartGeometry.left) / chartGeometry.plotW));
+  }
+
+  function nearestChartIndex(clientX) {
+    if (!currentData || !currentData.rows || !currentData.rows.length) return -1;
+    const span = Math.max(1, chartViewEnd - chartViewStart + 1);
+    const offset = span <= 1 ? 0 : Math.round(chartPointerRatio(clientX) * (span - 1));
+    return Math.max(chartViewStart, Math.min(chartViewEnd, chartViewStart + offset));
+  }
+
+  function hideChartTooltip() {
+    if (chartTooltip) chartTooltip.style.display = "none";
+    const layer = document.getElementById("evoHoverLayer");
+    if (layer) layer.setAttribute("visibility", "hidden");
+  }
+
+  function showChartTooltip(event) {
+    if (!chartGeometry || !currentData || !currentData.rows || !currentData.rows.length) return;
+
+    const index = nearestChartIndex(event.clientX);
+    const row = currentData.rows[index];
+    if (!row) return;
+
+    const localIndex = index - chartViewStart;
+    const rows = chartGeometry.rows;
+    const x = rows.length <= 1
+      ? chartGeometry.left + chartGeometry.plotW / 2
+      : chartGeometry.left + (localIndex / (rows.length - 1)) * chartGeometry.plotW;
+
+    const layer = document.getElementById("evoHoverLayer");
+    const line = document.getElementById("evoHoverLine");
+    if (layer && line) {
+      line.setAttribute("x1", x);
+      line.setAttribute("x2", x);
+      layer.setAttribute("visibility", "visible");
+    }
+
+    const tooltipRows = [];
+    chartGeometry.visibleSeries.forEach(item => {
+      const value = displayValue(currentData, row, item);
+      const color = colors[item.sourceIndex % colors.length];
+      const dot = document.getElementById("evoHoverDot-" + item.sourceIndex);
+
+      if (dot) {
+        if (typeof value === "number" && Number.isFinite(value)) {
+          const y = chartGeometry.top
+            + ((chartGeometry.maxY - value) / (chartGeometry.maxY - chartGeometry.minY))
+            * chartGeometry.plotH;
+          dot.setAttribute("cx", x);
+          dot.setAttribute("cy", y);
+          dot.setAttribute("visibility", "visible");
+        } else {
+          dot.setAttribute("visibility", "hidden");
+        }
+      }
+
+      tooltipRows.push(
+        '<div class="evo-chart-tooltip-row">'
+        + '<span class="evo-chart-tooltip-swatch" style="background:' + esc(color) + '"></span>'
+        + '<span>' + esc(item.name) + ': <strong>'
+        + esc(typeof value === "number" && Number.isFinite(value) ? formatDisplayValue(value) : "—")
+        + '</strong></span></div>'
+      );
+    });
+
+    chartTooltip.innerHTML = "<strong>" + esc(row.date) + "</strong>" + tooltipRows.join("");
+    chartTooltip.style.display = "block";
+
+    const wrapRect = chartWrap.getBoundingClientRect();
+    const tooltipWidth = chartTooltip.offsetWidth || 180;
+    const tooltipHeight = chartTooltip.offsetHeight || 60;
+    const scrollLeft = chartWrap.scrollLeft || 0;
+    const scrollTop = chartWrap.scrollTop || 0;
+    const minLeft = scrollLeft + 8;
+    const maxLeft = scrollLeft + chartWrap.clientWidth - tooltipWidth - 8;
+    const wantedLeft = event.clientX - wrapRect.left + scrollLeft + 14;
+    let wantedTop = event.clientY - wrapRect.top + scrollTop + 14;
+    const maxTop = scrollTop + chartWrap.clientHeight - tooltipHeight - 8;
+
+    if (wantedTop > maxTop) {
+      wantedTop = event.clientY - wrapRect.top + scrollTop - tooltipHeight - 14;
+    }
+
+    chartTooltip.style.left = Math.max(minLeft, Math.min(maxLeft, wantedLeft)) + "px";
+    chartTooltip.style.top = Math.max(scrollTop + 8, wantedTop) + "px";
+  }
+
+  function zoomChart(event) {
+    if (!currentData || !currentData.rows || currentData.rows.length <= 1) return;
+    event.preventDefault();
+
+    const total = currentData.rows.length;
+    const currentSpan = chartViewEnd - chartViewStart + 1;
+    const factor = event.deltaY < 0 ? 0.80 : 1.25;
+    const minSpan = Math.min(10, total);
+    const newSpan = Math.max(minSpan, Math.min(total, Math.round(currentSpan * factor)));
+    if (newSpan === currentSpan) return;
+
+    const anchor = nearestChartIndex(event.clientX);
+    const ratio = currentSpan <= 1 ? 0.5 : (anchor - chartViewStart) / (currentSpan - 1);
+    let start = Math.round(anchor - ratio * (newSpan - 1));
+    let end = start + newSpan - 1;
+
+    if (start < 0) {
+      start = 0;
+      end = newSpan - 1;
+    }
+    if (end >= total) {
+      end = total - 1;
+      start = end - newSpan + 1;
+    }
+
+    chartViewStart = Math.max(0, start);
+    chartViewEnd = Math.min(total - 1, end);
+    hideChartTooltip();
+    renderChart(currentData);
+  }
+
+  function panChart(event) {
+    if (!chartDragging || !currentData || !chartGeometry) return;
+
+    const total = currentData.rows.length;
+    const span = chartViewEnd - chartViewStart + 1;
+    if (span >= total) return;
+
+    const rect = svg.getBoundingClientRect();
+    const plotPixels = Math.max(1, rect.width * (chartGeometry.plotW / chartGeometry.width));
+    const delta = Math.round(-((event.clientX - chartDragStartX) / plotPixels) * span);
+
+    let start = chartDragStartViewStart + delta;
+    let end = start + span - 1;
+
+    if (start < 0) {
+      start = 0;
+      end = span - 1;
+    }
+    if (end >= total) {
+      end = total - 1;
+      start = end - span + 1;
+    }
+
+    const nextStart = Math.max(0, start);
+    const nextEnd = Math.min(total - 1, end);
+    if (nextStart === chartViewStart && nextEnd === chartViewEnd) return;
+
+    chartViewStart = nextStart;
+    chartViewEnd = nextEnd;
+    renderChart(currentData);
+  }
+
   function renderChart(data) {
     svg.innerHTML = "";
     legend.innerHTML = "";
+    chartGeometry = null;
+    hideChartTooltip();
 
     if (!data || !data.rows.length || !data.series.length) {
       const text = svgNode("text", {
@@ -997,13 +1216,17 @@
       return;
     }
 
+    syncChartView(data);
+    const rows = data.rows.slice(chartViewStart, chartViewEnd + 1);
+    if (!rows.length) return;
+
     const width = 1200, height = 540;
     const left = 76, right = 28, top = 30, bottom = 58;
     const plotW = width - left - right;
     const plotH = height - top - bottom;
 
     const values = [];
-    data.rows.forEach(row => {
+    rows.forEach(row => {
       visibleSeries.forEach(item => {
         const value = displayValue(data, row, item);
         if (typeof value === "number" && Number.isFinite(value)) values.push(value);
@@ -1029,10 +1252,15 @@
     maxY += padding;
 
     const xAt = index => {
-      if (data.rows.length <= 1) return left + plotW / 2;
-      return left + (index / (data.rows.length - 1)) * plotW;
+      if (rows.length <= 1) return left + plotW / 2;
+      return left + (index / (rows.length - 1)) * plotW;
     };
     const yAt = value => top + ((maxY - value) / (maxY - minY)) * plotH;
+
+    chartGeometry = {
+      width, height, left, right, top, bottom, plotW, plotH, minY, maxY,
+      rows, visibleSeries
+    };
 
     const bg = svgNode("rect", {x:0, y:0, width, height, fill:"#080f1d"});
     svg.appendChild(bg);
@@ -1049,10 +1277,10 @@
       }, niceNumber(value)));
     }
 
-    const xTickCount = Math.min(8, data.rows.length);
+    const xTickCount = Math.min(8, rows.length);
     const usedIndexes = new Set();
     for (let tick = 0; tick < xTickCount; tick++) {
-      const index = xTickCount === 1 ? 0 : Math.round(tick * (data.rows.length - 1) / (xTickCount - 1));
+      const index = xTickCount === 1 ? 0 : Math.round(tick * (rows.length - 1) / (xTickCount - 1));
       if (usedIndexes.has(index)) continue;
       usedIndexes.add(index);
       const x = xAt(index);
@@ -1060,7 +1288,7 @@
         x1:x, y1:top, x2:x, y2:height-bottom,
         stroke:"#172033", "stroke-width":1
       }));
-      const label = data.rows[index].date;
+      const label = rows[index].date;
       svg.appendChild(svgNode("text", {
         x, y:height-bottom+23, fill:"#94a3b8", "text-anchor":"middle", "font-size":11
       }, label));
@@ -1097,7 +1325,7 @@
         currentSegment = [];
       };
 
-      data.rows.forEach((row, index) => {
+      rows.forEach((row, index) => {
         const value = displayValue(data, row, item);
         if (typeof value !== "number" || !Number.isFinite(value)) {
           flush();
@@ -1107,23 +1335,20 @@
       });
       flush();
 
-      // The line above still contains EVERY daily point. For very long
-      // histories we only thin the hover markers, otherwise 5-6 series over
-      // ~20 years would create tens of thousands of SVG DOM nodes.
-      const radius = data.rows.length <= 120 ? 2.4 : 1.2;
-      const hoverStep = data.rows.length <= 365
+      // The line above still contains EVERY visible daily point. For long
+      // ranges we only thin the decorative markers; hover remains exact.
+      const radius = rows.length <= 120 ? 2.4 : 1.2;
+      const hoverStep = rows.length <= 365
         ? 1
-        : Math.max(1, Math.ceil(data.rows.length / 700));
-      data.rows.forEach((row, index) => {
-        if (index % hoverStep !== 0 && index !== data.rows.length - 1) return;
+        : Math.max(1, Math.ceil(rows.length / 700));
+      rows.forEach((row, index) => {
+        if (index % hoverStep !== 0 && index !== rows.length - 1) return;
         const value = displayValue(data, row, item);
         if (typeof value !== "number" || !Number.isFinite(value)) return;
-        const circle = svgNode("circle", {
+        svg.appendChild(svgNode("circle", {
           cx:xAt(index), cy:yAt(value), r:radius,
-          fill:color, opacity:data.rows.length <= 120 ? .9 : .35
-        });
-        circle.appendChild(svgNode("title", {}, item.name + " · " + row.date + " · " + formatDisplayValue(value)));
-        svg.appendChild(circle);
+          fill:color, opacity:rows.length <= 120 ? .9 : .35
+        }));
       });
 
       const legendItem = document.createElement("div");
@@ -1138,6 +1363,26 @@
       legendItem.innerHTML = `<span class="evo-legend-swatch" style="background:${color}"></span><span>${esc(legendLabel)}</span>`;
       legend.appendChild(legendItem);
     });
+
+    const hoverLayer = svgNode("g", {
+      id:"evoHoverLayer", visibility:"hidden", "pointer-events":"none"
+    });
+    hoverLayer.appendChild(svgNode("line", {
+      id:"evoHoverLine",
+      x1:left, x2:left, y1:top, y2:height-bottom,
+      stroke:"rgba(186,230,253,.55)", "stroke-width":1.2, "stroke-dasharray":"5 5"
+    }));
+    visibleSeries.forEach(item => {
+      hoverLayer.appendChild(svgNode("circle", {
+        id:"evoHoverDot-" + item.sourceIndex,
+        r:4.8,
+        fill:colors[item.sourceIndex % colors.length],
+        stroke:"#e0f2fe",
+        "stroke-width":1.8,
+        visibility:"hidden"
+      }));
+    });
+    svg.appendChild(hoverLayer);
   }
 
   function renderCsv(data) {
@@ -1205,6 +1450,7 @@
     if (!series.length) {
       statusNode.textContent = "Add at least one series.";
       currentData = null;
+      resetChartViewState(null);
       renderChart(null);
       renderCsv(null);
       return;
@@ -1216,6 +1462,7 @@
 
     setLoading(true);
     currentData = null;
+    resetChartViewState(null);
     renderChart(null);
     renderCsv(null);
 
@@ -1399,6 +1646,44 @@
 
   refreshButton.addEventListener("click", loadData);
   downloadButton.addEventListener("click", downloadCsv);
+
+  svg.addEventListener("wheel", zoomChart, {passive:false});
+  svg.addEventListener("dblclick", event => {
+    event.preventDefault();
+    resetChartZoom();
+  });
+  svg.addEventListener("pointerdown", event => {
+    if (event.button !== 0 || !currentData || !currentData.rows || !currentData.rows.length) return;
+    chartDragging = true;
+    chartDragStartX = event.clientX;
+    chartDragStartViewStart = chartViewStart;
+    svg.classList.add("evo-dragging");
+    if (typeof svg.setPointerCapture === "function") svg.setPointerCapture(event.pointerId);
+    hideChartTooltip();
+    event.preventDefault();
+  });
+  svg.addEventListener("pointermove", event => {
+    if (chartDragging) {
+      panChart(event);
+    } else {
+      showChartTooltip(event);
+    }
+  });
+  svg.addEventListener("pointerup", event => {
+    chartDragging = false;
+    svg.classList.remove("evo-dragging");
+    if (typeof svg.hasPointerCapture === "function" && svg.hasPointerCapture(event.pointerId)) {
+      svg.releasePointerCapture(event.pointerId);
+    }
+  });
+  svg.addEventListener("pointercancel", () => {
+    chartDragging = false;
+    svg.classList.remove("evo-dragging");
+    hideChartTooltip();
+  });
+  svg.addEventListener("pointerleave", () => {
+    if (!chartDragging) hideChartTooltip();
+  });
 
   series.forEach(item => {
     if (!item.uid) item.uid = makeSeriesUid();
