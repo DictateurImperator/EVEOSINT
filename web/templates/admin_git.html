@@ -1,0 +1,316 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-start mb-4">
+  <div>
+    <h1 class="h3 fw-bold mb-1">Git</h1>
+    <div class="muted-line">Repository access and application code update.</div>
+  </div>
+</div>
+
+{% if success == "config_saved" %}
+  <div class="alert alert-success py-2">Git configuration saved.</div>
+{% elif success == "access_ok" %}
+  <div class="alert alert-success py-2">Git access test succeeded.</div>
+{% elif success == "checked" %}
+  <div class="alert alert-success py-2">Remote versions checked.</div>
+{% elif success == "update_started" %}
+  <div class="alert alert-info py-2">Code update started. This page will refresh automatically when deployment finishes.</div>
+{% elif success == "rollback_started" %}
+  <div class="alert alert-info py-2">Rollback started. This page will refresh automatically when deployment finishes.</div>
+{% endif %}
+
+{% if error == "config_failed" %}
+  <div class="alert alert-danger py-2">Unable to save Git configuration.</div>
+{% elif error == "access_test_failed" %}
+  <div class="alert alert-danger py-2">Git access test failed. Check repository URL, branch and credentials.</div>
+{% elif error == "check_failed" %}
+  <div class="alert alert-danger py-2">Unable to check the remote Git versions.</div>
+{% elif error == "update_not_allowed" %}
+  <div class="alert alert-danger py-2">Update blocked. Check the selected target, Git status and local modifications.</div>
+{% elif error == "update_start_failed" %}
+  <div class="alert alert-danger py-2">Unable to start the code update service.</div>
+{% elif error == "rollback_not_allowed" %}
+  <div class="alert alert-danger py-2">Rollback to the selected target is not available.</div>
+{% elif error == "rollback_start_failed" %}
+  <div class="alert alert-danger py-2">Unable to start the rollback.</div>
+{% endif %}
+
+<section class="content-card p-3 p-md-4 mb-4">
+  <div class="d-flex justify-content-between align-items-start gap-3 mb-3">
+    <div>
+      <h2 class="h5 mb-1">Repository access</h2>
+      <div class="muted-line small">Stored locally in <span class="font-monospace">~/eveosint/data/config/git.json</span>. The token is never displayed.</div>
+    </div>
+    {% if git_settings.token_configured %}
+      <span class="badge text-bg-success">Credential configured</span>
+    {% else %}
+      <span class="badge text-bg-secondary">No token</span>
+    {% endif %}
+  </div>
+
+  <form method="post" action="/admin/git/config">
+    <div class="row g-3">
+      <div class="col-12 col-xl-7">
+        <label class="form-label" for="origin_url">Repository URL</label>
+        <input
+          class="form-control font-monospace"
+          id="origin_url"
+          name="origin_url"
+          type="text"
+          required
+          value="{{ git_settings.origin_url or code_update.origin or '' }}"
+          placeholder="https://github.com/owner/repository.git"
+          autocomplete="off"
+        >
+      </div>
+
+      <div class="col-12 col-md-4 col-xl-2">
+        <label class="form-label" for="branch">Branch</label>
+        <input
+          class="form-control font-monospace"
+          id="branch"
+          name="branch"
+          type="text"
+          required
+          value="{{ git_settings.branch or code_update.branch or 'main' }}"
+          autocomplete="off"
+        >
+      </div>
+
+      <div class="col-12 col-md-8 col-xl-3">
+        <label class="form-label" for="username">Username</label>
+        <input
+          class="form-control"
+          id="username"
+          name="username"
+          type="text"
+          value="{{ git_settings.username or '' }}"
+          placeholder="x-access-token"
+          autocomplete="off"
+        >
+      </div>
+
+      <div class="col-12 col-xl-7">
+        <label class="form-label" for="token">Access token</label>
+        <input
+          class="form-control"
+          id="token"
+          name="token"
+          type="password"
+          value=""
+          placeholder="{% if git_settings.token_configured %}Leave blank to keep current token{% else %}Optional for public/SSH access{% endif %}"
+          autocomplete="new-password"
+        >
+      </div>
+
+      <div class="col-12 col-xl-5 d-flex align-items-end">
+        <div class="form-check mb-2">
+          <input class="form-check-input" id="clear_token" name="clear_token" type="checkbox">
+          <label class="form-check-label" for="clear_token">Remove stored token</label>
+        </div>
+      </div>
+    </div>
+
+    <div class="d-flex flex-wrap gap-2 mt-3">
+      <button class="btn btn-primary" type="submit">Save configuration</button>
+    </div>
+  </form>
+
+  <form method="post" action="/admin/git/test" class="mt-2">
+    <button class="btn btn-outline-light" type="submit">Test Git access</button>
+  </form>
+</section>
+
+<section class="content-card p-3 p-md-4">
+  <div class="d-flex justify-content-between align-items-start gap-3 mb-3">
+    <div>
+      <h2 class="h5 mb-1">Code Update</h2>
+      <div class="muted-line small">Deploy latest or an explicit stable version from the configured Git repository.</div>
+    </div>
+
+    {% if code_update.state == "up_to_date" %}
+      <span class="badge text-bg-success">Up to date</span>
+    {% elif code_update.state == "update_available" %}
+      <span class="badge text-bg-warning">Update available</span>
+    {% elif code_update.state == "running" %}
+      <span class="badge text-bg-primary">Running</span>
+    {% elif code_update.state == "dirty" %}
+      <span class="badge text-bg-danger">Local changes</span>
+    {% elif code_update.state == "local_ahead" %}
+      <span class="badge text-bg-secondary">Local ahead</span>
+    {% elif code_update.state == "diverged" %}
+      <span class="badge text-bg-danger">Diverged</span>
+    {% elif code_update.state == "not_checked" %}
+      <span class="badge text-bg-secondary">Not checked</span>
+    {% else %}
+      <span class="badge text-bg-secondary">Unavailable</span>
+    {% endif %}
+  </div>
+
+  {% if not code_update.git_repo %}
+    <div class="alert alert-warning mb-0">
+      <div class="fw-semibold">The application directory is not a Git working tree.</div>
+      <div class="small mt-1">Repository access can still be tested above, but Code Update remains disabled until <span class="font-monospace">~/eveosint</span> is linked to Git.</div>
+    </div>
+  {% else %}
+    <div class="row g-3 mb-3">
+      <div class="col-12 col-lg-3">
+        <div class="border border-secondary-subtle rounded-3 p-3 h-100">
+          <div class="muted-line small mb-1">Current</div>
+          <div class="fw-semibold">{{ code_update.current_version or code_update.current_short or "-" }}</div>
+          {% if code_update.current_version %}<div class="font-monospace muted-line small">{{ code_update.current_short }}</div>{% endif %}
+        </div>
+      </div>
+      <div class="col-12 col-lg-3">
+        <div class="border border-secondary-subtle rounded-3 p-3 h-100">
+          <div class="muted-line small mb-1">Latest branch</div>
+          <div class="fw-semibold">{{ code_update.branch or "-" }}</div>
+        </div>
+      </div>
+      <div class="col-12 col-lg-3">
+        <div class="border border-secondary-subtle rounded-3 p-3 h-100">
+          <div class="muted-line small mb-1">Latest</div>
+          <div class="font-monospace fw-semibold">{{ code_update.remote_short or "Not checked" }}</div>
+        </div>
+      </div>
+      <div class="col-12 col-lg-3">
+        <div class="border border-secondary-subtle rounded-3 p-3 h-100">
+          <div class="muted-line small mb-1">Previous deployment</div>
+          <div class="font-monospace fw-semibold">{{ code_update.previous_short or "None" }}</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="small mb-3">
+      <div><span class="muted-line">Origin:</span> <span class="font-monospace">{{ code_update.origin or "-" }}</span></div>
+      <div><span class="muted-line">Blocking tracked local changes:</span> {{ "YES" if code_update.dirty else "No" }}</div>
+      {% if code_update.test_overlay_active %}
+        <div><span class="muted-line">Migration overlay:</span> allowed ({{ code_update.test_overlay_files | join(", ") }})</div>
+      {% endif %}
+      {% if code_update.behind is not none or code_update.ahead is not none %}
+        <div><span class="muted-line">Commits:</span> behind {{ code_update.behind if code_update.behind is not none else "?" }}, ahead {{ code_update.ahead if code_update.ahead is not none else "?" }}</div>
+      {% endif %}
+      {% if code_update.last_remote_check_at %}
+        <div><span class="muted-line">Last remote check:</span> {{ code_update.last_remote_check_at }}</div>
+      {% endif %}
+    </div>
+
+    {% if code_update.dirty %}
+      <div class="alert alert-warning py-2">
+        Deployment is blocked because tracked files outside the migration overlay have local modifications. Nothing will be overwritten automatically.
+        {% if code_update.blocking_tracked_files %}
+          <div class="font-monospace small mt-1">{{ code_update.blocking_tracked_files | join(", ") }}</div>
+        {% endif %}
+      </div>
+    {% elif code_update.test_overlay_active %}
+      <div class="alert alert-info py-2">
+        Migration overlay detected. It is preserved unless the selected remote version contains exactly the same tested file contents, in which case Git adopts them cleanly.
+      </div>
+    {% elif code_update.state == "diverged" or code_update.state == "local_ahead" %}
+      <div class="alert alert-warning py-2">
+        Automatic update is blocked because the local Git history is not a simple fast-forward from the remote branch.
+      </div>
+    {% endif %}
+
+    <div class="d-flex flex-wrap gap-2 align-items-end">
+      <form method="post" action="/admin/git/check" class="m-0">
+        <button class="btn btn-outline-light" type="submit" {% if code_update.deployment_active %}disabled{% endif %}>Check versions</button>
+      </form>
+
+      <form method="post" action="/admin/git/update" class="m-0 d-flex gap-2 align-items-end">
+        <div>
+          <label class="form-label small mb-1" for="update_target">Update to</label>
+          <select class="form-select form-select-sm" id="update_target" name="target_ref" {% if not code_update.update_allowed %}disabled{% endif %}>
+            {% for target in code_update.update_targets %}
+              <option value="{{ target.key }}">{{ target.label }} · {{ target.short }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <button class="btn btn-primary" type="submit" {% if not code_update.update_allowed %}disabled{% endif %}>Update</button>
+      </form>
+
+      <form method="post" action="/admin/git/rollback" class="m-0 d-flex gap-2 align-items-end">
+        <div>
+          <label class="form-label small mb-1" for="rollback_target">Rollback to</label>
+          <select class="form-select form-select-sm" id="rollback_target" name="target_ref" {% if not code_update.rollback_allowed %}disabled{% endif %}>
+            {% for target in code_update.rollback_targets %}
+              <option value="{{ target.key }}">{{ target.label }} · {{ target.short }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <button class="btn btn-outline-warning" type="submit" {% if not code_update.rollback_allowed %}disabled{% endif %}>Rollback</button>
+      </form>
+    </div>
+  {% endif %}
+
+  {% if code_update.last_result or code_update.last_message %}
+    <div class="border border-secondary-subtle rounded-3 p-3 mt-3 small">
+      <div class="fw-semibold mb-1">Last deployment state</div>
+      <div><span class="muted-line">Result:</span> {{ code_update.last_result or code_update.last_phase or "-" }}</div>
+      <div><span class="muted-line">Message:</span> {{ code_update.last_message or "-" }}</div>
+      <div><span class="muted-line">Time:</span> {{ code_update.last_timestamp or "-" }}</div>
+    </div>
+  {% endif %}
+
+  {% if code_update.history %}
+    <div class="table-responsive mt-4">
+      <table class="table table-dark table-hover align-middle mb-0">
+        <thead>
+          <tr>
+            <th>Time</th>
+            <th>Action</th>
+            <th>Target</th>
+            <th>From</th>
+            <th>To</th>
+            <th>Result</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for item in code_update.history %}
+            <tr>
+              <td class="small">{{ item.timestamp or "-" }}</td>
+              <td>{{ item.action or "-" }}</td>
+              <td>{{ item.target_label or item.target_ref or "-" }}</td>
+              <td class="font-monospace small">{{ (item.from_sha or "-")[:12] }}</td>
+              <td class="font-monospace small">{{ (item.to_sha or "-")[:12] }}</td>
+              <td>{{ item.result or "-" }}</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% endif %}
+</section>
+
+{% if success in ["update_started", "rollback_started"] or code_update.deployment_active %}
+<script>
+(() => {
+  const poll = async () => {
+    try {
+      const response = await fetch("/admin/git/status", {
+        method: "GET",
+        headers: {"Accept": "application/json"},
+        credentials: "same-origin",
+        cache: "no-store",
+        eveosintSilentError: true,
+      });
+      if (!response.ok) {
+        window.setTimeout(poll, 1200);
+        return;
+      }
+      const payload = await response.json();
+      if (payload && payload.deployment_active) {
+        window.setTimeout(poll, 1200);
+        return;
+      }
+      window.location.replace("/admin/git");
+    } catch (error) {
+      window.setTimeout(poll, 1200);
+    }
+  };
+  window.setTimeout(poll, 900);
+})();
+</script>
+{% endif %}
+{% endblock %}
