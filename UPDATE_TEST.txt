@@ -1,0 +1,3 @@
+EVEOSINT update test
+
+This file exists only to validate the Admin > Git update and rollback workflow.
