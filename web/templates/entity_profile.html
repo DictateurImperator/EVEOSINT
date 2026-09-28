@@ -1027,7 +1027,7 @@
           <div class="d-flex justify-content-between align-items-start gap-3 flex-wrap mb-3">
             <div>
               <h2 class="h5 fw-bold mb-1">History</h2>
-              <div class="muted-line">Corporation / alliance affiliation periods with global kill activity during each period.</div>
+              <div class="muted-line">Corporation / alliance / coalition affiliation periods with global kill activity during each period.</div>
             </div>
           </div>
 
@@ -1090,6 +1090,18 @@
           return '<div class="d-flex align-items-center gap-2">'
             + historyEntityIcon('alliance', row.alliance_id, row.alliance_name)
             + '<div>' + text + '</div></div>';
+        }
+
+        function coalitionCell(row) {
+          const coalitions = Array.isArray(row && row.coalitions) ? row.coalitions : [];
+          if (!coalitions.length) return '<span class="fw-semibold">No coalition</span>';
+          return coalitions.map(function (coalition) {
+            let text = '<a class="text-decoration-none fw-semibold" href="/coalition/'
+              + encodeURIComponent(coalition.coalition_id) + '">'
+              + escapeHtml(coalition.name || ('Coalition ' + coalition.coalition_id)) + '</a>';
+            if (coalition.short_name) text += ' <span class="muted-line">[' + escapeHtml(coalition.short_name) + ']</span>';
+            return '<div>' + text + '</div>';
+          }).join('');
         }
 
         function numericHistoryValue(value) {
@@ -1233,7 +1245,7 @@
           let html = '<div class="muted-line mb-2" data-kill-progress>Kill statistics: 0 / ' + rows.length + ' periods processed</div>'
             + '<div class="table-responsive">'
             + '<table class="table table-dark table-hover align-middle mb-0">'
-            + '<thead><tr><th>Corporation</th><th>Alliance</th><th>Entry</th><th>Exit</th>'
+            + '<thead><tr><th>Corporation</th><th>Alliance</th><th>Coalition</th><th>Entry</th><th>Exit</th>'
             + '<th class="text-end">Duration</th><th class="text-end">Kills inflicted</th><th class="text-end">Kills suffered</th>'
             + '</tr></thead><tbody>';
 
@@ -1241,6 +1253,7 @@
             html += '<tr>'
               + '<td>' + corporationCell(row) + '</td>'
               + '<td>' + allianceCell(row) + '</td>'
+              + '<td>' + coalitionCell(row) + '</td>'
               + '<td class="text-nowrap">' + escapeHtml(row.start_date) + '</td>'
               + '<td class="text-nowrap">' + (row.current ? '<span class="badge text-bg-success">Current</span>' : escapeHtml(row.end_date || '—')) + '</td>'
               + '<td class="text-end text-nowrap">' + historyDurationCell(rowDurations[rowIndex], totalHistoryDays) + '</td>'
@@ -1277,7 +1290,7 @@
           <div class="d-flex justify-content-between align-items-start gap-3 flex-wrap mb-3">
             <div>
               <h2 class="h5 fw-bold mb-1">History</h2>
-              <div class="muted-line">Alliance affiliation periods with corporation population and global kill activity during each period.</div>
+              <div class="muted-line">Alliance / coalition affiliation periods with corporation population and global kill activity during each period.</div>
             </div>
           </div>
 
@@ -1323,6 +1336,18 @@
           if (row.alliance_ticker) text += '<div class="muted-line">[' + escapeHtml(row.alliance_ticker) + ']</div>';
           if (row.alliance_deleted) text += '<div><span class="badge text-bg-secondary mt-1">Closed</span></div>';
           return '<div class="d-flex align-items-center gap-2">' + historyEntityIcon(row.alliance_id, row.alliance_name) + '<div>' + text + '</div></div>';
+        }
+
+        function coalitionCell(row) {
+          const coalitions = Array.isArray(row && row.coalitions) ? row.coalitions : [];
+          if (!coalitions.length) return '<span class="fw-semibold">No coalition</span>';
+          return coalitions.map(function (coalition) {
+            let text = '<a class="text-decoration-none fw-semibold" href="/coalition/'
+              + encodeURIComponent(coalition.coalition_id) + '">'
+              + escapeHtml(coalition.name || ('Coalition ' + coalition.coalition_id)) + '</a>';
+            if (coalition.short_name) text += ' <span class="muted-line">[' + escapeHtml(coalition.short_name) + ']</span>';
+            return '<div>' + text + '</div>';
+          }).join('');
         }
 
         function numericHistoryValue(value) {
@@ -1466,7 +1491,7 @@
 
           let html = '<div class="muted-line mb-2" data-kill-progress>Kill statistics: 0 / ' + rows.length + ' periods processed</div>'
             + '<div class="table-responsive"><table class="table table-dark table-hover align-middle mb-0">'
-            + '<thead><tr><th>Alliance</th><th>Entry</th><th>Exit</th><th class="text-end">Duration</th>'
+            + '<thead><tr><th>Alliance</th><th>Coalition</th><th>Entry</th><th>Exit</th><th class="text-end">Duration</th>'
             + '<th class="text-end">Members at entry</th><th class="text-end">Members at exit / current</th>'
             + '<th class="text-end">Min members</th><th class="text-end">Max members</th>'
             + '<th class="text-end">Kills inflicted</th><th class="text-end">Kills suffered</th></tr></thead><tbody>';
@@ -1474,6 +1499,7 @@
           rows.forEach(function (row, rowIndex) {
             html += '<tr>'
               + '<td>' + allianceCell(row) + '</td>'
+              + '<td>' + coalitionCell(row) + '</td>'
               + '<td class="text-nowrap">' + escapeHtml(row.start_date) + '</td>'
               + '<td class="text-nowrap">' + (row.current ? '<span class="badge text-bg-success">Current</span>' : escapeHtml(row.end_date || '—')) + '</td>'
               + '<td class="text-end text-nowrap">' + historyDurationCell(rowDurations[rowIndex], totalHistoryDays) + '</td>'
@@ -1501,6 +1527,111 @@
           .catch(function (error) {
             const profileSummary = document.getElementById('corporation-history-profile-summary');
             if (profileSummary) profileSummary.innerHTML = '<div class="muted-line">History unavailable</div>';
+            content.innerHTML = '<div class="alert alert-danger py-2 mb-0">' + escapeHtml(window.eveosintPublicError(error)) + '</div>';
+          });
+      })();
+    </script>
+  {% elif profile.entity_type == 'alliance' and profile_tab == 'history' %}
+    <div id="alliance-history-root"
+         data-history-url="/api/alliance/{{ profile.entity_id }}/history">
+      <div class="card bg-transparent border-secondary-subtle mb-3">
+        <div class="card-body">
+          <div class="d-flex justify-content-between align-items-start gap-3 flex-wrap mb-3">
+            <div>
+              <h2 class="h5 fw-bold mb-1">History</h2>
+              <div class="muted-line">Coalition affiliation periods.</div>
+            </div>
+          </div>
+          <div data-history-content>
+            <div class="d-flex align-items-center gap-2 muted-line py-2">
+              <span class="spinner-border spinner-border-sm" aria-hidden="true"></span>
+              <span>Loading history…</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <script>
+      (function () {
+        const root = document.getElementById('alliance-history-root');
+        if (!root) return;
+        const content = root.querySelector('[data-history-content]');
+        const url = root.getAttribute('data-history-url');
+
+        function escapeHtml(value) {
+          return String(value == null ? '' : value)
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#039;');
+        }
+
+        function coalitionCell(row) {
+          const coalitions = Array.isArray(row && row.coalitions) ? row.coalitions : [];
+          if (!coalitions.length) return '<span class="fw-semibold">No coalition</span>';
+          return coalitions.map(function (coalition) {
+            let text = '<a class="text-decoration-none fw-semibold" href="/coalition/'
+              + encodeURIComponent(coalition.coalition_id) + '">'
+              + escapeHtml(coalition.name || ('Coalition ' + coalition.coalition_id)) + '</a>';
+            if (coalition.short_name) text += ' <span class="muted-line">[' + escapeHtml(coalition.short_name) + ']</span>';
+            return '<div>' + text + '</div>';
+          }).join('');
+        }
+
+        function historyDateDay(value) {
+          if (!value) return null;
+          const parts = String(value).slice(0, 10).split('-').map(Number);
+          if (parts.length !== 3 || parts.some(function (part) { return !Number.isFinite(part); })) return null;
+          return Math.floor(Date.UTC(parts[0], parts[1] - 1, parts[2]) / 86400000);
+        }
+
+        function historyTodayDay() {
+          const now = new Date();
+          return Math.floor(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()) / 86400000);
+        }
+
+        function historyDurationDays(row) {
+          const start = historyDateDay(row.start_date);
+          if (start === null) return null;
+          const end = row.current ? historyTodayDay() : historyDateDay(row.end_date);
+          if (end === null) return null;
+          return Math.max(0, end - start);
+        }
+
+        function render(data) {
+          const rows = Array.isArray(data && data.rows) ? data.rows : [];
+          if (!rows.length) {
+            content.innerHTML = '<div class="muted-line">No coalition affiliation history is available.</div>';
+            return;
+          }
+
+          let html = '<div class="table-responsive"><table class="table table-dark table-hover align-middle mb-0">'
+            + '<thead><tr><th>Coalition</th><th>Entry</th><th>Exit</th><th class="text-end">Duration</th></tr></thead><tbody>';
+
+          rows.forEach(function (row) {
+            const duration = historyDurationDays(row);
+            html += '<tr>'
+              + '<td>' + coalitionCell(row) + '</td>'
+              + '<td class="text-nowrap">' + escapeHtml(row.start_date || '—') + '</td>'
+              + '<td class="text-nowrap">' + (row.current ? '<span class="badge text-bg-success">Current</span>' : escapeHtml(row.end_date || '—')) + '</td>'
+              + '<td class="text-end text-nowrap">' + (duration === null ? '—' : escapeHtml(duration) + ' day' + (duration === 1 ? '' : 's')) + '</td>'
+              + '</tr>';
+          });
+
+          html += '</tbody></table></div>';
+          content.innerHTML = html;
+        }
+
+        fetch(url, {credentials:'same-origin', cache:'no-store'})
+          .then(async function (response) {
+            let data = {};
+            try { data = await response.json(); } catch (_) {}
+            if (!response.ok) throw new Error(data.error || ('Erreur ' + response.status));
+            render(data);
+          })
+          .catch(function (error) {
             content.innerHTML = '<div class="alert alert-danger py-2 mb-0">' + escapeHtml(window.eveosintPublicError(error)) + '</div>';
           });
       })();
