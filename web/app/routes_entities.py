@@ -4123,6 +4123,7 @@ def _merge_corporation_affiliation_periods(history_rows):
 def _get_corporation_affiliation_history(corporation_id):
     corporation_id = int(corporation_id)
     rows = []
+    open_end = datetime(9999, 12, 31, 23, 59, 59, tzinfo=timezone.utc)
 
     with db() as conn:
         with conn.cursor() as cur:
@@ -4148,6 +4149,7 @@ def _get_corporation_affiliation_history(corporation_id):
             history_rows = cur.fetchall()
 
         history_rows = _merge_corporation_affiliation_periods(history_rows)
+        coalition_resolver, coalition_change_days = _coalition_history_resolver(conn)
 
         with conn.cursor() as cur:
             cur.execute(
@@ -4185,7 +4187,37 @@ def _get_corporation_affiliation_history(corporation_id):
         population_first_day = population_rows[0][0] if population_rows else None
         population_last_day = population_rows[-1][0] if population_rows else None
 
+        base_segments = []
         for record_id, alliance_id, start_at, end_at, alliance_name, alliance_ticker, alliance_deleted in history_rows:
+            normalized_start = _history_datetime(start_at)
+            normalized_end = _history_datetime(end_at) or open_end
+            base_segments.append({
+                "record_id": int(record_id),
+                "corporation_id": corporation_id,
+                "alliance_id": int(alliance_id) if alliance_id is not None else None,
+                "alliance_name": alliance_name or "Unknown alliance",
+                "alliance_ticker": alliance_ticker,
+                "alliance_deleted": bool(alliance_deleted),
+                "alliance_membership_start": normalized_start,
+                "start_at": normalized_start,
+                "end_at": normalized_end,
+            })
+
+        segmented = _split_affiliation_segments_by_coalition(
+            base_segments,
+            coalition_resolver,
+            coalition_change_days,
+        )
+        segmented = _merge_history_segments(
+            segmented,
+            ("corporation_id", "alliance_id"),
+        )
+
+        for segment in sorted(segmented, key=lambda row: (row["start_at"], row["record_id"]), reverse=True):
+            start_at = segment["start_at"]
+            end_at_effective = segment["end_at"]
+            current = end_at_effective >= open_end
+            end_at = None if current else end_at_effective
             start_day = start_at.date()
             end_day = end_at.date() if end_at else None
 
@@ -4223,14 +4255,21 @@ def _get_corporation_affiliation_history(corporation_id):
             members_max = max(period_population) if population_period_covered and period_population else None
 
             rows.append({
-                "record_id": int(record_id),
-                "alliance_id": int(alliance_id) if alliance_id is not None else None,
-                "alliance_name": alliance_name or "Unknown alliance",
-                "alliance_ticker": alliance_ticker,
-                "alliance_deleted": bool(alliance_deleted),
+                "record_id": int(segment["record_id"]),
+                "alliance_id": int(segment["alliance_id"]) if segment.get("alliance_id") is not None else None,
+                "alliance_name": segment.get("alliance_name") or "Unknown alliance",
+                "alliance_ticker": segment.get("alliance_ticker"),
+                "alliance_deleted": bool(segment.get("alliance_deleted")),
+                "coalitions": segment.get("coalitions") or [],
+                "coalition_key": list(segment.get("coalition_key") or ()),
                 "start_date": start_day.isoformat(),
                 "end_date": end_day.isoformat() if end_day else None,
-                "current": end_at is None,
+                "current": current,
+                "alliance_membership_start": (
+                    segment["alliance_membership_start"].date().isoformat()
+                    if segment.get("alliance_membership_start")
+                    else None
+                ),
                 "members_entry": members_entry,
                 "members_exit": members_exit,
                 "members_min": members_min,
@@ -4256,22 +4295,25 @@ def _get_corporation_affiliation_history(corporation_id):
             "alliance_id": None,
             "alliance_name": None,
             "alliance_ticker": None,
+            "coalitions": [],
         }
     elif current_period and current_period.get("alliance_id") is not None:
         current_status = {
             "kind": "alliance",
-            "since": current_period.get("start_date"),
+            "since": current_period.get("alliance_membership_start") or current_period.get("start_date"),
             "alliance_id": current_period.get("alliance_id"),
             "alliance_name": current_period.get("alliance_name"),
             "alliance_ticker": current_period.get("alliance_ticker"),
+            "coalitions": current_period.get("coalitions") or [],
         }
     elif current_period:
         current_status = {
             "kind": "no_alliance",
-            "since": current_period.get("start_date"),
+            "since": current_period.get("alliance_membership_start") or current_period.get("start_date"),
             "alliance_id": None,
             "alliance_name": None,
             "alliance_ticker": None,
+            "coalitions": current_period.get("coalitions") or [],
         }
     else:
         current_status = {
@@ -4280,6 +4322,7 @@ def _get_corporation_affiliation_history(corporation_id):
             "alliance_id": None,
             "alliance_name": None,
             "alliance_ticker": None,
+            "coalitions": [],
         }
 
     return {
