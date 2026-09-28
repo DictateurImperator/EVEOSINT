@@ -1,0 +1,16 @@
+[Unit]
+Description=EVEOSINT - current sovereignty ESI snapshot
+Documentation=https://github.com/DictateurImperator/EVEOSINT
+After=network-online.target
+Wants=network-online.target
+ConditionPathExists=/home/ubuntu/eveosint/config/db.json
+
+[Service]
+Type=oneshot
+User=ubuntu
+Group=ubuntu
+WorkingDirectory=/home/ubuntu/eveosint
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/home/ubuntu/eveosint/venv/bin/python /home/ubuntu/eveosint/scripts/sync_sovereignty_esi.py
+TimeoutStartSec=60min
+NoNewPrivileges=true
