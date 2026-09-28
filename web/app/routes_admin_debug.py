@@ -11,6 +11,13 @@ from .debug_runs import (
     start_affiliation_debug,
     stop_debug_run,
 )
+from .sovereignty_debug_runs import (
+    SovereigntyDebugError,
+    get_sovereignty_debug_status,
+    read_sovereignty_debug_log,
+    start_sovereignty_debug,
+    stop_sovereignty_debug,
+)
 from .layout import app_context
 from .main_objects import templates
 
@@ -36,6 +43,7 @@ def admin_debug(request: Request):
     )
     context.update({
         "debug": get_debug_status(include_history=True),
+        "sovereignty_debug": get_sovereignty_debug_status(),
         "can_run": "admin.jobs.run" in user.get("permissions", set()),
         "error": request.query_params.get("error"),
         "success": request.query_params.get("success"),
@@ -64,6 +72,87 @@ def admin_debug_log(request: Request, run_id: str | None = None, lines: int = 80
         return PlainTextResponse(str(exc), status_code=404)
     return PlainTextResponse(content, media_type="text/plain; charset=utf-8")
 
+
+
+
+@router.get("/admin/debug/api/sovereignty/status")
+def admin_debug_sovereignty_status(request: Request):
+    user = require_login(request)
+    redirect = require_permission_or_redirect(user, "admin.jobs.view")
+    if redirect:
+        return redirect
+    return JSONResponse(get_sovereignty_debug_status())
+
+
+@router.get("/admin/debug/api/sovereignty/log")
+def admin_debug_sovereignty_log(request: Request, job: str, lines: int = 500):
+    user = require_login(request)
+    redirect = require_permission_or_redirect(user, "admin.jobs.view")
+    if redirect:
+        return redirect
+    try:
+        output = read_sovereignty_debug_log(job, lines=lines)
+    except SovereigntyDebugError as exc:
+        return PlainTextResponse(str(exc), status_code=404)
+    return PlainTextResponse(output, media_type="text/plain; charset=utf-8")
+
+
+@router.post("/admin/debug/sovereignty/run/{job_key}")
+def admin_debug_run_sovereignty(
+    request: Request,
+    job_key: str,
+    scope: str = Form("current"),
+    system: str = Form(""),
+    limit: int = Form(25),
+    refresh: str | None = Form(None),
+):
+    user = require_login(request)
+    redirect = require_permission_or_redirect(user, "admin.jobs.run")
+    if redirect:
+        return redirect
+    try:
+        pid = start_sovereignty_debug(
+            job_key,
+            scope=scope,
+            system=system,
+            limit=limit,
+            refresh=refresh is not None,
+        )
+    except SovereigntyDebugError as exc:
+        code = "already_running" if str(exc) == "sovereignty_already_running" else "sov_start_failed"
+        return _redirect(code)
+    audit_log(
+        request,
+        "admin_debug_run",
+        user_id=user["id"],
+        username=user["username"],
+        target_type="sovereignty_" + job_key,
+        target_id=job_key,
+        details=f"started pid={pid} scope={scope} system={system[:100]} limit={limit} refresh={refresh is not None}",
+    )
+    return _redirect("sov_" + job_key + "_started", kind="success")
+
+
+@router.post("/admin/debug/sovereignty/stop/{job_key}")
+def admin_debug_stop_sovereignty(request: Request, job_key: str):
+    user = require_login(request)
+    redirect = require_permission_or_redirect(user, "admin.jobs.run")
+    if redirect:
+        return redirect
+    try:
+        pid = stop_sovereignty_debug(job_key)
+    except SovereigntyDebugError:
+        return _redirect("sov_stop_failed")
+    audit_log(
+        request,
+        "admin_debug_stop",
+        user_id=user["id"],
+        username=user["username"],
+        target_type="sovereignty_" + job_key,
+        target_id=job_key,
+        details=f"SIGTERM requested pid={pid}",
+    )
+    return _redirect("sov_stop_requested", kind="success")
 
 @router.post("/admin/debug/run/affiliation-1-4")
 def admin_debug_run_affiliation(
