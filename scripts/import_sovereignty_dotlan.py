@@ -163,6 +163,10 @@ def parse_events(html, system_id, url):
         if selected is not None:
             break
     if selected is None:
+        plain = re.sub(r"<[^>]*>", " ", html)
+        plain = " ".join(plain.split())
+        if re.search(r"Sovereignt?y Changes \[\s*0\s*\]", plain, flags=re.I):
+            return []
         raise ValueError("DOTLAN sovereignty table/header missing")
 
     events = []
