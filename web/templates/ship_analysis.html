@@ -128,6 +128,7 @@
     .ship-analysis-series-title { font-weight: 800; color: #f8fafc; }
     .ship-analysis-series-meta { color: #94a3b8; font-size: .77rem; margin-top: .16rem; }
     .ship-analysis-chart-wrap {
+      position: relative;
       width: 100%;
       overflow-x: auto;
       border: 1px solid rgba(148,163,184,.16);
@@ -139,7 +140,19 @@
       min-width: 760px;
       width: 100%;
       height: 520px;
+      cursor: crosshair;
     }
+    #shipAnalysisChart.ship-analysis-dragging { cursor: grabbing; user-select: none; }
+    .ship-analysis-tooltip {
+      position:absolute; display:none; z-index:5; pointer-events:none;
+      min-width:150px; max-width:340px; padding:.45rem .55rem;
+      border:1px solid #334155; border-radius:.45rem; background:rgba(8,15,29,.96);
+      box-shadow:0 8px 24px rgba(0,0,0,.35); color:#cbd5e1; font-size:.72rem;
+      line-height:1.35; white-space:nowrap;
+    }
+    .ship-analysis-tooltip strong { color:#f8fafc; }
+    .ship-analysis-tooltip-row { display:flex; align-items:center; gap:.35rem; margin-top:.18rem; }
+    .ship-analysis-tooltip-swatch { width:9px; height:9px; border-radius:50%; flex:0 0 9px; }
     .ship-analysis-legend {
       display: flex;
       flex-wrap: wrap;
@@ -371,8 +384,9 @@
         </div>
       </div>
       <div id="shipAnalysisChartView">
-        <div class="ship-analysis-chart-wrap">
+        <div id="shipAnalysisChartWrap" class="ship-analysis-chart-wrap">
           <svg id="shipAnalysisChart" viewBox="0 0 1200 520" preserveAspectRatio="none"></svg>
+          <div id="shipAnalysisTooltip" class="ship-analysis-tooltip"></div>
         </div>
         <div id="shipAnalysisLegend" class="ship-analysis-legend"></div>
       </div>
@@ -429,6 +443,8 @@
     const stopButton = document.getElementById('shipAnalysisStop');
     const status = document.getElementById('shipAnalysisStatus');
     const svg = document.getElementById('shipAnalysisChart');
+    const chartWrap = document.getElementById('shipAnalysisChartWrap');
+    const chartTooltip = document.getElementById('shipAnalysisTooltip');
     const legend = document.getElementById('shipAnalysisLegend');
 
     const timers = {};
@@ -439,6 +455,13 @@
     let resultsByUid = {};
     const hiddenSeriesUids = new Set();
     let resultView = 'chart';
+    let chartViewStart = 0;
+    let chartViewEnd = -1;
+    let chartDataLength = 0;
+    let chartGeometry = null;
+    let chartDragging = false;
+    let chartDragStartX = 0;
+    let chartDragStartViewStart = 0;
 
     function uid() {
       if (window.crypto && typeof window.crypto.randomUUID === 'function') return window.crypto.randomUUID();
@@ -935,9 +958,174 @@
       return String(Math.round(n));
     }
 
+    function resetChartView() {
+      chartViewStart = 0;
+      chartViewEnd = -1;
+      chartDataLength = 0;
+      chartGeometry = null;
+      hideChartTooltip();
+    }
+
+    function syncChartView(length) {
+      if (!length) {
+        chartViewStart = 0;
+        chartViewEnd = -1;
+        chartDataLength = 0;
+        return;
+      }
+      if (!chartDataLength || chartViewEnd < chartViewStart) {
+        chartViewStart = 0;
+        chartViewEnd = length - 1;
+        chartDataLength = length;
+        return;
+      }
+      const wasAtRightEdge = chartViewEnd >= chartDataLength - 1;
+      chartViewStart = Math.max(0, Math.min(chartViewStart, length - 1));
+      chartViewEnd = Math.max(chartViewStart, Math.min(chartViewEnd, length - 1));
+      if (wasAtRightEdge) chartViewEnd = length - 1;
+      chartDataLength = length;
+    }
+
+    function resetChartZoom() {
+      const active = activeResults();
+      if (!active.length || !active[0].points.length) return;
+      chartViewStart = 0;
+      chartViewEnd = active[0].points.length - 1;
+      chartDataLength = active[0].points.length;
+      hideChartTooltip();
+      renderChart();
+    }
+
+    function chartPointerRatio(clientX) {
+      if (!chartGeometry) return .5;
+      const rect = svg.getBoundingClientRect();
+      if (!rect.width) return .5;
+      const svgX = ((clientX - rect.left) / rect.width) * chartGeometry.width;
+      return Math.max(0, Math.min(1, (svgX - chartGeometry.left) / chartGeometry.plotW));
+    }
+
+    function nearestChartIndex(clientX) {
+      if (!chartGeometry || chartViewEnd < chartViewStart) return -1;
+      const span = chartViewEnd - chartViewStart + 1;
+      const offset = span <= 1 ? 0 : Math.round(chartPointerRatio(clientX) * (span - 1));
+      return Math.max(chartViewStart, Math.min(chartViewEnd, chartViewStart + offset));
+    }
+
+    function hideChartTooltip() {
+      if (chartTooltip) chartTooltip.style.display = 'none';
+      const layer = document.getElementById('shipAnalysisHoverLayer');
+      if (layer) layer.setAttribute('visibility','hidden');
+    }
+
+    function showChartTooltip(event) {
+      if (!chartGeometry || !chartGeometry.active.length) return;
+      const index = nearestChartIndex(event.clientX);
+      if (index < 0) return;
+      const localIndex = index - chartViewStart;
+      const x = chartGeometry.visibleDates.length <= 1
+        ? chartGeometry.left + chartGeometry.plotW / 2
+        : chartGeometry.left + (localIndex / (chartGeometry.visibleDates.length - 1)) * chartGeometry.plotW;
+
+      const layer = document.getElementById('shipAnalysisHoverLayer');
+      const line = document.getElementById('shipAnalysisHoverLine');
+      if (layer && line) {
+        line.setAttribute('x1',x);
+        line.setAttribute('x2',x);
+        layer.setAttribute('visibility','visible');
+      }
+
+      const date = chartGeometry.allDates[index] || '';
+      const rows = [];
+      chartGeometry.active.forEach(entry => {
+        const point = entry.points[index];
+        const value = point && point.value != null ? Number(point.value) : NaN;
+        const dot = document.getElementById('shipAnalysisHoverDot-' + entry.index);
+        const color = colors[entry.index % colors.length];
+        if (dot) {
+          if (Number.isFinite(value)) {
+            dot.setAttribute('cx',x);
+            dot.setAttribute('cy',chartGeometry.yAt(value));
+            dot.setAttribute('visibility','visible');
+          } else {
+            dot.setAttribute('visibility','hidden');
+          }
+        }
+        rows.push(
+          '<div class="ship-analysis-tooltip-row">'
+          + '<span class="ship-analysis-tooltip-swatch" style="background:' + esc(color) + '"></span>'
+          + '<span>' + esc(entry.item.name) + ': <strong>'
+          + esc(Number.isFinite(value) ? formatSeriesValue(value,entry.item) : '—')
+          + '</strong></span></div>'
+        );
+      });
+
+      chartTooltip.innerHTML = '<strong>' + esc(date) + '</strong>' + rows.join('');
+      chartTooltip.style.display = 'block';
+
+      const wrapRect = chartWrap.getBoundingClientRect();
+      const tw = chartTooltip.offsetWidth || 180;
+      const th = chartTooltip.offsetHeight || 60;
+      const scrollLeft = chartWrap.scrollLeft || 0;
+      const scrollTop = chartWrap.scrollTop || 0;
+      const minLeft = scrollLeft + 8;
+      const maxLeft = scrollLeft + chartWrap.clientWidth - tw - 8;
+      const wantedLeft = event.clientX - wrapRect.left + scrollLeft + 14;
+      let wantedTop = event.clientY - wrapRect.top + scrollTop + 14;
+      const maxTop = scrollTop + chartWrap.clientHeight - th - 8;
+      if (wantedTop > maxTop) {
+        wantedTop = event.clientY - wrapRect.top + scrollTop - th - 14;
+      }
+      chartTooltip.style.left = Math.max(minLeft,Math.min(maxLeft,wantedLeft)) + 'px';
+      chartTooltip.style.top = Math.max(scrollTop + 8,wantedTop) + 'px';
+    }
+
+    function zoomChart(event) {
+      if (!chartGeometry || chartGeometry.allDates.length <= 1) return;
+      event.preventDefault();
+      const total = chartGeometry.allDates.length;
+      const currentSpan = chartViewEnd - chartViewStart + 1;
+      const factor = event.deltaY < 0 ? .80 : 1.25;
+      const minSpan = Math.min(10,total);
+      const newSpan = Math.max(minSpan,Math.min(total,Math.round(currentSpan * factor)));
+      if (newSpan === currentSpan) return;
+      const anchor = nearestChartIndex(event.clientX);
+      const ratio = currentSpan <= 1 ? .5 : (anchor - chartViewStart) / (currentSpan - 1);
+      let start = Math.round(anchor - ratio * (newSpan - 1));
+      let end = start + newSpan - 1;
+      if (start < 0) { start = 0; end = newSpan - 1; }
+      if (end >= total) { end = total - 1; start = end - newSpan + 1; }
+      chartViewStart = Math.max(0,start);
+      chartViewEnd = Math.min(total - 1,end);
+      hideChartTooltip();
+      renderChart();
+    }
+
+    function panChart(event) {
+      if (!chartDragging || !chartGeometry) return;
+      const total = chartGeometry.allDates.length;
+      const span = chartViewEnd - chartViewStart + 1;
+      if (span >= total) return;
+      const rect = svg.getBoundingClientRect();
+      const plotPixels = Math.max(1,rect.width * (chartGeometry.plotW / chartGeometry.width));
+      const delta = Math.round(-((event.clientX - chartDragStartX) / plotPixels) * span);
+      let start = chartDragStartViewStart + delta;
+      let end = start + span - 1;
+      if (start < 0) { start = 0; end = span - 1; }
+      if (end >= total) { end = total - 1; start = end - span + 1; }
+      const nextStart = Math.max(0,start);
+      const nextEnd = Math.min(total - 1,end);
+      if (nextStart === chartViewStart && nextEnd === chartViewEnd) return;
+      chartViewStart = nextStart;
+      chartViewEnd = nextEnd;
+      renderChart();
+    }
+
     function renderChart() {
       svg.innerHTML = '';
       legend.innerHTML = '';
+      chartGeometry = null;
+      hideChartTooltip();
+
       const active = series.map((item,index) => ({item,index,result:resultsByUid[item.uid],points:displayPointsFor(item)})).filter(entry => !hiddenSeriesUids.has(entry.item.uid) && entry.result && Array.isArray(entry.result.points));
       csvButton.disabled = !active.length;
       viewCsvButton.disabled = !active.length;
@@ -949,18 +1137,22 @@
       }
 
       const allDates = active[0].points.map(point => point.date);
+      syncChartView(allDates.length);
+      const visibleDates = allDates.slice(chartViewStart,chartViewEnd + 1);
       const values = [];
-      active.forEach(entry => entry.points.forEach(point => {
+      active.forEach(entry => entry.points.slice(chartViewStart,chartViewEnd + 1).forEach(point => {
         const value = Number(point.value);
         if (point.value != null && Number.isFinite(value)) values.push(value);
       }));
 
       const width=1200, height=520, left=78, right=28, top=28, bottom=60;
       const plotW=width-left-right, plotH=height-top-bottom;
-      const maxY = values.length ? Math.max(1, ...values) * 1.06 : 1;
+      const maxY = values.length ? Math.max(1,...values) * 1.06 : 1;
       const axisMetric = active.every(entry => isDisplayPercent(entry.item)) ? 'unique_percent' : 'count';
-      const xAt = index => allDates.length <= 1 ? left + plotW / 2 : left + (index / (allDates.length - 1)) * plotW;
+      const xAt = index => visibleDates.length <= 1 ? left + plotW / 2 : left + (index / (visibleDates.length - 1)) * plotW;
       const yAt = value => top + ((maxY - value) / maxY) * plotH;
+
+      chartGeometry = {active,allDates,visibleDates,width,height,left,right,top,bottom,plotW,plotH,maxY,xAt,yAt};
 
       svg.appendChild(svgNode('rect',{x:0,y:0,width,height,fill:'#080f1d'}));
       for (let tick=0; tick<=5; tick++) {
@@ -970,17 +1162,20 @@
         svg.appendChild(svgNode('text',{x:left-10,y:y+4,fill:'#94a3b8','text-anchor':'end','font-size':12},formatValue(value,axisMetric)));
       }
 
-      const tickCount = Math.min(7, Math.max(2, allDates.length));
+      const tickCount = Math.min(7,Math.max(2,visibleDates.length));
+      const usedTicks = new Set();
       for (let i=0; i<tickCount; i++) {
-        const index = allDates.length <= 1 ? 0 : Math.round(i * (allDates.length - 1) / (tickCount - 1));
+        const index = visibleDates.length <= 1 ? 0 : Math.round(i * (visibleDates.length - 1) / (tickCount - 1));
+        if (usedTicks.has(index)) continue;
+        usedTicks.add(index);
         const x = xAt(index);
         svg.appendChild(svgNode('line',{x1:x,y1:top,x2:x,y2:height-bottom,stroke:'#162235','stroke-width':1}));
-        svg.appendChild(svgNode('text',{x,y:height-bottom+22,fill:'#94a3b8','text-anchor':'middle','font-size':11},allDates[index] || ''));
+        svg.appendChild(svgNode('text',{x,y:height-bottom+22,fill:'#94a3b8','text-anchor':'middle','font-size':11},visibleDates[index] || ''));
       }
 
       active.forEach(entry => {
         const color = colors[entry.index % colors.length];
-        const points = entry.points;
+        const points = entry.points.slice(chartViewStart,chartViewEnd + 1);
         let d = '';
         let drawing = false;
         points.forEach((point,index) => {
@@ -995,9 +1190,23 @@
         });
         if (d) svg.appendChild(svgNode('path',{d,fill:'none',stroke:color,'stroke-width':2.4,'vector-effect':'non-scaling-stroke'}));
 
-        const last = [...points].reverse().find(point => point.value != null && Number.isFinite(Number(point.value)));
+        const last = [...entry.points].reverse().find(point => point.value != null && Number.isFinite(Number(point.value)));
         legend.insertAdjacentHTML('beforeend','<span class="ship-analysis-legend-item"><span class="ship-analysis-legend-swatch" style="background:' + color + '"></span><span>' + esc(entry.item.name) + ' · ' + esc(displayMetricLabel(entry.item)) + (last ? ' · ' + esc(formatSeriesValue(Number(last.value), entry.item)) : '') + '</span></span>');
       });
+
+      const hoverLayer = svgNode('g',{id:'shipAnalysisHoverLayer',visibility:'hidden','pointer-events':'none'});
+      hoverLayer.appendChild(svgNode('line',{
+        id:'shipAnalysisHoverLine',x1:left,x2:left,y1:top,y2:height-bottom,
+        stroke:'rgba(186,230,253,.55)','stroke-width':1.2,'stroke-dasharray':'5 5'
+      }));
+      active.forEach(entry => {
+        hoverLayer.appendChild(svgNode('circle',{
+          id:'shipAnalysisHoverDot-' + entry.index,r:4.8,
+          fill:colors[entry.index % colors.length],stroke:'#e0f2fe','stroke-width':1.8,
+          visibility:'hidden'
+        }));
+      });
+      svg.appendChild(hoverLayer);
     }
 
     function csvCell(value) {
@@ -1121,6 +1330,7 @@
       if (analysisAbort) analysisAbort.abort();
       analysisAbort = new AbortController();
       resultsByUid = {};
+      resetChartView();
       renderChart();
       runButton.disabled = true;
       stopButton.classList.remove('d-none');
@@ -1184,6 +1394,43 @@
 
     runButton.addEventListener('click', runAnalysis);
     csvButton.addEventListener('click', exportCsv);
+
+    svg.addEventListener('wheel',zoomChart,{passive:false});
+    svg.addEventListener('dblclick',event => {
+      event.preventDefault();
+      resetChartZoom();
+    });
+    svg.addEventListener('pointerdown',event => {
+      if (event.button !== 0 || !chartGeometry || !chartGeometry.allDates.length) return;
+      chartDragging = true;
+      chartDragStartX = event.clientX;
+      chartDragStartViewStart = chartViewStart;
+      svg.classList.add('ship-analysis-dragging');
+      if (typeof svg.setPointerCapture === 'function') svg.setPointerCapture(event.pointerId);
+      hideChartTooltip();
+      event.preventDefault();
+    });
+    svg.addEventListener('pointermove',event => {
+      if (chartDragging) panChart(event);
+      else showChartTooltip(event);
+    });
+    svg.addEventListener('pointerup',event => {
+      chartDragging = false;
+      svg.classList.remove('ship-analysis-dragging');
+      if (typeof svg.hasPointerCapture === 'function' && svg.hasPointerCapture(event.pointerId)) {
+        svg.releasePointerCapture(event.pointerId);
+      }
+    });
+    svg.addEventListener('pointercancel',() => {
+      chartDragging = false;
+      svg.classList.remove('ship-analysis-dragging');
+      hideChartTooltip();
+    });
+    svg.addEventListener('pointerleave',() => {
+      if (!chartDragging) hideChartTooltip();
+    });
+
+
     viewChartButton.addEventListener('click', () => setResultView('chart'));
     viewCsvButton.addEventListener('click', () => setResultView('csv'));
     stopButton.addEventListener('click', () => { if (analysisAbort) analysisAbort.abort(); });
