@@ -1761,6 +1761,25 @@ def character_affiliation_history_kills_data(
         return JSONResponse(status_code=500, content={"error": "history_kill_count_failed"})
 
 
+@router.get("/api/alliance/{alliance_id}/history", response_class=JSONResponse)
+def alliance_coalition_history_data(request: Request, alliance_id: int):
+    require_login(request)
+    try:
+        return JSONResponse(content=_alliance_coalition_history(alliance_id))
+    except QueryCanceled:
+        logger.warning(
+            "Alliance coalition history timeout alliance_id=%s",
+            alliance_id,
+        )
+        return JSONResponse(status_code=504, content={"error": "alliance_history_timeout"})
+    except Exception:
+        logger.exception(
+            "Alliance coalition history load failed alliance_id=%s",
+            alliance_id,
+        )
+        return JSONResponse(status_code=500, content={"error": "alliance_history_load_failed"})
+
+
 @router.get("/api/corporation/{corporation_id}/history", response_class=JSONResponse)
 def corporation_affiliation_history_data(request: Request, corporation_id: int):
     require_login(request)
@@ -4690,7 +4709,7 @@ def entity_profile(request: Request, entity_type: str, entity_id: int):
     allowed_tabs = {"killboard", "pilotable-ships"}
     if entity_type in {"alliance", "corporation"}:
         allowed_tabs.add("population")
-    if entity_type in {"character", "corporation"}:
+    if entity_type in {"character", "corporation", "alliance"}:
         allowed_tabs.add("history")
     if requested_tab not in allowed_tabs:
         requested_tab = "killboard"
@@ -4779,7 +4798,7 @@ def entity_profile(request: Request, entity_type: str, entity_id: int):
                 "permission_key": "entities.view",
                 "active": requested_tab == "population",
             })
-        if profile.get("entity_type") in {"character", "corporation"}:
+        if profile.get("entity_type") in {"character", "corporation", "alliance"}:
             profile_menu.append({
                 "id": None,
                 "menu_key": "history",
