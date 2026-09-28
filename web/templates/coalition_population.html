@@ -1377,8 +1377,20 @@
     #population-affiliations .af-note { color:#94a3b8; font-size:.78rem; line-height:1.4; }
     #population-affiliations .af-error { color:#fda4af; padding:.6rem 0; }
     #population-affiliations .af-loading { color:#94a3b8; padding:.6rem 0; }
-    #population-affiliations .af-graph-wrap { overflow-x:auto; }
+    #population-affiliations .af-graph-wrap { position:relative; overflow-x:auto; }
     #population-affiliations .af-graph { width:100%; min-width:780px; display:block; border-radius:.6rem; background:rgba(2,6,23,.42); }
+    #population-affiliations #af-timeline { cursor:crosshair; }
+    #population-affiliations #af-timeline.af-timeline-dragging { cursor:grabbing; user-select:none; }
+    #population-affiliations .af-timeline-tooltip {
+      position:absolute; display:none; z-index:5; pointer-events:none;
+      min-width:150px; max-width:360px; padding:.45rem .55rem;
+      border:1px solid #334155; border-radius:.45rem; background:rgba(8,15,29,.96);
+      box-shadow:0 8px 24px rgba(0,0,0,.35); color:#cbd5e1; font-size:.72rem;
+      line-height:1.35; white-space:nowrap;
+    }
+    #population-affiliations .af-timeline-tooltip strong { color:#f8fafc; }
+    #population-affiliations .af-timeline-tooltip-row { display:flex; align-items:center; gap:.35rem; margin-top:.18rem; }
+    #population-affiliations .af-timeline-tooltip-swatch { width:9px; height:9px; border-radius:50%; flex:0 0 9px; }
     #population-affiliations .af-node-label { fill:#e2e8f0; font-size:12px; font-weight:800; }
     #population-affiliations .af-node-sub { fill:#94a3b8; font-size:10px; }
     #population-affiliations .af-center-label { fill:#f8fafc; font-size:16px; font-weight:900; }
@@ -1510,7 +1522,10 @@
         <div id="af-timeline-selection" class="af-note mb-2">No entities selected.</div>
         <div id="af-timeline-loading" class="af-loading" hidden>Loading movement series…</div>
         <div id="af-timeline-error" class="af-error" hidden></div>
-        <div class="af-graph-wrap"><svg id="af-timeline" class="af-graph" viewBox="0 0 1000 390" role="img" aria-label="Affiliation movement timeline"></svg></div>
+        <div id="af-timeline-wrap" class="af-graph-wrap">
+          <svg id="af-timeline" class="af-graph" viewBox="0 0 1000 390" role="img" aria-label="Affiliation movement timeline"></svg>
+          <div id="af-timeline-tooltip" class="af-timeline-tooltip"></div>
+        </div>
         <div id="af-timeline-legend" class="af-legend"></div>
       </div>
     </section>
@@ -1542,6 +1557,14 @@
     let loaded = false;
     let requestToken = 0;
     let pilotState = null;
+    let timelineData = null;
+    let timelineViewStart = 0;
+    let timelineViewEnd = -1;
+    let timelineDataLength = 0;
+    let timelineGeometry = null;
+    let timelineDragging = false;
+    let timelineDragStartX = 0;
+    let timelineDragStartViewStart = 0;
 
     function escapeHtml(value) {
       return String(value == null ? '' : value).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
@@ -1666,16 +1689,154 @@
         const response=await fetch(apiBase+'/series?'+params.toString(),{headers:{'Accept':'application/json'},cache:'no-store'});const data=await response.json().catch(()=>({}));if(!response.ok)throw new Error(data.error||('Erreur '+response.status));renderTimeline(data);wait.hidden=true;
       }catch(error){wait.hidden=true;err.hidden=false;err.textContent=''+window.eveosintPublicError(error);}
     }
-    function renderTimeline(data) {
+    function hideTimelineTooltip() {
+      const tooltip=document.getElementById('af-timeline-tooltip');
+      if(tooltip)tooltip.style.display='none';
+      const layer=document.getElementById('af-timeline-hover-layer');
+      if(layer)layer.setAttribute('visibility','hidden');
+    }
+
+    function resetTimelineZoom() {
+      if(!timelineData)return;
+      const series=Array.isArray(timelineData.series)?timelineData.series:[];
+      const total=series.length?(series[0].points||[]).length:0;
+      if(!total)return;
+      timelineViewStart=0;
+      timelineViewEnd=total-1;
+      timelineDataLength=total;
+      hideTimelineTooltip();
+      renderTimeline(timelineData,true);
+    }
+
+    function syncTimelineView(total,preserveView) {
+      if(!total){timelineViewStart=0;timelineViewEnd=-1;timelineDataLength=0;return;}
+      if(!preserveView||!timelineDataLength||timelineViewEnd<timelineViewStart){
+        timelineViewStart=0;timelineViewEnd=total-1;timelineDataLength=total;return;
+      }
+      const wasAtRightEdge=timelineViewEnd>=timelineDataLength-1;
+      timelineViewStart=Math.max(0,Math.min(timelineViewStart,total-1));
+      timelineViewEnd=Math.max(timelineViewStart,Math.min(timelineViewEnd,total-1));
+      if(wasAtRightEdge)timelineViewEnd=total-1;
+      timelineDataLength=total;
+    }
+
+    function timelinePointerRatio(clientX) {
+      if(!timelineGeometry)return .5;
+      const svg=document.getElementById('af-timeline'),rect=svg.getBoundingClientRect();
+      if(!rect.width)return .5;
+      const svgX=((clientX-rect.left)/rect.width)*timelineGeometry.W;
+      return Math.max(0,Math.min(1,(svgX-timelineGeometry.L)/timelineGeometry.plotW));
+    }
+
+    function nearestTimelineIndex(clientX) {
+      if(!timelineGeometry||timelineViewEnd<timelineViewStart)return -1;
+      const span=timelineViewEnd-timelineViewStart+1;
+      const offset=span<=1?0:Math.round(timelinePointerRatio(clientX)*(span-1));
+      return Math.max(timelineViewStart,Math.min(timelineViewEnd,timelineViewStart+offset));
+    }
+
+    function showTimelineTooltip(event) {
+      if(!timelineGeometry)return;
+      const index=nearestTimelineIndex(event.clientX);
+      if(index<0)return;
+      const localIndex=index-timelineViewStart;
+      const x=timelineGeometry.visibleDates.length<=1
+        ?timelineGeometry.L+timelineGeometry.plotW/2
+        :timelineGeometry.L+localIndex/(timelineGeometry.visibleDates.length-1)*timelineGeometry.plotW;
+      const layer=document.getElementById('af-timeline-hover-layer');
+      const line=document.getElementById('af-timeline-hover-line');
+      if(layer&&line){line.setAttribute('x1',x);line.setAttribute('x2',x);layer.setAttribute('visibility','visible');}
+
+      const rows=[];
+      timelineGeometry.series.forEach((s,idx)=>{
+        const point=(s.points||[])[index];
+        const value=point?Number(point.count):NaN;
+        const dot=document.getElementById('af-timeline-hover-dot-'+idx);
+        const color=palette[idx%palette.length];
+        if(dot){
+          if(Number.isFinite(value)){dot.setAttribute('cx',x);dot.setAttribute('cy',timelineGeometry.yFor(value));dot.setAttribute('visibility','visible');}
+          else dot.setAttribute('visibility','hidden');
+        }
+        rows.push(
+          '<div class="af-timeline-tooltip-row">'
+          +'<span class="af-timeline-tooltip-swatch" style="background:'+color+'"></span>'
+          +'<span>'+escapeHtml((s.direction==='incoming'?'↗ ':'↘ ')+entityLabel(s.entity))+': <strong>'
+          +(Number.isFinite(value)?number(value):'—')+'</strong></span></div>'
+        );
+      });
+
+      const tooltip=document.getElementById('af-timeline-tooltip');
+      const wrap=document.getElementById('af-timeline-wrap');
+      tooltip.innerHTML='<strong>'+escapeHtml(timelineGeometry.allDates[index]||'')+'</strong>'+rows.join('');
+      tooltip.style.display='block';
+      const wrapRect=wrap.getBoundingClientRect(),tw=tooltip.offsetWidth||180,th=tooltip.offsetHeight||60;
+      const scrollLeft=wrap.scrollLeft||0,scrollTop=wrap.scrollTop||0;
+      const minLeft=scrollLeft+8,maxLeft=scrollLeft+wrap.clientWidth-tw-8;
+      const wantedLeft=event.clientX-wrapRect.left+scrollLeft+14;
+      let wantedTop=event.clientY-wrapRect.top+scrollTop+14;
+      const maxTop=scrollTop+wrap.clientHeight-th-8;
+      if(wantedTop>maxTop)wantedTop=event.clientY-wrapRect.top+scrollTop-th-14;
+      tooltip.style.left=Math.max(minLeft,Math.min(maxLeft,wantedLeft))+'px';
+      tooltip.style.top=Math.max(scrollTop+8,wantedTop)+'px';
+    }
+
+    function zoomTimeline(event) {
+      if(!timelineGeometry||timelineGeometry.allDates.length<=1)return;
+      event.preventDefault();
+      const total=timelineGeometry.allDates.length,current=timelineViewEnd-timelineViewStart+1;
+      const factor=event.deltaY<0?.80:1.25,minSpan=Math.min(6,total);
+      const span=Math.max(minSpan,Math.min(total,Math.round(current*factor)));
+      if(span===current)return;
+      const anchor=nearestTimelineIndex(event.clientX);
+      const ratio=current<=1?.5:(anchor-timelineViewStart)/(current-1);
+      let start=Math.round(anchor-ratio*(span-1)),end=start+span-1;
+      if(start<0){start=0;end=span-1;}
+      if(end>=total){end=total-1;start=end-span+1;}
+      timelineViewStart=Math.max(0,start);timelineViewEnd=Math.min(total-1,end);
+      hideTimelineTooltip();renderTimeline(timelineData,true);
+    }
+
+    function panTimeline(event) {
+      if(!timelineDragging||!timelineGeometry)return;
+      const total=timelineGeometry.allDates.length,span=timelineViewEnd-timelineViewStart+1;
+      if(span>=total)return;
+      const svg=document.getElementById('af-timeline'),rect=svg.getBoundingClientRect();
+      const plotPixels=Math.max(1,rect.width*(timelineGeometry.plotW/timelineGeometry.W));
+      const delta=Math.round(-((event.clientX-timelineDragStartX)/plotPixels)*span);
+      let start=timelineDragStartViewStart+delta,end=start+span-1;
+      if(start<0){start=0;end=span-1;}
+      if(end>=total){end=total-1;start=end-span+1;}
+      const ns=Math.max(0,start),ne=Math.min(total-1,end);
+      if(ns===timelineViewStart&&ne===timelineViewEnd)return;
+      timelineViewStart=ns;timelineViewEnd=ne;renderTimeline(timelineData,true);
+    }
+
+    function renderTimeline(data,preserveView=false) {
+      timelineData=data;
       const svg=document.getElementById('af-timeline'),legend=document.getElementById('af-timeline-legend'),series=Array.isArray(data.series)?data.series:[];
-      if(!series.length){svg.innerHTML='<text class="af-node-sub" x="500" y="195" text-anchor="middle">No selected movement series.</text>';legend.innerHTML='';return;}
-      const allDates=(series[0].points||[]).map(p=>p.date);const maxY=Math.max(1,...series.flatMap(s=>(s.points||[]).map(p=>Number(p.count)||0)));const W=1000,H=390,L=62,R=26,T=28,B=48,plotW=W-L-R,plotH=H-T-B;
+      hideTimelineTooltip();
+      if(!series.length){
+        timelineGeometry=null;timelineDataLength=0;timelineViewStart=0;timelineViewEnd=-1;
+        svg.innerHTML='<text class="af-node-sub" x="500" y="195" text-anchor="middle">No selected movement series.</text>';legend.innerHTML='';return;
+      }
+      const allDates=(series[0].points||[]).map(p=>p.date);
+      syncTimelineView(allDates.length,preserveView);
+      const visibleDates=allDates.slice(timelineViewStart,timelineViewEnd+1);
+      const visibleSeries=series.map(s=>({...s,visiblePoints:(s.points||[]).slice(timelineViewStart,timelineViewEnd+1)}));
+      const maxY=Math.max(1,...visibleSeries.flatMap(s=>s.visiblePoints.map(p=>Number(p.count)||0)));
+      const W=1000,H=390,L=62,R=26,T=28,B=48,plotW=W-L-R,plotH=H-T-B;
+      const xFor=i=>L+(visibleDates.length<=1?plotW/2:plotW*i/(visibleDates.length-1));
+      const yFor=v=>T+plotH-(Number(v)||0)/maxY*plotH;
+      timelineGeometry={series,allDates,visibleDates,W,H,L,R,T,B,plotW,plotH,maxY,xFor,yFor};
+
       let html='';
       for(let i=0;i<=4;i++){const y=T+plotH*i/4,val=Math.round(maxY*(1-i/4));html+='<line class="af-timeline-grid" x1="'+L+'" y1="'+y+'" x2="'+(W-R)+'" y2="'+y+'"></line><text class="af-timeline-axis" x="'+(L-8)+'" y="'+(y+4)+'" text-anchor="end">'+number(val)+'</text>';}
-      const xFor=i=>L+(allDates.length<=1?0:plotW*i/(allDates.length-1));const yFor=v=>T+plotH-(Number(v)||0)/maxY*plotH;
-      const tickIndexes=[];if(allDates.length){const desired=Math.min(7,allDates.length);for(let i=0;i<desired;i++)tickIndexes.push(Math.round(i*(allDates.length-1)/Math.max(1,desired-1)));}
-      Array.from(new Set(tickIndexes)).forEach(i=>{const x=xFor(i);html+='<text class="af-timeline-axis" x="'+x+'" y="'+(H-18)+'" text-anchor="middle">'+escapeHtml(allDates[i].slice(0,7))+'</text>';});
-      series.forEach((s,idx)=>{const color=palette[idx%palette.length],points=(s.points||[]).map((p,i)=>xFor(i)+','+yFor(p.count)).join(' ');html+='<polyline class="af-timeline-line" points="'+points+'" stroke="'+color+'"><title>'+escapeHtml((s.direction==='incoming'?'Incoming · ':'Outgoing · ')+entityLabel(s.entity))+'</title></polyline>';});
+      const tickIndexes=[];if(visibleDates.length){const desired=Math.min(7,visibleDates.length);for(let i=0;i<desired;i++)tickIndexes.push(Math.round(i*(visibleDates.length-1)/Math.max(1,desired-1)));}
+      Array.from(new Set(tickIndexes)).forEach(i=>{const x=xFor(i);html+='<text class="af-timeline-axis" x="'+x+'" y="'+(H-18)+'" text-anchor="middle">'+escapeHtml((visibleDates[i]||'').slice(0,7))+'</text>';});
+      visibleSeries.forEach((s,idx)=>{const color=palette[idx%palette.length],points=s.visiblePoints.map((p,i)=>xFor(i)+','+yFor(p.count)).join(' ');html+='<polyline class="af-timeline-line" points="'+points+'" stroke="'+color+'"><title>'+escapeHtml((s.direction==='incoming'?'Incoming · ':'Outgoing · ')+entityLabel(s.entity))+'</title></polyline>';});
+      html+='<g id="af-timeline-hover-layer" visibility="hidden" pointer-events="none"><line id="af-timeline-hover-line" x1="'+L+'" x2="'+L+'" y1="'+T+'" y2="'+(H-B)+'" stroke="rgba(186,230,253,.55)" stroke-width="1.2" stroke-dasharray="5 5"></line>';
+      series.forEach((s,idx)=>{html+='<circle id="af-timeline-hover-dot-'+idx+'" r="4.5" fill="'+palette[idx%palette.length]+'" stroke="#e0f2fe" stroke-width="1.6" visibility="hidden"></circle>';});
+      html+='</g>';
       svg.innerHTML=html;
       legend.innerHTML=series.map((s,idx)=>'<span class="af-legend-item"><span class="af-swatch" style="background:'+palette[idx%palette.length]+'"></span>'+(s.direction==='incoming'?'↗ ':'↘ ')+escapeHtml(entityLabel(s.entity))+'</span>').join('');
     }
@@ -1705,6 +1866,24 @@
     document.getElementById('af-pilot-prev').addEventListener('click',()=>{if(pilotState&&pilotState.page>1)openPilots(pilotState.kind,pilotState.entityType,pilotState.entityId,pilotState.name,pilotState.page-1);});
     document.getElementById('af-pilot-next').addEventListener('click',()=>{if(pilotState&&pilotState.page<pilotState.pages)openPilots(pilotState.kind,pilotState.entityType,pilotState.entityId,pilotState.name,pilotState.page+1);});
     document.getElementById('af-sankey').addEventListener('click',event=>{const path=event.target.closest('[data-af-graph-kind]');if(!path||!payload)return;const kind=path.dataset.afGraphKind,key=path.dataset.afKey;const rows=kind==='incoming'?payload.incoming_period:payload.destinations_current;const row=rows.find(r=>keyOf(r)===key);if(row)openPilots(kind,row.entity_type,row.entity_id,entityLabel(row),1);});
+
+    const timelineSvg=document.getElementById('af-timeline');
+    timelineSvg.addEventListener('wheel',zoomTimeline,{passive:false});
+    timelineSvg.addEventListener('dblclick',event=>{event.preventDefault();resetTimelineZoom();});
+    timelineSvg.addEventListener('pointerdown',event=>{
+      if(event.button!==0||!timelineGeometry||!timelineGeometry.allDates.length)return;
+      timelineDragging=true;timelineDragStartX=event.clientX;timelineDragStartViewStart=timelineViewStart;
+      timelineSvg.classList.add('af-timeline-dragging');
+      if(typeof timelineSvg.setPointerCapture==='function')timelineSvg.setPointerCapture(event.pointerId);
+      hideTimelineTooltip();event.preventDefault();
+    });
+    timelineSvg.addEventListener('pointermove',event=>{if(timelineDragging)panTimeline(event);else showTimelineTooltip(event);});
+    timelineSvg.addEventListener('pointerup',event=>{
+      timelineDragging=false;timelineSvg.classList.remove('af-timeline-dragging');
+      if(typeof timelineSvg.hasPointerCapture==='function'&&timelineSvg.hasPointerCapture(event.pointerId))timelineSvg.releasePointerCapture(event.pointerId);
+    });
+    timelineSvg.addEventListener('pointercancel',()=>{timelineDragging=false;timelineSvg.classList.remove('af-timeline-dragging');hideTimelineTooltip();});
+    timelineSvg.addEventListener('pointerleave',()=>{if(!timelineDragging)hideTimelineTooltip();});
 
     setPeriodByDays('365');
     window.eveosintLoadCoalitionAffiliations = () => loadSummary(false);
