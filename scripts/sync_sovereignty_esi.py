@@ -238,7 +238,6 @@ def esi_request(session, etag):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--force", action="store_true", help="Ignore cached Expires (manual investigation only).")
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
@@ -252,7 +251,7 @@ def main():
         try:
             ensure_tables(conn)
             etag, expires_at, expected, existing = get_state(conn)
-            if not args.force and existing > 0 and expected == existing and expires_at and utcnow() < expires_at:
+            if existing > 0 and expected == existing and expires_at and utcnow() < expires_at:
                 LOG.info("SOV_ESI status=cached systems=%d next_fetch=%s", existing, expires_at.isoformat())
                 return 0
 
@@ -265,6 +264,8 @@ def main():
                     LOG.info("SOV_ESI status=not_modified systems=%d", existing)
                     return 0
                 result = normalize(response.json())
+                if len(result) < 1000 or (existing >= 1000 and len(result) < existing * 0.70):
+                    raise ValueError("Suspiciously incomplete ESI map (%d systems); current state retained" % len(result))
                 count = replace_map(conn, result, response)
                 LOG.info("SOV_ESI status=updated systems=%d", count)
                 return 0
