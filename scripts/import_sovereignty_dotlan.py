@@ -117,13 +117,31 @@ def classification(action):
 
 
 def entity_cell(cells, prefix, action_pos):
+    aliases = ("corp", "corporation") if prefix == "corp" else (prefix,)
     for cell in cells[action_pos + 1:]:
         for link in cell["links"]:
             href = link["href"]
-            if re.search(r"(?:^|/)" + prefix + r"/[^/?#]+", href, flags=re.I):
-                candidate = unquote(href.split("/" + prefix + "/", 1)[-1].split("?")[0])
-                name = normalized(link["text"]) or normalized(cell["text"]) or candidate.replace("_", " ")
-                return name, urljoin(BASE_URL, href)
+            for alias in aliases:
+                needle = "/" + alias + "/"
+                if needle.lower() in href.lower():
+                    candidate = unquote(href.split(needle, 1)[-1].split("?")[0])
+                    name = (
+                        normalized(link["text"]) or normalized(cell["text"])
+                        or next((normalized(hint) for hint in cell["hints"] if normalized(hint)), "")
+                        or candidate.replace("_", " ")
+                    )
+                    return name, urljoin(BASE_URL, href)
+
+    # DOTLAN occasionally renders a plain label without an entity href.
+    # Keep its original text instead of claiming to know an entity ID.
+    position = action_pos + (4 if prefix == "corp" else 2)
+    if position < len(cells):
+        cell = cells[position]
+        label = normalized(cell["text"]) or next(
+            (normalized(hint) for hint in cell["hints"] if normalized(hint)), ""
+        )
+        if label and label not in ("-", "—"):
+            return label, None
     return None, None
 
 
