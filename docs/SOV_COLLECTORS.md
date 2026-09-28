@@ -3,6 +3,15 @@
 These are **two separate ingestion stages**. Neither changes the existing map,
 coalition matching, public routes, or historical affiliation calculations.
 
+Both can now be launched from **Admin → Debug → Sovereignty collectors**
+(`admin.jobs.run` required; read-only status/log access uses `admin.jobs.view`).
+The ESI button runs the same current snapshot job as the independent timer.
+The DOTLAN form exposes scope, one optional system, batch limit (0 = all pending)
+and refreshing completed systems. Both cards show their own live logs, completion
+status and Stop button. Stopping one job does not stop the other or the existing
+affiliation benchmark. This Debug access does **not** make the collectors dry runs:
+they populate the real `sovereignty.*` tables.
+
 ## 1. Current ownership from CCP ESI
 
 File: `scripts/sync_sovereignty_esi.py`
