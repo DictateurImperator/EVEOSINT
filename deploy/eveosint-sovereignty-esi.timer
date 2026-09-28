@@ -1,0 +1,12 @@
+[Unit]
+Description=EVEOSINT - refresh sovereignty when ESI cache can have expired
+
+[Timer]
+OnBootSec=5min
+OnUnitInactiveSec=75min
+RandomizedDelaySec=2min
+AccuracySec=1min
+Unit=eveosint-sovereignty-esi.service
+
+[Install]
+WantedBy=timers.target
