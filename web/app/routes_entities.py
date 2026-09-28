@@ -2460,6 +2460,352 @@ def _merge_date_intervals(intervals):
     return [(row[0], row[1]) for row in merged]
 
 
+def _coalition_history_resolver(conn):
+    """Return effective top-level coalition state for historical entity keys.
+
+    Coalition membership dates are inclusive.  Nested coalitions and
+    INCLUDE/EXCLUDE rules use the same resolution semantics as the killboard.
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT
+                c.coalition_id,
+                c.name,
+                c.short_name,
+                m.id,
+                m.operation,
+                m.member_type,
+                m.member_id,
+                m.valid_from,
+                m.valid_to
+            FROM entities.coalitions c
+            LEFT JOIN entities.coalition_memberships m
+              ON m.coalition_id = c.coalition_id
+            ORDER BY c.coalition_id, m.id
+            """
+        )
+        raw_rows = cur.fetchall()
+
+    coalition_meta = {}
+    rules_by_coalition = {}
+    change_days = set()
+
+    for coalition_id, name, short_name, membership_id, operation, member_type, member_id, valid_from, valid_to in raw_rows:
+        coalition_id = int(coalition_id)
+        coalition_meta[coalition_id] = {
+            "coalition_id": coalition_id,
+            "name": name or f"Coalition {coalition_id}",
+            "short_name": short_name,
+            "url": f"/coalition/{coalition_id}",
+        }
+        if membership_id is None or operation is None or member_type is None or member_id is None:
+            continue
+
+        rule = {
+            "id": int(membership_id),
+            "operation": str(operation).strip().lower(),
+            "member_type": str(member_type).strip().lower(),
+            "member_id": int(member_id),
+            "valid_from": valid_from,
+            "valid_to": valid_to,
+        }
+        rules_by_coalition.setdefault(coalition_id, []).append(rule)
+
+        if valid_from is not None:
+            change_days.add(valid_from)
+        if valid_to is not None and valid_to < date.max:
+            change_days.add(valid_to + timedelta(days=1))
+
+    state_cache = {}
+
+    def day_state(day):
+        cached = state_cache.get(day)
+        if cached is not None:
+            return cached
+
+        def active(rule):
+            return (
+                (rule["valid_from"] is None or rule["valid_from"] <= day)
+                and (rule["valid_to"] is None or rule["valid_to"] >= day)
+            )
+
+        resolved_cache = {}
+
+        def resolve(coalition_id, stack=frozenset()):
+            coalition_id = int(coalition_id)
+            if coalition_id in resolved_cache:
+                return resolved_cache[coalition_id]
+            if coalition_id in stack:
+                return frozenset()
+
+            includes = set()
+            excludes = set()
+            next_stack = stack | {coalition_id}
+            for rule in rules_by_coalition.get(coalition_id, []):
+                if not active(rule):
+                    continue
+                if rule["member_type"] == "coalition":
+                    target = set(resolve(rule["member_id"], next_stack))
+                elif rule["member_type"] in {"alliance", "corporation"}:
+                    target = {(rule["member_type"], rule["member_id"])}
+                else:
+                    continue
+
+                if rule["operation"] == "exclude":
+                    excludes.update(target)
+                else:
+                    includes.update(target)
+
+            result = frozenset(includes - excludes)
+            resolved_cache[coalition_id] = result
+            return result
+
+        resolved_by_coalition = {
+            coalition_id: resolve(coalition_id)
+            for coalition_id in coalition_meta
+        }
+
+        direct_child_state = {}
+        for parent_id, rules in rules_by_coalition.items():
+            for rule in rules:
+                if not active(rule) or rule["member_type"] != "coalition":
+                    continue
+                key = (int(parent_id), int(rule["member_id"]))
+                if rule["operation"] == "exclude":
+                    direct_child_state[key] = False
+                elif key not in direct_child_state:
+                    direct_child_state[key] = True
+
+        active_parent_links = {
+            key for key, included in direct_child_state.items() if included
+        }
+        cached = (resolved_by_coalition, active_parent_links)
+        state_cache[day] = cached
+        return cached
+
+    def resolve_entity(day, entity_keys):
+        normalized_keys = {
+            (str(entity_type), int(entity_id))
+            for entity_type, entity_id in entity_keys
+            if entity_id is not None
+        }
+        if not normalized_keys:
+            return tuple()
+
+        resolved_by_coalition, active_parent_links = day_state(day)
+        matching = {
+            coalition_id
+            for coalition_id, resolved in resolved_by_coalition.items()
+            if normalized_keys.intersection(resolved)
+        }
+        if not matching:
+            return tuple()
+
+        roots = {
+            coalition_id
+            for coalition_id in matching
+            if not any(
+                parent_id in matching and (parent_id, coalition_id) in active_parent_links
+                for parent_id in matching
+                if parent_id != coalition_id
+            )
+        }
+        selected_ids = sorted(
+            roots or matching,
+            key=lambda coalition_id: (
+                (coalition_meta[coalition_id]["name"] or "").casefold(),
+                coalition_id,
+            ),
+        )
+        return tuple(dict(coalition_meta[coalition_id]) for coalition_id in selected_ids)
+
+    return resolve_entity, sorted(change_days)
+
+
+def _coalition_segment_fields(coalitions):
+    coalitions = tuple(coalitions or ())
+    return {
+        "coalitions": [dict(item) for item in coalitions],
+        "coalition_key": tuple(int(item["coalition_id"]) for item in coalitions),
+    }
+
+
+def _split_affiliation_segments_by_coalition(segments, resolver, change_days):
+    """Split affiliation segments whenever effective coalition membership changes."""
+    today = date.today()
+    historical_changes = [day for day in change_days if day <= today]
+    result = []
+
+    for source in segments:
+        start_at = _history_datetime(source.get("start_at"))
+        end_at = _history_datetime(source.get("end_at"))
+        if start_at is None or end_at is None or end_at <= start_at:
+            continue
+
+        boundaries = [start_at, end_at]
+        for change_day in historical_changes:
+            boundary = datetime.combine(change_day, datetime.min.time(), tzinfo=timezone.utc)
+            if start_at < boundary < end_at:
+                boundaries.append(boundary)
+        boundaries = sorted(set(boundaries))
+
+        entity_keys = set()
+        if source.get("alliance_id") is not None:
+            entity_keys.add(("alliance", int(source["alliance_id"])))
+        if source.get("corporation_id") is not None:
+            entity_keys.add(("corporation", int(source["corporation_id"])))
+
+        for index in range(len(boundaries) - 1):
+            piece_start = boundaries[index]
+            piece_end = boundaries[index + 1]
+            if piece_end <= piece_start:
+                continue
+            coalitions = resolver(piece_start.date(), entity_keys)
+            item = dict(source)
+            item["start_at"] = piece_start
+            item["end_at"] = piece_end
+            item.update(_coalition_segment_fields(coalitions))
+            result.append(item)
+
+    return result
+
+
+def _merge_history_segments(segments, identity_fields):
+    merged = []
+    for segment in sorted(segments, key=lambda row: (row["start_at"], row.get("record_id", 0))):
+        identity = tuple(segment.get(field) for field in identity_fields)
+        coalition_key = tuple(segment.get("coalition_key") or ())
+        if merged:
+            previous = merged[-1]
+            previous_identity = tuple(previous.get(field) for field in identity_fields)
+            previous_coalition_key = tuple(previous.get("coalition_key") or ())
+            if (
+                previous_identity == identity
+                and previous_coalition_key == coalition_key
+                and previous["end_at"] >= segment["start_at"]
+            ):
+                if segment["end_at"] > previous["end_at"]:
+                    previous["end_at"] = segment["end_at"]
+                previous["corporation_deleted"] = bool(
+                    previous.get("corporation_deleted") or segment.get("corporation_deleted")
+                )
+                previous["alliance_deleted"] = bool(
+                    previous.get("alliance_deleted") or segment.get("alliance_deleted")
+                )
+                continue
+        merged.append(dict(segment))
+    return merged
+
+
+def _alliance_coalition_history(alliance_id):
+    alliance_id = int(alliance_id)
+    today = date.today()
+
+    with db() as conn:
+        resolver, change_days = _coalition_history_resolver(conn)
+
+        alliance_start = None
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT to_jsonb(a)
+                FROM entities.alliances a
+                WHERE a.alliance_id = %s
+                """,
+                (alliance_id,),
+            )
+            raw = cur.fetchone()
+        payload = raw[0] if raw and isinstance(raw[0], dict) else {}
+        for key in ("date_founded", "date_created", "created_date"):
+            value = payload.get(key)
+            if not value:
+                continue
+            try:
+                if isinstance(value, datetime):
+                    alliance_start = value.date()
+                elif isinstance(value, date):
+                    alliance_start = value
+                else:
+                    alliance_start = date.fromisoformat(str(value)[:10])
+            except (TypeError, ValueError):
+                alliance_start = None
+            if alliance_start is not None:
+                break
+
+        relevant_changes = sorted(day for day in change_days if day <= today)
+        if alliance_start is not None:
+            scan_start = alliance_start
+        elif relevant_changes:
+            scan_start = relevant_changes[0] - timedelta(days=1)
+        else:
+            scan_start = today
+
+        boundaries = [scan_start]
+        boundaries.extend(day for day in relevant_changes if day > scan_start)
+        tomorrow = today + timedelta(days=1)
+        boundaries.append(tomorrow)
+        boundaries = sorted(set(boundaries))
+
+        raw_periods = []
+        for index in range(len(boundaries) - 1):
+            start_day = boundaries[index]
+            end_exclusive = boundaries[index + 1]
+            if start_day > today or end_exclusive <= start_day:
+                continue
+            coalitions = resolver(start_day, {("alliance", alliance_id)})
+            raw_periods.append({
+                "start_day": start_day,
+                "end_exclusive": min(end_exclusive, tomorrow),
+                **_coalition_segment_fields(coalitions),
+            })
+
+        merged = []
+        for period in raw_periods:
+            if merged and tuple(merged[-1]["coalition_key"]) == tuple(period["coalition_key"]) and merged[-1]["end_exclusive"] == period["start_day"]:
+                merged[-1]["end_exclusive"] = period["end_exclusive"]
+            else:
+                merged.append(dict(period))
+
+        if alliance_start is None:
+            first_membership = next(
+                (index for index, period in enumerate(merged) if period.get("coalition_key")),
+                None,
+            )
+            if first_membership is None:
+                merged = []
+            else:
+                merged = merged[first_membership:]
+
+        rows = []
+        for index, period in enumerate(reversed(merged)):
+            current = period["start_day"] <= today < period["end_exclusive"]
+            public_end = None if current else period["end_exclusive"] - timedelta(days=1)
+            public_start = period["start_day"]
+            if (
+                alliance_start is None
+                and index == len(merged) - 1
+                and period.get("coalition_key")
+                and relevant_changes
+                and public_start == relevant_changes[0] - timedelta(days=1)
+            ):
+                public_start = None
+
+            rows.append({
+                "coalitions": period.get("coalitions") or [],
+                "coalition_key": list(period.get("coalition_key") or ()),
+                "start_date": public_start.isoformat() if public_start else None,
+                "end_date": public_end.isoformat() if public_end else None,
+                "current": current,
+            })
+
+    return {
+        "alliance_id": alliance_id,
+        "created_date": alliance_start.isoformat() if alliance_start else None,
+        "rows": rows,
+    }
+
+
 def _list_parent_coalition_memberships(coalition_id):
     coalition_id = int(coalition_id)
     with db() as conn:
