@@ -4491,6 +4491,8 @@ def _get_character_affiliation_history(character_id):
                     )
                 ]
 
+        coalition_resolver, coalition_change_days = _coalition_history_resolver(conn)
+
         # Split each character corporation spell by the corporation's alliance spells.
         segments = []
         synthetic_record_id = -1
@@ -4568,7 +4570,15 @@ def _get_character_affiliation_history(character_id):
                 })
                 synthetic_record_id -= 1
 
-        # Merge only identical touching (corporation, alliance) couples.
+        # Coalition is part of the historical key too: a coalition change
+        # creates a new row even when corporation and alliance stay unchanged.
+        segments = _split_affiliation_segments_by_coalition(
+            segments,
+            coalition_resolver,
+            coalition_change_days,
+        )
+
+        # Merge only identical touching (corporation, alliance, coalition) keys.
         merged_segments = []
         for segment in sorted(segments, key=lambda row: (row["start_at"], row["record_id"])):
             if merged_segments:
@@ -4576,6 +4586,8 @@ def _get_character_affiliation_history(character_id):
                 same_pair = (
                     previous["corporation_id"] == segment["corporation_id"]
                     and previous["alliance_id"] == segment["alliance_id"]
+                    and tuple(previous.get("coalition_key") or ())
+                        == tuple(segment.get("coalition_key") or ())
                 )
                 if same_pair and previous["end_at"] >= segment["start_at"]:
                     previous["end_at"] = max(previous["end_at"], segment["end_at"])
@@ -4619,6 +4631,8 @@ def _get_character_affiliation_history(character_id):
                 "alliance_name": segment.get("alliance_name") or "Unknown alliance",
                 "alliance_ticker": segment.get("alliance_ticker"),
                 "alliance_deleted": bool(segment.get("alliance_deleted")),
+                "coalitions": segment.get("coalitions") or [],
+                "coalition_key": list(segment.get("coalition_key") or ()),
                 "start_date": start_day.isoformat(),
                 "end_date": end_day.isoformat() if end_day else None,
                 "current": current,
@@ -4661,6 +4675,7 @@ def _get_character_affiliation_history(character_id):
         "closed": character_closed,
         "current_corporation": current_corporation,
         "current_alliance": current_alliance,
+        "current_coalitions": current_period.get("coalitions") if current_period else [],
         "no_alliance_since": no_alliance_since,
         "rows": rows,
         "kill_stats_progressive": True,
