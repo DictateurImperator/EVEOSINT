@@ -23,7 +23,7 @@
 <div class="d-flex flex-wrap justify-content-between align-items-start gap-3 mb-4">
   <div>
     <h1 class="h3 fw-bold mb-1">Debug</h1>
-    <div class="muted-line">Isolated benchmark playground for expensive pipeline fragments.</div>
+    <div class="muted-line">Admin workspace for standalone collectors and isolated pipeline benchmarks.</div>
   </div>
   {% if can_run and debug.running %}
   <form method="post" action="/admin/debug/stop">
@@ -37,6 +37,8 @@
   {% if error == 'already_running' %}A debug run is already running.
   {% elif error == 'cleanup_failed' %}Debug cleanup failed.
   {% elif error == 'stop_failed' %}Could not stop the debug run.
+  {% elif error == 'sov_start_failed' %}Sovereignty collector could not be started. Check the deployed scripts and run logs.
+  {% elif error == 'sov_stop_failed' %}Could not stop the sovereignty collector.
   {% else %}Debug run could not be started.{% endif %}
 </div>
 {% endif %}
@@ -44,9 +46,93 @@
 <div class="alert alert-success py-2">
   {% if success == 'cleaned' %}Debug tables cleaned.
   {% elif success == 'stop_requested' %}Stop requested.
+  {% elif success == 'sov_esi_started' %}CCP ESI sovereignty collector launched.
+  {% elif success == 'sov_dotlan_started' %}DOTLAN sovereignty history collector launched.
+  {% elif success == 'sov_stop_requested' %}Sovereignty collector stop requested.
   {% else %}Debug run started.{% endif %}
 </div>
 {% endif %}
+
+
+<section class="content-card p-3 p-md-4 mb-4" id="sovereignty-debug-section">
+  <div class="d-flex flex-wrap justify-content-between align-items-start gap-2 mb-3">
+    <div>
+      <h2 class="h5 fw-bold mb-1">Sovereignty collectors</h2>
+      <div class="muted-line small">Run either collector on demand. Both write to real <code>sovereignty.*</code> tables; they are not simulated benchmarks.</div>
+    </div>
+    <button class="btn btn-sm btn-outline-light" id="sovRefreshLogs" type="button">Refresh logs</button>
+  </div>
+  <div class="row g-3">
+    <div class="col-lg-6">
+      <div class="border border-secondary-subtle rounded-3 p-3 h-100">
+        <div class="d-flex justify-content-between gap-2 align-items-start mb-2">
+          <div>
+            <h3 class="h6 fw-bold mb-1">Current map · CCP ESI</h3>
+            <div class="muted-line small">Full public snapshot. Respects ESI Expires and ETag; leaves existing data intact on failure.</div>
+          </div>
+          <span class="badge text-bg-secondary" id="sovEsiStatus">{{ sovereignty_debug.esi.status }}</span>
+        </div>
+        {% if can_run %}
+        <div class="d-flex flex-wrap gap-2 my-3">
+          <form method="post" action="/admin/debug/sovereignty/run/esi">
+            <button class="btn btn-primary" type="submit" id="sovEsiRun" {% if sovereignty_debug.esi.running %}disabled{% endif %}>Run ESI snapshot</button>
+          </form>
+          <form method="post" action="/admin/debug/sovereignty/stop/esi">
+            <button class="btn btn-outline-danger" type="submit" id="sovEsiStop" {% if not sovereignty_debug.esi.running %}disabled{% endif %}>Stop</button>
+          </form>
+        </div>
+        {% endif %}
+        <div class="muted-line small mb-2" id="sovEsiMeta">No ESI run yet.</div>
+        <pre class="log-viewer" style="min-height:160px;max-height:320px;" id="sovEsiLog">Loading…</pre>
+      </div>
+    </div>
+    <div class="col-lg-6">
+      <div class="border border-secondary-subtle rounded-3 p-3 h-100">
+        <div class="d-flex justify-content-between gap-2 align-items-start mb-2">
+          <div>
+            <h3 class="h6 fw-bold mb-1">Historical events · DOTLAN</h3>
+            <div class="muted-line small">Resumable per-system import with EVEOSINT's global DOTLAN throttle.</div>
+          </div>
+          <span class="badge text-bg-secondary" id="sovDotlanStatus">{{ sovereignty_debug.dotlan.status }}</span>
+        </div>
+        {% if can_run %}
+        <form method="post" action="/admin/debug/sovereignty/run/dotlan" class="row g-2 mt-2 mb-3">
+          <div class="col-md-6">
+            <label class="form-label small" for="sovDotlanScope">Scope</label>
+            <select class="form-select form-select-sm" name="scope" id="sovDotlanScope">
+              <option value="current">Current SOV systems</option>
+              <option value="all-nullsec">All nullsec (including former SOV)</option>
+            </select>
+          </div>
+          <div class="col-md-6">
+            <label class="form-label small" for="sovDotlanLimit">Systems per run</label>
+            <input class="form-control form-control-sm" type="number" name="limit" id="sovDotlanLimit" min="0" max="500" value="25" required>
+          </div>
+          <div class="col-12">
+            <label class="form-label small" for="sovDotlanSystem">Single system (optional: name or ID)</label>
+            <input class="form-control form-control-sm" type="text" name="system" id="sovDotlanSystem" maxlength="100" placeholder="e.g. 1DQ1-A">
+          </div>
+          <div class="col-12 d-flex flex-wrap gap-3 align-items-center">
+            <label class="form-check mb-0">
+              <input class="form-check-input" type="checkbox" name="refresh" id="sovDotlanRefresh">
+              <span class="form-check-label small">Refresh completed systems</span>
+            </label>
+            <span class="muted-line small">0 = all pending (long crawl)</span>
+          </div>
+          <div class="col-12 d-flex flex-wrap gap-2 mt-2">
+            <button class="btn btn-primary" type="submit" id="sovDotlanRun" {% if sovereignty_debug.dotlan.running %}disabled{% endif %}>Run DOTLAN import</button>
+          </div>
+        </form>
+        <form method="post" action="/admin/debug/sovereignty/stop/dotlan" class="mb-3">
+          <button class="btn btn-outline-danger" type="submit" id="sovDotlanStop" {% if not sovereignty_debug.dotlan.running %}disabled{% endif %}>Stop DOTLAN import</button>
+        </form>
+        {% endif %}
+        <div class="muted-line small mb-2" id="sovDotlanMeta">No DOTLAN run yet.</div>
+        <pre class="log-viewer" style="min-height:160px;max-height:320px;" id="sovDotlanLog">Loading…</pre>
+      </div>
+    </div>
+  </div>
+</section>
 
 <section class="content-card p-3 p-md-4 mb-4">
   <div class="d-flex justify-content-between gap-3 align-items-start mb-3">
@@ -200,6 +286,48 @@ function render(s){
 }
 async function refreshStatus(){try{const r=await fetch('/admin/debug/api/status',{cache:'no-store'}); if(r.ok)render(await r.json());}catch(e){}}
 async function refreshLog(){try{const r=await fetch('/admin/debug/api/log?lines=700',{cache:'no-store'}); if(r.ok){const t=await r.text(); const el=document.getElementById('logViewer'); const atBottom=(el.scrollTop+el.clientHeight+50>=el.scrollHeight); el.textContent=t||'No log yet.'; if(atBottom)el.scrollTop=el.scrollHeight;}}catch(e){}}
+
+let sovState = {{ sovereignty_debug | tojson }};
+function renderSov(s){
+  sovState=s||{};
+  ['esi','dotlan'].forEach(function(key){
+    const name=key==='esi'?'Esi':'Dotlan';
+    const value=sovState[key]||{};
+    const status=document.getElementById('sov'+name+'Status');
+    if(status) status.outerHTML='<span class="badge text-bg-'+({done:'success',running:'warning',failed:'danger',stopped:'secondary'}[value.status]||'secondary')+'" id="sov'+name+'Status">'+esc(value.status||'idle')+'</span>';
+    const meta=document.getElementById('sov'+name+'Meta');
+    if(meta) {
+      meta.textContent=value.run_id
+        ? 'Run '+value.run_id+' · started '+(value.started_at||'-')+(value.finished_at?' · finished '+value.finished_at:'')+(value.return_code!=null?' · exit '+value.return_code:'')+(value.error?' · '+value.error:'')
+        : 'No '+key.toUpperCase()+' run yet.';
+    }
+    const run=document.getElementById('sov'+name+'Run');
+    const stop=document.getElementById('sov'+name+'Stop');
+    if(run) run.disabled=!!value.running;
+    if(stop) stop.disabled=!value.running;
+  });
+}
+async function refreshSovStatus(){
+  try{
+    const r=await fetch('/admin/debug/api/sovereignty/status',{cache:'no-store'});
+    if(r.ok)renderSov(await r.json());
+  }catch(e){}
+}
+async function refreshSovLogs(){
+  await Promise.all(['esi','dotlan'].map(async function(key){
+    try{
+      const r=await fetch('/admin/debug/api/sovereignty/log?job='+key+'&lines=350',{cache:'no-store'});
+      if(!r.ok)return;
+      const target=document.getElementById(key==='esi'?'sovEsiLog':'sovDotlanLog');
+      const atBottom=target.scrollTop+target.clientHeight+50>=target.scrollHeight;
+      target.textContent=(await r.text())||'No log yet.';
+      if(atBottom)target.scrollTop=target.scrollHeight;
+    }catch(e){}
+  }));
+}
+document.getElementById('sovRefreshLogs').addEventListener('click',refreshSovLogs);
+renderSov(sovState); refreshSovLogs();
+setInterval(refreshSovStatus,2500); setInterval(refreshSovLogs,4000);
 document.getElementById('refreshLog').addEventListener('click',refreshLog);
 render(state); refreshLog();
 setInterval(refreshStatus,2000); setInterval(refreshLog,3000);
