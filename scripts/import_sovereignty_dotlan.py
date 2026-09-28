@@ -348,9 +348,11 @@ def fetch_page(session, url):
             raise RuntimeError("DOTLAN access denied HTTP %s: stop crawl" % response.status_code)
         if response.status_code == 429:
             try:
-                delay = max(60, min(1800, int(response.headers.get("Retry-After", "60"))))
+                delay = max(60, int(response.headers.get("Retry-After", "60")))
             except ValueError:
                 delay = 60
+            if delay > 3600:
+                raise RuntimeError("DOTLAN rate limited for %ss; stop crawl without early retry" % delay)
             if attempt < 3:
                 LOG.warning("DOTLAN rate limited; waiting %ss", delay)
                 time.sleep(delay)
