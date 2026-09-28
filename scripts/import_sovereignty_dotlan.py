@@ -64,6 +64,8 @@ class TableParser(HTMLParser):
             hint = attrs.get("alt") or attrs.get("title")
             if hint:
                 self.cell["hints"].append(hint)
+                if normalized(hint) in ("->", "→", "➜"):
+                    self.cell["text_parts"].append(" " + hint + " ")
 
     def handle_data(self, data):
         if self.cell is not None:
