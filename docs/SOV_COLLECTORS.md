@@ -94,8 +94,8 @@ EVEOSINT also stores an `ownership_model` tag for later reconstruction:
 - before **2015-07-14**: `legacy_sov`;
 - **2015-07-14 → 2024-06-10**: `ihub_proxy` — by project convention, DOTLAN's
   territorial owner is interpreted as the effective IHub owner for analysis;
-- **2024-06-11 → 2024-10-28**: `ihub_sovhub_transition_proxy` — Equinox
-  transition; the exact per-system conversion instant is not invented;
+- **2024-06-11 → 2024-06-26**: `sovhub_legacy_ihub_proxy` — the old IHub has become a SovHub in legacy IHub mode;
+- **2024-06-27 → 2024-10-28**: `ihub_sovhub_transition_proxy` — voluntary per-system conversion to SovHub mode is possible; the exact conversion instant is not invented when DOTLAN cannot prove it;
 - from **2024-10-29**: `sovhub`.
 
 This is an explicit EVEOSINT analytical convention, not a claim that DOTLAN
