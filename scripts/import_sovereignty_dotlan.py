@@ -294,7 +294,13 @@ def ensure_tables(conn):
                 WHEN event_at::date >= DATE '2015-07-14' THEN 'ihub_proxy'
                 ELSE 'legacy_sov'
             END
-            WHERE ownership_model IS NULL
+            WHERE ownership_model IS DISTINCT FROM CASE
+                WHEN event_at::date >= DATE '2024-10-29' THEN 'sovhub'
+                WHEN event_at::date >= DATE '2024-06-27' THEN 'ihub_sovhub_transition_proxy'
+                WHEN event_at::date >= DATE '2024-06-11' THEN 'sovhub_legacy_ihub_proxy'
+                WHEN event_at::date >= DATE '2015-07-14' THEN 'ihub_proxy'
+                ELSE 'legacy_sov'
+            END
         """)
         cur.execute("""
             ALTER TABLE sovereignty.dotlan_events
