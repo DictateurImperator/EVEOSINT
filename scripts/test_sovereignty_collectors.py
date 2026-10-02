@@ -59,7 +59,8 @@ class OwnershipConventionTests(unittest.TestCase):
 
         self.assertEqual(ownership_model(datetime(2015, 7, 13, 23, 59)), "legacy_sov")
         self.assertEqual(ownership_model(datetime(2015, 7, 14, 0, 0)), "ihub_proxy")
-        self.assertEqual(ownership_model(datetime(2024, 6, 11, 0, 0)), "ihub_sovhub_transition_proxy")
+        self.assertEqual(ownership_model(datetime(2024, 6, 11, 0, 0)), "sovhub_legacy_ihub_proxy")
+        self.assertEqual(ownership_model(datetime(2024, 6, 27, 0, 0)), "ihub_sovhub_transition_proxy")
         self.assertEqual(ownership_model(datetime(2024, 10, 29, 0, 0)), "sovhub")
 
 
