@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Refresh the complete current sovereignty map from CCP ESI.
+"""Refresh current conquerable-nullsec sovereignty from CCP ESI.
 
-One cached public endpoint, one atomic database replacement. No browser/server
+One cached public endpoint, local SDE scope filter, one atomic database replacement. No browser/server
 requests are triggered by page views. Run manually or from update_pipeline.
 """
 import argparse
