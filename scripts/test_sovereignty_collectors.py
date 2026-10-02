@@ -3,7 +3,8 @@
 import unittest
 
 from scripts.sync_sovereignty_esi import normalize
-from scripts.import_sovereignty_dotlan import classification, parse_events
+from scripts.import_sovereignty_dotlan import classification, ownership_model, parse_events
+from scripts.sovereignty_scope import claimable_sov_systems_from_rows
 
 
 class EsiSnapshotTests(unittest.TestCase):
@@ -22,6 +23,44 @@ class EsiSnapshotTests(unittest.TestCase):
         ]):
             with self.subTest(payload=payload), self.assertRaises(ValueError):
                 normalize(payload)
+
+
+class SovereigntyScopeTests(unittest.TestCase):
+    def test_only_conquerable_nullsec_is_kept(self):
+        regions = [
+            (10000001, {"_key": 10000001, "name": {"en": "Claimable"}}),
+            (10000002, {"_key": 10000002, "name": {"en": "NPC"}, "factionID": 500001}),
+            (10000070, {"_key": 10000070, "name": {"en": "Pochven"}}),
+            (11000001, {"_key": 11000001, "name": {"en": "J-Space"}, "wormholeClassID": 6}),
+        ]
+        constellations = [
+            (20000001, {"_key": 20000001, "regionID": 10000001}),
+            (20000002, {"_key": 20000002, "regionID": 10000001, "factionID": 500002}),
+            (20000003, {"_key": 20000003, "regionID": 10000002}),
+            (20000004, {"_key": 20000004, "regionID": 10000070}),
+            (21000001, {"_key": 21000001, "regionID": 11000001}),
+        ]
+        systems = [
+            (30000001, {"_key": 30000001, "name": {"en": "Claimable A"}, "regionID": 10000001, "constellationID": 20000001, "securityStatus": -0.5}),
+            (30000002, {"_key": 30000002, "name": {"en": "High"}, "regionID": 10000001, "constellationID": 20000001, "securityStatus": 0.5}),
+            (30000003, {"_key": 30000003, "name": {"en": "NPC Pocket"}, "regionID": 10000001, "constellationID": 20000002, "securityStatus": -0.2}),
+            (30000004, {"_key": 30000004, "name": {"en": "NPC Region"}, "regionID": 10000002, "constellationID": 20000003, "securityStatus": -0.7}),
+            (30000005, {"_key": 30000005, "name": {"en": "System Faction"}, "regionID": 10000001, "constellationID": 20000001, "securityStatus": -0.4, "factionID": 500003}),
+            (30000006, {"_key": 30000006, "name": {"en": "Pochven"}, "regionID": 10000070, "constellationID": 20000004, "securityStatus": -1.0}),
+            (31000001, {"_key": 31000001, "name": {"en": "Wormhole"}, "regionID": 11000001, "constellationID": 21000001, "securityStatus": -1.0}),
+        ]
+        result = claimable_sov_systems_from_rows(systems, constellations, regions)
+        self.assertEqual(set(result), {30000001})
+
+
+class OwnershipConventionTests(unittest.TestCase):
+    def test_eveosint_ownership_eras(self):
+        from datetime import datetime
+
+        self.assertEqual(ownership_model(datetime(2015, 7, 13, 23, 59)), "legacy_sov")
+        self.assertEqual(ownership_model(datetime(2015, 7, 14, 0, 0)), "ihub_proxy")
+        self.assertEqual(ownership_model(datetime(2024, 6, 11, 0, 0)), "ihub_sovhub_transition_proxy")
+        self.assertEqual(ownership_model(datetime(2024, 10, 29, 0, 0)), "sovhub")
 
 
 class DotlanSourceTests(unittest.TestCase):
@@ -49,6 +88,7 @@ class DotlanSourceTests(unittest.TestCase):
         self.assertEqual(parsed[0]["corporation_name"], "Test Corp")
         self.assertEqual(parsed[1]["corporation_name"], "Holding Corp")
         self.assertEqual(parsed[0]["event_hash"], parse_events(self.SAMPLE, 30000001, url)[0]["event_hash"])
+        self.assertEqual(parsed[0]["ownership_model"], "ihub_proxy")
 
     def test_no_inferred_owner_when_no_link(self):
         parsed = parse_events(self.SAMPLE, 30000001, "https://evemaps.dotlan.net/system/TEST")
