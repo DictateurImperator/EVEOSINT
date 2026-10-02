@@ -159,4 +159,7 @@ References:
 
 - CCP ESI: https://developers.eveonline.com/docs/services/esi/best-practices/
 - CCP limits: https://developers.eveonline.com/docs/services/esi/rate-limiting/
+- CCP static-data ID ranges: https://developers.eveonline.com/docs/guides/id-ranges/
+- CCP Equinox sovereignty transition: https://support.eveonline.com/hc/en-us/articles/14189361268636-Equinox-Sovereignty-Updates
+- CCP 2024-10-29 forced legacy SovHub conversion: https://www.eveonline.com/news/view/patch-notes-version-22-01
 - Example DOTLAN history: https://evemaps.dotlan.net/system/1DQ1-A
