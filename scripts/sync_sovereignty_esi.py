@@ -19,7 +19,10 @@ import psycopg2
 from psycopg2.extras import execute_values
 import requests
 
-from sovereignty_scope import load_claimable_sov_systems
+try:
+    from sovereignty_scope import load_claimable_sov_systems
+except ModuleNotFoundError:  # package import used by offline unittest
+    from scripts.sovereignty_scope import load_claimable_sov_systems
 
 ROOT = Path(__file__).resolve().parents[1]
 CONFIG_PATH = ROOT / "config" / "db.json"
