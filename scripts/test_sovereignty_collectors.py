@@ -28,7 +28,7 @@ class EsiSnapshotTests(unittest.TestCase):
 class SovereigntyScopeTests(unittest.TestCase):
     def test_only_conquerable_nullsec_is_kept(self):
         regions = [
-            (10000001, {"_key": 10000001, "name": {"en": "Claimable"}}),
+            (10000001, {"_key": 10000001, "name": {"en": "Claimable"}, "wormholeClassID": 9}),
             (10000002, {"_key": 10000002, "name": {"en": "NPC"}, "factionID": 500001}),
             (10000070, {"_key": 10000070, "name": {"en": "Pochven"}}),
             (11000001, {"_key": 11000001, "name": {"en": "J-Space"}, "wormholeClassID": 6}),
