@@ -24,6 +24,7 @@ import requests
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "web"))
 from app.dotlan_throttle import wait_for_dotlan_slot  # noqa: E402
+from sovereignty_scope import load_claimable_sov_systems
 
 CONFIG_PATH = ROOT / "config" / "db.json"
 BASE_URL = "https://evemaps.dotlan.net"
@@ -31,6 +32,9 @@ USER_AGENT = "EVEOSINT-SovereigntyHistory/1.0 (+https://github.com/DictateurImpe
 LOG = logging.getLogger("sov_dotlan")
 DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 TIME_RE = re.compile(r"^\d{1,2}:\d{2}(?::\d{2})?$")
+IHUB_EFFECTIVE_FROM = date(2015, 7, 14)
+SOVHUB_TRANSITION_FROM = date(2024, 6, 11)
+SOVHUB_ONLY_FROM = date(2024, 10, 29)
 
 
 class TableParser(HTMLParser):
@@ -103,6 +107,18 @@ class TableParser(HTMLParser):
 
 def normalized(value):
     return " ".join(str(value or "").split())
+
+
+def ownership_model(event_at):
+    """Return the EVEOSINT territorial-control convention for a DOTLAN event."""
+    event_day = event_at.date() if isinstance(event_at, datetime) else event_at
+    if event_day >= SOVHUB_ONLY_FROM:
+        return "sovhub"
+    if event_day >= SOVHUB_TRANSITION_FROM:
+        return "ihub_sovhub_transition_proxy"
+    if event_day >= IHUB_EFFECTIVE_FROM:
+        return "ihub_proxy"
+    return "legacy_sov"
 
 
 def classification(action):
@@ -211,6 +227,7 @@ def parse_events(html, system_id, url):
             "event_at": event_at,
             "action": classification(action),
             "action_raw": action,
+            "ownership_model": ownership_model(event_at),
             "alliance_name": alliance_name,
             "alliance_url": alliance_url,
             "corporation_name": corporation_name,
@@ -246,6 +263,7 @@ def ensure_tables(conn):
                 event_at TIMESTAMP WITHOUT TIME ZONE NOT NULL,
                 action TEXT NOT NULL,
                 action_raw TEXT NOT NULL,
+                ownership_model TEXT,
                 alliance_name TEXT,
                 alliance_url TEXT,
                 corporation_name TEXT,
@@ -256,6 +274,24 @@ def ensure_tables(conn):
                 fetched_at TIMESTAMPTZ NOT NULL,
                 PRIMARY KEY (system_id, event_hash)
             )
+        """)
+        cur.execute("""
+            ALTER TABLE sovereignty.dotlan_events
+            ADD COLUMN IF NOT EXISTS ownership_model TEXT
+        """)
+        cur.execute("""
+            UPDATE sovereignty.dotlan_events
+            SET ownership_model = CASE
+                WHEN event_at::date >= DATE '2024-10-29' THEN 'sovhub'
+                WHEN event_at::date >= DATE '2024-06-11' THEN 'ihub_sovhub_transition_proxy'
+                WHEN event_at::date >= DATE '2015-07-14' THEN 'ihub_proxy'
+                ELSE 'legacy_sov'
+            END
+            WHERE ownership_model IS NULL
+        """)
+        cur.execute("""
+            ALTER TABLE sovereignty.dotlan_events
+            ALTER COLUMN ownership_model SET NOT NULL
         """)
         cur.execute("""
             CREATE INDEX IF NOT EXISTS sov_dotlan_events_date_idx
@@ -277,6 +313,12 @@ def ensure_tables(conn):
 
 
 def system_names(conn, scope, selected):
+    claimable = load_claimable_sov_systems(conn)
+    if len(claimable) < 1000:
+        raise RuntimeError(
+            "SDE conquerable-nullsec scope looks incomplete (%d systems)" % len(claimable)
+        )
+
     current_ids = set()
     if scope == "current":
         with conn.cursor() as cur:
@@ -285,48 +327,26 @@ def system_names(conn, scope, selected):
         if not current_ids and not selected:
             raise RuntimeError("Current SOV table empty: run sync_sovereignty_esi.py first")
 
-    with conn.cursor() as cur:
-        cur.execute("SELECT sde_key, data FROM public.sde_mapsolarsystems")
-        sde_rows = cur.fetchall()
-
+    wanted = {str(value).casefold() for value in selected}
     systems = []
-    wanted = {value.casefold() for value in selected}
-    for key, data in sde_rows:
-        data = data or {}
-        try:
-            system_id = int(data.get("_key") or key)
-        except (TypeError, ValueError):
-            continue
-        name_value = data.get("name")
-        name = (
-            (name_value.get("en") or next(iter(name_value.values()), None))
-            if isinstance(name_value, dict) else name_value
-        ) or data.get("solarSystemName")
-        if not name:
-            continue
-        name = str(name)
+    for system_id, metadata in claimable.items():
+        name = str(metadata["name"])
         if selected:
-            if str(system_id) not in wanted and name.casefold() not in wanted:
+            if str(system_id).casefold() not in wanted and name.casefold() not in wanted:
                 continue
-        elif scope == "current":
-            if system_id not in current_ids:
-                continue
-        else:
-            try:
-                security = float(data.get("securityStatus"))
-                region_id = int(data.get("regionID") or 0)
-            except (ValueError, TypeError):
-                continue
-            # All null-security New Eden systems, excluding wormholes and Pochven.
-            if security > 0.0 or region_id >= 11000000 or region_id == 10000070:
-                continue
+        elif scope == "current" and system_id not in current_ids:
+            continue
         systems.append((system_id, name))
+
     if selected and len(systems) != len(selected):
-        found = {str(i) for i, _ in systems} | {name.casefold() for _, name in systems}
-        missing = [value for value in selected if value.casefold() not in found]
+        found = {str(i).casefold() for i, _ in systems} | {name.casefold() for _, name in systems}
+        missing = [value for value in selected if str(value).casefold() not in found]
         if missing:
-            raise ValueError("Unknown SDE system(s): " + ", ".join(missing))
+            raise ValueError(
+                "Unknown or non-conquerable-nullsec SDE system(s): " + ", ".join(missing)
+            )
     return sorted(systems, key=lambda item: item[0])
+
 
 
 def fetch_page(session, url):
@@ -373,7 +393,7 @@ def save_system(conn, system_id, name, url, html, events):
         if events:
             execute_values(cur, """
                 INSERT INTO sovereignty.dotlan_events (
-                    system_id, event_hash, event_at, action, action_raw,
+                    system_id, event_hash, event_at, action, action_raw, ownership_model,
                     alliance_name, alliance_url, corporation_name, corporation_url,
                     raw_cells, row_position, source_url, fetched_at
                 ) VALUES %s
@@ -381,7 +401,7 @@ def save_system(conn, system_id, name, url, html, events):
             """, [
                 (
                     system_id, item["event_hash"], item["event_at"],
-                    item["action"], item["action_raw"],
+                    item["action"], item["action_raw"], item["ownership_model"],
                     item["alliance_name"], item["alliance_url"],
                     item["corporation_name"], item["corporation_url"],
                     json.dumps(item["raw_cells"], ensure_ascii=False),
@@ -422,7 +442,7 @@ def save_error(conn, system_id, name, url, error):
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--scope", choices=("current", "all-nullsec"), default="current",
-                    help="Default current SOV systems; all-nullsec includes unclaimed historical systems.")
+                    help="Default currently claimed conquerable nullsec; all-nullsec = all conquerable nullsec, including currently unclaimed systems.")
     ap.add_argument("--system", action="append", default=[], help="One SDE system name or ID; repeat as needed.")
     ap.add_argument("--limit", type=int, default=25, help="Max systems per invocation; 0 = all pending.")
     ap.add_argument("--refresh", action="store_true", help="Also re-fetch systems previously imported successfully.")
@@ -453,7 +473,7 @@ def main():
             if args.limit:
                 pending = pending[:args.limit]
 
-            LOG.info("SOV_DOTLAN systems_selected=%d pending=%d already_ok=%d",
+            LOG.info("SOV_DOTLAN scope=claimable_nullsec systems_selected=%d pending=%d already_ok=%d",
                      len(systems), len(pending), len(done & {i for i, _ in systems}))
             ok = failed = total_events = 0
             with requests.Session() as session:
