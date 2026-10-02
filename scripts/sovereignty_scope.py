@@ -2,7 +2,7 @@
 
 EVEOSINT sovereignty scope = conquerable nullsec only:
 - securityStatus <= 0.0
-- known-space region (not wormhole/J-space, not Pochven)
+- New Eden known-space system/region ID ranges (not wormhole/J-space, not Pochven)
 - no NPC faction ownership at system, constellation or region level
 
 The faction checks intentionally exclude NPC nullsec regions and NPC pockets in
@@ -10,7 +10,10 @@ otherwise conquerable regions.
 """
 
 POCHVEN_REGION_ID = 10000070
-WORMHOLE_REGION_ID_MIN = 11000000
+NEW_EDEN_REGION_MIN = 10000000
+NEW_EDEN_REGION_MAX = 10999999
+NEW_EDEN_SYSTEM_MIN = 30000000
+NEW_EDEN_SYSTEM_MAX = 30999999
 
 
 def _int(value):
@@ -70,15 +73,15 @@ def claimable_sov_systems_from_rows(system_rows, constellation_rows, region_rows
             continue
         if security > 0.0:
             continue
-        if region_id == POCHVEN_REGION_ID or region_id >= WORMHOLE_REGION_ID_MIN:
+        if not (NEW_EDEN_SYSTEM_MIN <= system_id <= NEW_EDEN_SYSTEM_MAX):
+            continue
+        if not (NEW_EDEN_REGION_MIN <= region_id <= NEW_EDEN_REGION_MAX):
+            continue
+        if region_id == POCHVEN_REGION_ID:
             continue
 
         region = regions.get(region_id) or {}
         constellation = constellations.get(constellation_id) or {}
-
-        # J-space/special regions may also be explicitly marked by the SDE.
-        if _int(region.get("wormholeClassID")) is not None:
-            continue
 
         # NPC nullsec and NPC pockets can be marked at any of these levels.
         if any(
