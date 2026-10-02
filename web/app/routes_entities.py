@@ -44,7 +44,7 @@ from .entities import (
     search_killmail_locations,
 )
 from .db import db
-from .coalitions import get_coalition, list_coalitions, list_coalition_overviews, list_memberships
+from .coalitions import coalition_logo_url, get_coalition, list_coalitions, list_coalition_overviews, list_memberships
 from .layout import app_context
 from .map_data import MapDataError, get_constellation_map, get_location_preview, get_region_map, get_system_map, get_universe_map
 from .main_objects import templates
@@ -2517,6 +2517,7 @@ def _coalition_history_resolver(conn):
             "name": name or f"Coalition {coalition_id}",
             "short_name": short_name,
             "url": f"/coalition/{coalition_id}",
+            "logo_url": coalition_logo_url(coalition_id),
         }
         if membership_id is None or operation is None or member_type is None or member_id is None:
             continue
