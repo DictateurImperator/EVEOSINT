@@ -138,6 +138,29 @@ def get_state(conn, claimable_ids):
     return row[0], row[1], row[2], stored_count, len(out_of_scope)
 
 
+def prune_current_map_scope(conn, claimable_ids):
+    claimable_ids = sorted(int(value) for value in claimable_ids)
+    if len(claimable_ids) < 1000:
+        raise RuntimeError(
+            "Refusing current SOV scope prune with suspiciously small claimable set (%d)"
+            % len(claimable_ids)
+        )
+    with conn.cursor() as cur:
+        cur.execute(
+            "DELETE FROM sovereignty.current_map WHERE NOT (system_id = ANY(%s))",
+            (claimable_ids,),
+        )
+        removed = cur.rowcount
+        cur.execute("SELECT COUNT(*) FROM sovereignty.current_map")
+        remaining = int(cur.fetchone()[0])
+        cur.execute(
+            "UPDATE sovereignty.esi_map_state SET row_count = %s WHERE id = 1",
+            (remaining,),
+        )
+    conn.commit()
+    return removed, remaining
+
+
 def update_not_modified(conn, old_count, etag, response):
     expires = http_date(response.headers.get("Expires"))
     modified = http_date(response.headers.get("Last-Modified"))
@@ -265,10 +288,17 @@ def main():
                 )
 
             etag, expires_at, expected, existing, out_of_scope = get_state(conn, claimable_ids)
-            local_scope_valid = out_of_scope == 0
+            if out_of_scope:
+                removed, existing = prune_current_map_scope(conn, claimable_ids)
+                expected = existing
+                LOG.info(
+                    "SOV_ESI scope_migration removed=%d remaining=%d scope=claimable_nullsec",
+                    removed,
+                    existing,
+                )
+            local_scope_valid = True
             if (
-                local_scope_valid
-                and existing > 0
+                existing > 0
                 and expected == existing
                 and expires_at
                 and utcnow() < expires_at
@@ -279,12 +309,6 @@ def main():
                     expires_at.isoformat(),
                 )
                 return 0
-            if out_of_scope:
-                LOG.info(
-                    "SOV_ESI scope migration: %d stored systems are outside conquerable nullsec; forcing full refresh",
-                    out_of_scope,
-                )
-
             with requests.Session() as session:
                 response = esi_request(
                     session,
