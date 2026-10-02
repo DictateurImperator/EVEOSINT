@@ -36,7 +36,8 @@ LOG = logging.getLogger("sov_dotlan")
 DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 TIME_RE = re.compile(r"^\d{1,2}:\d{2}(?::\d{2})?$")
 IHUB_EFFECTIVE_FROM = date(2015, 7, 14)
-SOVHUB_TRANSITION_FROM = date(2024, 6, 11)
+SOVHUB_LEGACY_FROM = date(2024, 6, 11)
+SOVHUB_CONVERSION_FROM = date(2024, 6, 27)
 SOVHUB_ONLY_FROM = date(2024, 10, 29)
 
 
@@ -117,8 +118,10 @@ def ownership_model(event_at):
     event_day = event_at.date() if isinstance(event_at, datetime) else event_at
     if event_day >= SOVHUB_ONLY_FROM:
         return "sovhub"
-    if event_day >= SOVHUB_TRANSITION_FROM:
+    if event_day >= SOVHUB_CONVERSION_FROM:
         return "ihub_sovhub_transition_proxy"
+    if event_day >= SOVHUB_LEGACY_FROM:
+        return "sovhub_legacy_ihub_proxy"
     if event_day >= IHUB_EFFECTIVE_FROM:
         return "ihub_proxy"
     return "legacy_sov"
@@ -286,7 +289,8 @@ def ensure_tables(conn):
             UPDATE sovereignty.dotlan_events
             SET ownership_model = CASE
                 WHEN event_at::date >= DATE '2024-10-29' THEN 'sovhub'
-                WHEN event_at::date >= DATE '2024-06-11' THEN 'ihub_sovhub_transition_proxy'
+                WHEN event_at::date >= DATE '2024-06-27' THEN 'ihub_sovhub_transition_proxy'
+                WHEN event_at::date >= DATE '2024-06-11' THEN 'sovhub_legacy_ihub_proxy'
                 WHEN event_at::date >= DATE '2015-07-14' THEN 'ihub_proxy'
                 ELSE 'legacy_sov'
             END
