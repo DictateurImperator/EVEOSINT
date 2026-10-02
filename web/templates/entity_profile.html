@@ -1100,7 +1100,12 @@
               + encodeURIComponent(coalition.coalition_id) + '">'
               + escapeHtml(coalition.name || ('Coalition ' + coalition.coalition_id)) + '</a>';
             if (coalition.short_name) text += ' <span class="muted-line">[' + escapeHtml(coalition.short_name) + ']</span>';
-            return '<div>' + text + '</div>';
+            const logo = coalition.logo_url
+              ? '<img class="history-entity-icon" src="' + escapeHtml(coalition.logo_url) + '"'
+                + ' alt="" title="' + escapeHtml(coalition.name || '') + '" loading="lazy"'
+                + ' onerror="this.style.display=\'none\'">'
+              : '';
+            return '<div class="d-flex align-items-center gap-2">' + logo + '<div>' + text + '</div></div>';
           }).join('');
         }
 
