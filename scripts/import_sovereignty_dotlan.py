@@ -325,8 +325,8 @@ def ensure_tables(conn):
     conn.commit()
 
 
-def system_names(conn, scope, selected):
-    claimable = load_claimable_sov_systems(conn)
+def system_names(conn, scope, selected, claimable=None):
+    claimable = claimable or load_claimable_sov_systems(conn)
     if len(claimable) < 1000:
         raise RuntimeError(
             "SDE conquerable-nullsec scope looks incomplete (%d systems)" % len(claimable)
@@ -360,6 +360,28 @@ def system_names(conn, scope, selected):
             )
     return sorted(systems, key=lambda item: item[0])
 
+
+
+def prune_out_of_scope(conn, claimable_ids):
+    claimable_ids = sorted(int(value) for value in claimable_ids)
+    if len(claimable_ids) < 1000:
+        raise RuntimeError(
+            "Refusing DOTLAN scope prune with suspiciously small claimable set (%d)"
+            % len(claimable_ids)
+        )
+    with conn.cursor() as cur:
+        cur.execute(
+            "DELETE FROM sovereignty.dotlan_events WHERE NOT (system_id = ANY(%s))",
+            (claimable_ids,),
+        )
+        removed_events = cur.rowcount
+        cur.execute(
+            "DELETE FROM sovereignty.dotlan_system_sync WHERE NOT (system_id = ANY(%s))",
+            (claimable_ids,),
+        )
+        removed_systems = cur.rowcount
+    conn.commit()
+    return removed_events, removed_systems
 
 
 def fetch_page(session, url):
@@ -472,7 +494,19 @@ def main():
                 return 1
         try:
             ensure_tables(conn)
-            systems = system_names(conn, args.scope, args.system)
+            claimable = load_claimable_sov_systems(conn)
+            if len(claimable) < 1000:
+                raise RuntimeError(
+                    "SDE conquerable-nullsec scope looks incomplete (%d systems)" % len(claimable)
+                )
+            removed_events, removed_systems = prune_out_of_scope(conn, claimable)
+            if removed_events or removed_systems:
+                LOG.info(
+                    "SOV_DOTLAN scope_prune removed_events=%d removed_systems=%d",
+                    removed_events,
+                    removed_systems,
+                )
+            systems = system_names(conn, args.scope, args.system, claimable=claimable)
             with conn.cursor() as cur:
                 cur.execute("""
                     SELECT system_id FROM sovereignty.dotlan_system_sync
