@@ -16,7 +16,7 @@ they populate the real `sovereignty.*` tables.
 
 File: `scripts/sync_sovereignty_esi.py`
 
-- One public GET: `https://esi.evetech.net/latest/sovereignty/map/?datasource=tranquility`.
+- One public GET: `https://esi.evetech.net/latest/sovereignty/map/?datasource=tranquility`. CCP does not expose a server-side `nullsec only` filter, so EVEOSINT performs the scope filter locally after this single response.
 - No OAuth, API key, scraping or pagination.
 - Identifiable User-Agent (app, version and public source URL) and pinned
   `X-Compatibility-Date: 2026-09-28`.
@@ -26,8 +26,8 @@ File: `scripts/sync_sovereignty_esi.py`
 - Honors CCP's `Retry-After`, old error-budget headers and transient 5xx
   backoff. A short/broken payload, transport failure or HTTP error does **not**
   delete or replace the existing map.
-- Atomic complete current snapshot; absence of a formerly owned system from
-  a valid ESI response means it is no longer part of the current SOV map.
+- EVEOSINT stores only **conquerable 0.0**: `securityStatus <= 0.0`, known-space regions, with NPC faction ownership excluded at system/constellation/region level. This removes HS/LS, Pochven, wormholes, NPC nullsec regions and NPC pockets.
+- Atomic complete current snapshot inside that scope; absence of a formerly owned claimable system from a valid ESI response means it is no longer part of the current SOV map.
 - Persistent advisory lock prevents overlapping ESI collector executions.
 
 **First run on the EVEOSINT host**, once code is deployed:
@@ -75,17 +75,33 @@ File: `scripts/import_sovereignty_dotlan.py`
 
 This downloads each source system page at
 `https://evemaps.dotlan.net/system/{system_name}` and extracts the
-**Sovereignty Changes** table. Records include source URL, date/time as displayed
+**Sovereignty Changes** table, but only for the same **conquerable 0.0** SDE scope as the ESI collector. Records include source URL, date/time as displayed
 by DOTLAN, raw action, normalized action (GAIN/LOST/TRANSFER/LEVEL_CHANGE/OTHER),
 optional displayed Alliance and Corporation names/links, raw source cells,
-row index and fetch time.
+row index, fetch time and the EVEOSINT ownership convention active at that date.
 
 **Important:** This step stores DOTLAN **source events**, not reconstructed
 ownership intervals. A level-up/down event does not itself change the owner.
-A name without a resolvable source link stays a raw name; IDs and missing dates
-are never guessed. Historic DOTLAN coverage and accuracy vary by system.
-`event_at` intentionally stores the page's clock value as an unzoned timestamp
-until the historical source timezone is verified.
+A long interval without a DOTLAN event is **not** treated as a data gap: when
+periods are reconstructed later, the last known owner can continue until the
+next ownership event. A name without a resolvable source link stays a raw name;
+IDs and missing dates are never guessed. `event_at` intentionally stores the
+page's clock value as an unzoned timestamp until the historical source timezone
+is verified.
+
+EVEOSINT also stores an `ownership_model` tag for later reconstruction:
+
+- before **2015-07-14**: `legacy_sov`;
+- **2015-07-14 → 2024-06-10**: `ihub_proxy` — by project convention, DOTLAN's
+  territorial owner is interpreted as the effective IHub owner for analysis;
+- **2024-06-11 → 2024-10-28**: `ihub_sovhub_transition_proxy` — Equinox
+  transition; the exact per-system conversion instant is not invented;
+- from **2024-10-29**: `sovhub`.
+
+This is an explicit EVEOSINT analytical convention, not a claim that DOTLAN
+contains a complete historical IHub ownership feed. The public History pages
+will need to display that convention when this reconstructed SOV history is
+surfaced.
 
 Use small batches first:
 
@@ -95,8 +111,8 @@ cd /home/ubuntu/eveosint
 ./venv/bin/python scripts/import_sovereignty_dotlan.py --scope current --limit 25
 ```
 
-To include historical nullsec systems **not currently present in ESI SOV**,
-use `--scope all-nullsec`. Resume by repeating the command; completed systems
+To include historical **conquerable nullsec** systems not currently present in ESI SOV,
+use `--scope all-nullsec`. NPC nullsec and NPC pockets are still excluded. Resume by repeating the command; completed systems
 are skipped, failed ones retried. `--limit 0` processes the entire remaining
 selection (potentially **many hours**). `--refresh` explicitly re-fetches
 already successful systems. There is no automatic DOTLAN bulk crawl on
@@ -111,7 +127,7 @@ a failed page never erases its previous events.
 
 The importer creates:
 
-- `sovereignty.dotlan_events` — source events (no owner IDs inferred).
+- `sovereignty.dotlan_events` — source events (no owner IDs inferred), including `ownership_model`.
 - `sovereignty.dotlan_system_sync` — import status, source hash, event counts,
   fetched timestamp, errors.
 
@@ -122,7 +138,7 @@ SELECT last_status, COUNT(*) AS systems, SUM(event_count) AS events
 FROM sovereignty.dotlan_system_sync
 GROUP BY last_status;
 
-SELECT system_id, event_at, action, action_raw, alliance_name, corporation_name, source_url
+SELECT system_id, event_at, action, action_raw, ownership_model, alliance_name, corporation_name, source_url
 FROM sovereignty.dotlan_events
 ORDER BY event_at DESC
 LIMIT 30;
