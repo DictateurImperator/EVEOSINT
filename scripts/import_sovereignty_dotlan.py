@@ -24,7 +24,10 @@ import requests
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "web"))
 from app.dotlan_throttle import wait_for_dotlan_slot  # noqa: E402
-from sovereignty_scope import load_claimable_sov_systems
+try:
+    from sovereignty_scope import load_claimable_sov_systems
+except ModuleNotFoundError:  # package import used by offline unittest
+    from scripts.sovereignty_scope import load_claimable_sov_systems
 
 CONFIG_PATH = ROOT / "config" / "db.json"
 BASE_URL = "https://evemaps.dotlan.net"
