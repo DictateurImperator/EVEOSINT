@@ -19,6 +19,8 @@ import psycopg2
 from psycopg2.extras import execute_values
 import requests
 
+from sovereignty_scope import load_claimable_sov_systems
+
 ROOT = Path(__file__).resolve().parents[1]
 CONFIG_PATH = ROOT / "config" / "db.json"
 ESI_URL = "https://esi.evetech.net/latest/sovereignty/map/"
@@ -117,18 +119,20 @@ def normalize(payload):
     return result
 
 
-def get_state(conn):
+def get_state(conn, claimable_ids):
     with conn.cursor() as cur:
         cur.execute("""
             SELECT etag, expires_at, row_count
             FROM sovereignty.esi_map_state WHERE id = 1
         """)
         row = cur.fetchone()
-        cur.execute("SELECT COUNT(*) FROM sovereignty.current_map")
-        stored_count = cur.fetchone()[0]
+        cur.execute("SELECT system_id FROM sovereignty.current_map")
+        stored_ids = {int(item[0]) for item in cur.fetchall()}
+    stored_count = len(stored_ids)
+    out_of_scope = stored_ids - set(claimable_ids)
     if not row:
-        return None, None, stored_count, stored_count
-    return row[0], row[1], row[2], stored_count
+        return None, None, stored_count, stored_count, len(out_of_scope)
+    return row[0], row[1], row[2], stored_count, len(out_of_scope)
 
 
 def update_not_modified(conn, old_count, etag, response):
@@ -250,13 +254,39 @@ def main():
                 return 0
         try:
             ensure_tables(conn)
-            etag, expires_at, expected, existing = get_state(conn)
-            if existing > 0 and expected == existing and expires_at and utcnow() < expires_at:
-                LOG.info("SOV_ESI status=cached systems=%d next_fetch=%s", existing, expires_at.isoformat())
+            claimable = load_claimable_sov_systems(conn)
+            claimable_ids = set(claimable)
+            if len(claimable_ids) < 1000:
+                raise RuntimeError(
+                    "SDE conquerable-nullsec scope looks incomplete (%d systems)" % len(claimable_ids)
+                )
+
+            etag, expires_at, expected, existing, out_of_scope = get_state(conn, claimable_ids)
+            local_scope_valid = out_of_scope == 0
+            if (
+                local_scope_valid
+                and existing > 0
+                and expected == existing
+                and expires_at
+                and utcnow() < expires_at
+            ):
+                LOG.info(
+                    "SOV_ESI status=cached systems=%d scope=claimable_nullsec next_fetch=%s",
+                    existing,
+                    expires_at.isoformat(),
+                )
                 return 0
+            if out_of_scope:
+                LOG.info(
+                    "SOV_ESI scope migration: %d stored systems are outside conquerable nullsec; forcing full refresh",
+                    out_of_scope,
+                )
 
             with requests.Session() as session:
-                response = esi_request(session, etag if existing > 0 and expected == existing else None)
+                response = esi_request(
+                    session,
+                    etag if local_scope_valid and existing > 0 and expected == existing else None,
+                )
                 if response.status_code == 304:
                     if existing <= 0 or expected != existing:
                         raise RuntimeError("Unexpected 304 without a valid local map")
@@ -264,10 +294,34 @@ def main():
                     LOG.info("SOV_ESI status=not_modified systems=%d", existing)
                     return 0
                 result = normalize(response.json())
-                if len(result) < 1000 or (existing >= 1000 and len(result) < existing * 0.70):
-                    raise ValueError("Suspiciously incomplete ESI map (%d systems); current state retained" % len(result))
+                if len(result) < 1000:
+                    raise ValueError(
+                        "Suspiciously incomplete global ESI map (%d systems); current state retained"
+                        % len(result)
+                    )
+
+                result = {
+                    system_id: owner
+                    for system_id, owner in result.items()
+                    if system_id in claimable_ids
+                }
+                if len(result) < 1000:
+                    raise ValueError(
+                        "Suspiciously incomplete conquerable-nullsec ESI map (%d systems); current state retained"
+                        % len(result)
+                    )
+                if local_scope_valid and existing >= 1000 and len(result) < existing * 0.70:
+                    raise ValueError(
+                        "Conquerable-nullsec ESI map shrank unexpectedly (%d -> %d); current state retained"
+                        % (existing, len(result))
+                    )
+
                 count = replace_map(conn, result, response)
-                LOG.info("SOV_ESI status=updated systems=%d", count)
+                LOG.info(
+                    "SOV_ESI status=updated systems=%d scope=claimable_nullsec sde_scope=%d",
+                    count,
+                    len(claimable_ids),
+                )
                 return 0
         except Exception:
             conn.rollback()
