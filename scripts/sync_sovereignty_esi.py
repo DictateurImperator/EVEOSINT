@@ -518,7 +518,7 @@ def main():
                         response,
                     )
                     LOG.info(
-                        "SOV_ESI status=not_modified systems=%d scope=global_systems_2026_systems_2026",
+                        "SOV_ESI status=not_modified systems=%d scope=global_systems_2026",
                         existing,
                     )
                     return 0
