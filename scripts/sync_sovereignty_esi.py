@@ -20,12 +20,12 @@ import requests
 
 ROOT = Path(__file__).resolve().parents[1]
 CONFIG_PATH = ROOT / "config" / "db.json"
-ESI_URL = "https://esi.evetech.net/latest/sovereignty/map/"
+ESI_URL = "https://esi.evetech.net/sovereignty/systems"
 USER_AGENT = "EVEOSINT-Sovereignty/1.0 (+https://github.com/DictateurImperator/EVEOSINT)"
 COMPATIBILITY_DATE = "2026-09-28"
 TIMEOUT = (5, 60)
 ATTEMPTS = 4
-MAP_SCOPE = "global"
+MAP_SCOPE = "global_systems_2026"
 LOG = logging.getLogger("sov_esi")
 
 
@@ -75,9 +75,14 @@ def ensure_tables(conn):
                 alliance_id BIGINT,
                 corporation_id BIGINT,
                 faction_id BIGINT,
+                unclaimed BOOLEAN NOT NULL DEFAULT FALSE,
                 observed_at TIMESTAMPTZ NOT NULL,
                 source TEXT NOT NULL DEFAULT 'esi'
             )
+        """)
+        cur.execute("""
+            ALTER TABLE sovereignty.current_map
+            ADD COLUMN IF NOT EXISTS unclaimed BOOLEAN NOT NULL DEFAULT FALSE
         """)
         cur.execute("""
             CREATE INDEX IF NOT EXISTS sov_current_alliance_idx
@@ -178,25 +183,50 @@ def ensure_tables(conn):
     conn.commit()
 
 
+def _positive_id(value, label):
+    if type(value) is not int or value <= 0:
+        raise ValueError("Invalid %s in sovereignty response; current state retained" % label)
+    return value
+
+
 def normalize(payload):
-    if not isinstance(payload, list) or not payload:
-        raise ValueError("ESI sovereignty map is empty or not an array; current state retained")
+    if not isinstance(payload, dict):
+        raise ValueError("ESI sovereignty systems response is not an object; current state retained")
+    solar_systems = payload.get("solar_systems")
+    if not isinstance(solar_systems, list) or not solar_systems:
+        raise ValueError("ESI sovereignty systems list is empty or invalid; current state retained")
+
     result = {}
-    for row in payload:
-        if not isinstance(row, dict) or type(row.get("system_id")) is not int or row["system_id"] <= 0:
-            raise ValueError("Invalid sovereignty system; current state retained")
-        system_id = row["system_id"]
+    for row in solar_systems:
+        if not isinstance(row, dict):
+            raise ValueError("Invalid sovereignty system row; current state retained")
+
+        system_id = _positive_id(row.get("solar_system_id"), "solar_system_id")
         if system_id in result:
-            raise ValueError("Duplicate system_id in ESI response; current state retained")
-        values = []
-        for key in ("alliance_id", "corporation_id", "faction_id"):
-            value = row.get(key)
-            if value is not None and (type(value) is not int or value <= 0):
-                raise ValueError("Invalid sovereignty owner; current state retained")
-            values.append(value)
-        if all(value is None for value in values):
-            raise ValueError("Ownerless sovereignty row; current state retained")
-        result[system_id] = tuple(values)
+            raise ValueError("Duplicate solar_system_id in ESI response; current state retained")
+
+        claim = row.get("claim")
+        if not isinstance(claim, dict):
+            raise ValueError("Missing sovereignty claim; current state retained")
+
+        alliance = claim.get("alliance")
+        faction = claim.get("faction")
+        unclaimed = claim.get("unclaimed") is True
+        variants = int(isinstance(alliance, dict)) + int(isinstance(faction, dict)) + int(unclaimed)
+        if variants != 1:
+            raise ValueError("Invalid sovereignty claim variant; current state retained")
+
+        if isinstance(alliance, dict):
+            alliance_id = _positive_id(alliance.get("alliance_id"), "alliance_id")
+            corporation_id = _positive_id(alliance.get("corporation_id"), "corporation_id")
+            owner = (alliance_id, corporation_id, None)
+        elif isinstance(faction, dict):
+            faction_id = _positive_id(faction.get("faction_id"), "faction_id")
+            owner = (None, None, faction_id)
+        else:
+            owner = (None, None, None)
+
+        result[system_id] = owner
     return result
 
 
@@ -227,54 +257,36 @@ def get_state(conn):
     return row[0], row[1], stored_count, row[3]
 
 
+def _has_owner(owner):
+    return owner is not None and any(value is not None for value in owner)
+
+
 def build_changes(previous, current, source_observed_at):
     changes = []
-    previous_ids = set(previous)
-    current_ids = set(current)
+    for system_id in sorted(set(previous) | set(current)):
+        old_owner = previous.get(system_id)
+        new_owner = current.get(system_id)
 
-    for system_id in sorted(current_ids - previous_ids):
-        new_owner = current[system_id]
-        changes.append((
-            system_id,
-            "GAIN",
-            None, None, None,
-            new_owner[0], new_owner[1], new_owner[2],
-            source_observed_at,
-        ))
-
-    for system_id in sorted(previous_ids - current_ids):
-        old_owner = previous[system_id]
-        changes.append((
-            system_id,
-            "LOST",
-            old_owner[0], old_owner[1], old_owner[2],
-            None, None, None,
-            source_observed_at,
-        ))
-
-    for system_id in sorted(previous_ids & current_ids):
-        old_owner = previous[system_id]
-        new_owner = current[system_id]
         if old_owner == new_owner:
             continue
 
-        # A snapshot only proves "old owner was present before" and "new owner
-        # is present now". It cannot prove a direct transfer happened between
-        # the two polls, so record the two observable facts instead.
-        changes.append((
-            system_id,
-            "LOST",
-            old_owner[0], old_owner[1], old_owner[2],
-            None, None, None,
-            source_observed_at,
-        ))
-        changes.append((
-            system_id,
-            "GAIN",
-            None, None, None,
-            new_owner[0], new_owner[1], new_owner[2],
-            source_observed_at,
-        ))
+        if _has_owner(old_owner):
+            changes.append((
+                system_id,
+                "LOST",
+                old_owner[0], old_owner[1], old_owner[2],
+                None, None, None,
+                source_observed_at,
+            ))
+
+        if _has_owner(new_owner):
+            changes.append((
+                system_id,
+                "GAIN",
+                None, None, None,
+                new_owner[0], new_owner[1], new_owner[2],
+                source_observed_at,
+            ))
 
     return changes
 
@@ -307,7 +319,14 @@ def update_not_modified(conn, old_count, etag, response):
 def replace_map(conn, rows, response, previous, record_history):
     observed = http_date(response.headers.get("Last-Modified")) or utcnow()
     values = [
-        (system_id, owner[0], owner[1], owner[2], observed)
+        (
+            system_id,
+            owner[0],
+            owner[1],
+            owner[2],
+            not _has_owner(owner),
+            observed,
+        )
         for system_id, owner in rows.items()
     ]
     changes = build_changes(previous, rows, observed) if record_history else []
@@ -334,7 +353,7 @@ def replace_map(conn, rows, response, previous, record_history):
         cur.execute("DELETE FROM sovereignty.current_map")
         execute_values(cur, """
             INSERT INTO sovereignty.current_map (
-                system_id, alliance_id, corporation_id, faction_id, observed_at
+                system_id, alliance_id, corporation_id, faction_id, unclaimed, observed_at
             )
             VALUES %s
         """, values, page_size=1000)
@@ -369,6 +388,7 @@ def esi_request(session, etag):
         "User-Agent": USER_AGENT,
         "Accept": "application/json",
         "X-Compatibility-Date": COMPATIBILITY_DATE,
+        "X-Tenant": "tranquility",
     }
     if etag:
         headers["If-None-Match"] = etag
@@ -377,7 +397,6 @@ def esi_request(session, etag):
         try:
             response = session.get(
                 ESI_URL,
-                params={"datasource": "tranquility"},
                 headers=headers,
                 timeout=TIMEOUT,
             )
@@ -490,7 +509,7 @@ def main():
                 if response.status_code == 304:
                     if not history_ready:
                         raise RuntimeError(
-                            "Unexpected 304 without a complete global baseline"
+                            "Unexpected 304 without a complete sovereignty/systems baseline"
                         )
                     update_not_modified(
                         conn,
@@ -499,7 +518,7 @@ def main():
                         response,
                     )
                     LOG.info(
-                        "SOV_ESI status=not_modified systems=%d scope=global",
+                        "SOV_ESI status=not_modified systems=%d scope=global_systems_2026",
                         existing,
                     )
                     return 0
