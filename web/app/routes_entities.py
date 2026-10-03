@@ -1711,6 +1711,55 @@ def corporation_population_flow_chunk_data(
         return JSONResponse(status_code=500, content={"error": "population_flow_chunk_failed"})
 
 
+@router.get("/api/system/{system_id}/history", response_class=JSONResponse)
+def system_sovereignty_history_data(request: Request, system_id: int):
+    require_login(request)
+    try:
+        return JSONResponse(content=_system_sovereignty_history(system_id))
+    except QueryCanceled:
+        logger.warning(
+            "System sovereignty history timeout system_id=%s",
+            system_id,
+        )
+        return JSONResponse(status_code=504, content={"error": "system_history_timeout"})
+    except Exception:
+        logger.exception(
+            "System sovereignty history load failed system_id=%s",
+            system_id,
+        )
+        return JSONResponse(status_code=500, content={"error": "system_history_load_failed"})
+
+
+@router.get("/api/system/{system_id}/history/kills", response_class=JSONResponse)
+def system_sovereignty_history_kills_data(
+    request: Request,
+    system_id: int,
+    start_at: str = Query(...),
+    end_at: str | None = Query(None),
+):
+    require_login(request)
+    try:
+        return JSONResponse(content=_get_system_history_period_kills(
+            system_id,
+            _parse_history_datetime_parameter(start_at),
+            _parse_history_datetime_parameter(end_at) if end_at else None,
+        ))
+    except ValueError as exc:
+        return _entity_route_error_response(request, exc)
+    except QueryCanceled:
+        logger.warning(
+            "System history period kill count timeout system_id=%s start_at=%s end_at=%s",
+            system_id, start_at, end_at,
+        )
+        return JSONResponse(status_code=504, content={"error": "history_kill_count_timeout"})
+    except Exception:
+        logger.exception(
+            "System history period kill count failed system_id=%s start_at=%s end_at=%s",
+            system_id, start_at, end_at,
+        )
+        return JSONResponse(status_code=500, content={"error": "history_kill_count_failed"})
+
+
 @router.get("/api/character/{character_id}/history", response_class=JSONResponse)
 def character_affiliation_history_data(request: Request, character_id: int):
     require_login(request)
@@ -4406,6 +4455,500 @@ def _merge_character_corporation_periods(history_rows):
     return merged
 
 
+def _resolve_sov_alliance_names(conn, alliance_names):
+    names = sorted({
+        str(value).strip()
+        for value in (alliance_names or [])
+        if str(value or "").strip()
+    })
+    if not names:
+        return {}
+
+    with conn.cursor() as cur:
+        cur.execute("SELECT to_regclass('entities.alliances')")
+        if not cur.fetchone()[0]:
+            return {}
+        cur.execute(
+            """
+            SELECT alliance_id, name, ticker, COALESCE(is_deleted, FALSE)
+            FROM entities.alliances
+            WHERE lower(name) = ANY(%s)
+            """,
+            ([name.casefold() for name in names],),
+        )
+        rows = cur.fetchall()
+
+    return {
+        str(name).casefold(): {
+            "alliance_id": int(alliance_id),
+            "alliance_name": name,
+            "alliance_ticker": ticker,
+            "alliance_deleted": bool(is_deleted),
+        }
+        for alliance_id, name, ticker, is_deleted in rows
+        if name
+    }
+
+
+def _resolve_sov_alliance_ids(conn, alliance_ids):
+    ids = sorted({int(value) for value in (alliance_ids or []) if value is not None})
+    if not ids:
+        return {}
+
+    with conn.cursor() as cur:
+        cur.execute("SELECT to_regclass('entities.alliances')")
+        if not cur.fetchone()[0]:
+            return {}
+        cur.execute(
+            """
+            SELECT alliance_id, name, ticker, COALESCE(is_deleted, FALSE)
+            FROM entities.alliances
+            WHERE alliance_id = ANY(%s)
+            """,
+            (ids,),
+        )
+        rows = cur.fetchall()
+
+    return {
+        int(alliance_id): {
+            "alliance_id": int(alliance_id),
+            "alliance_name": name or f"Alliance {int(alliance_id)}",
+            "alliance_ticker": ticker,
+            "alliance_deleted": bool(is_deleted),
+        }
+        for alliance_id, name, ticker, is_deleted in rows
+    }
+
+
+def _sov_owner_key(owner):
+    if not owner:
+        return ("unclaimed",)
+    if owner.get("alliance_id") is not None:
+        return ("alliance", int(owner["alliance_id"]))
+    name = str(owner.get("alliance_name") or "").strip()
+    if name:
+        return ("alliance_name", name.casefold())
+    return ("unclaimed",)
+
+
+def _system_sovereignty_history(system_id):
+    system_id = int(system_id)
+    open_end = datetime(9999, 12, 31, 23, 59, 59, tzinfo=timezone.utc)
+
+    with db() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT
+                    to_regclass('sovereignty.dotlan_events'),
+                    to_regclass('sovereignty.dotlan_system_sync'),
+                    to_regclass('sovereignty.map_changes'),
+                    to_regclass('sovereignty.current_map')
+                """
+            )
+            tables = cur.fetchone()
+
+        if not tables or not tables[0] or not tables[1]:
+            return {
+                "system_id": system_id,
+                "available": False,
+                "reason": "sovereignty_history_unavailable",
+                "rows": [],
+            }
+
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT system_name, fetched_at, last_status, last_error
+                FROM sovereignty.dotlan_system_sync
+                WHERE system_id = %s
+                LIMIT 1
+                """,
+                (system_id,),
+            )
+            sync_row = cur.fetchone()
+
+        if not sync_row or sync_row[2] != "ok":
+            return {
+                "system_id": system_id,
+                "available": False,
+                "reason": "dotlan_not_imported",
+                "sync_status": sync_row[2] if sync_row else None,
+                "sync_error": sync_row[3] if sync_row else None,
+                "rows": [],
+            }
+
+        system_name, dotlan_fetched_at, sync_status, sync_error = sync_row
+
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT
+                    event_at,
+                    action,
+                    alliance_name,
+                    alliance_url,
+                    ownership_model,
+                    row_position
+                FROM sovereignty.dotlan_events
+                WHERE system_id = %s
+                  AND action IN ('GAIN', 'LOST')
+                ORDER BY
+                    event_at ASC,
+                    row_position DESC,
+                    CASE action WHEN 'LOST' THEN 0 WHEN 'GAIN' THEN 1 ELSE 2 END
+                """,
+                (system_id,),
+            )
+            dotlan_rows = cur.fetchall()
+
+        dotlan_names = {
+            row[2]
+            for row in dotlan_rows
+            if row[2]
+        }
+        alliance_by_name = _resolve_sov_alliance_names(conn, dotlan_names)
+
+        esi_rows = []
+        if tables[2]:
+            with conn.cursor() as cur:
+                if dotlan_fetched_at is not None:
+                    cur.execute(
+                        """
+                        SELECT
+                            change_id,
+                            source_observed_at,
+                            change_type,
+                            old_alliance_id,
+                            new_alliance_id
+                        FROM sovereignty.map_changes
+                        WHERE system_id = %s
+                          AND source_observed_at > %s
+                        ORDER BY source_observed_at ASC, change_id ASC
+                        """,
+                        (system_id, dotlan_fetched_at),
+                    )
+                else:
+                    cur.execute(
+                        """
+                        SELECT
+                            change_id,
+                            source_observed_at,
+                            change_type,
+                            old_alliance_id,
+                            new_alliance_id
+                        FROM sovereignty.map_changes
+                        WHERE system_id = %s
+                        ORDER BY source_observed_at ASC, change_id ASC
+                        """,
+                        (system_id,),
+                    )
+                esi_rows = cur.fetchall()
+
+        current_row = None
+        if tables[3]:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT alliance_id, corporation_id, faction_id, observed_at
+                    FROM sovereignty.current_map
+                    WHERE system_id = %s
+                    LIMIT 1
+                    """,
+                    (system_id,),
+                )
+                current_row = cur.fetchone()
+
+        esi_alliance_ids = {
+            int(value)
+            for row in esi_rows
+            for value in (row[3], row[4])
+            if value is not None
+        }
+        if current_row and current_row[0] is not None:
+            esi_alliance_ids.add(int(current_row[0]))
+        alliance_by_id = _resolve_sov_alliance_ids(conn, esi_alliance_ids)
+
+        events = []
+        for event_at, action, alliance_name, alliance_url, model, row_position in dotlan_rows:
+            owner = None
+            if action == "GAIN" and alliance_name:
+                resolved = alliance_by_name.get(str(alliance_name).casefold())
+                if resolved:
+                    owner = dict(resolved)
+                else:
+                    owner = {
+                        "alliance_id": None,
+                        "alliance_name": alliance_name,
+                        "alliance_ticker": None,
+                        "alliance_deleted": False,
+                    }
+                owner["alliance_source_url"] = alliance_url
+            normalized_at = _history_datetime(event_at)
+            events.append({
+                "at": normalized_at,
+                "action": action,
+                "owner": owner,
+                "source": "dotlan",
+                "ownership_model": model,
+                "order": int(row_position or 0),
+            })
+
+        for change_id, observed_at, action, old_alliance_id, new_alliance_id in esi_rows:
+            owner = None
+            if action == "GAIN" and new_alliance_id is not None:
+                owner = dict(
+                    alliance_by_id.get(int(new_alliance_id))
+                    or {
+                        "alliance_id": int(new_alliance_id),
+                        "alliance_name": f"Alliance {int(new_alliance_id)}",
+                        "alliance_ticker": None,
+                        "alliance_deleted": False,
+                    }
+                )
+            events.append({
+                "at": _history_datetime(observed_at),
+                "action": action,
+                "owner": owner,
+                "source": "esi",
+                "ownership_model": "sovhub",
+                "order": int(change_id),
+            })
+
+        events.sort(
+            key=lambda item: (
+                item["at"],
+                0 if item["action"] == "LOST" else 1,
+                item["order"],
+            )
+        )
+
+        base_segments = []
+        current_owner = None
+        current_start = None
+        current_source = None
+        current_model = None
+        record_id = 1
+
+        def close_segment(end_at):
+            nonlocal record_id
+            if current_start is None or end_at <= current_start:
+                return
+            owner = current_owner or {}
+            base_segments.append({
+                "record_id": record_id,
+                "owner_key": _sov_owner_key(current_owner),
+                "alliance_id": owner.get("alliance_id"),
+                "alliance_name": owner.get("alliance_name"),
+                "alliance_ticker": owner.get("alliance_ticker"),
+                "alliance_deleted": bool(owner.get("alliance_deleted")),
+                "corporation_id": None,
+                "start_at": current_start,
+                "end_at": end_at,
+                "source": current_source,
+                "ownership_model": current_model,
+            })
+            record_id += 1
+
+        for event in events:
+            event_at = event["at"]
+            if event_at is None:
+                continue
+            if event["action"] == "LOST":
+                if current_start is not None:
+                    close_segment(event_at)
+                current_owner = None
+                current_start = event_at
+                current_source = event["source"]
+                current_model = event["ownership_model"]
+                continue
+
+            if event["action"] == "GAIN":
+                new_owner = event.get("owner")
+                if current_start is not None and _sov_owner_key(current_owner) == _sov_owner_key(new_owner):
+                    continue
+                if current_start is not None:
+                    close_segment(event_at)
+                current_owner = new_owner
+                current_start = event_at
+                current_source = event["source"]
+                current_model = event["ownership_model"]
+
+        if current_start is not None:
+            close_segment(open_end)
+
+        coalition_resolver, coalition_change_days = _coalition_history_resolver(conn)
+        segmented = _split_affiliation_segments_by_coalition(
+            base_segments,
+            coalition_resolver,
+            coalition_change_days,
+        )
+        segmented = _merge_history_segments(segmented, ("owner_key",))
+
+        rows = []
+        for segment in sorted(
+            segmented,
+            key=lambda row: (row["start_at"], row.get("record_id", 0)),
+            reverse=True,
+        ):
+            start_at = segment["start_at"]
+            end_effective = segment["end_at"]
+            current = end_effective >= open_end
+            end_at = None if current else end_effective
+            rows.append({
+                "alliance_id": int(segment["alliance_id"]) if segment.get("alliance_id") is not None else None,
+                "alliance_name": segment.get("alliance_name"),
+                "alliance_ticker": segment.get("alliance_ticker"),
+                "alliance_deleted": bool(segment.get("alliance_deleted")),
+                "coalitions": segment.get("coalitions") or [],
+                "coalition_key": list(segment.get("coalition_key") or ()),
+                "unclaimed": segment.get("alliance_id") is None and not segment.get("alliance_name"),
+                "start_date": start_at.date().isoformat(),
+                "end_date": end_at.date().isoformat() if end_at else None,
+                "current": current,
+                "kill_start_at": start_at.isoformat(),
+                "kill_end_at": end_at.isoformat() if end_at else None,
+                "source": segment.get("source"),
+                "ownership_model": segment.get("ownership_model"),
+                "kills_total": None,
+                "kills_total_display": "—",
+            })
+
+        current_owner_from_history = None
+        current_period = next((row for row in rows if row.get("current")), None)
+        if current_period:
+            current_owner_from_history = {
+                "alliance_id": current_period.get("alliance_id"),
+                "alliance_name": current_period.get("alliance_name"),
+            }
+
+        current_owner_from_esi = None
+        if current_row:
+            alliance_id = current_row[0]
+            if alliance_id is not None:
+                resolved = alliance_by_id.get(int(alliance_id)) or {}
+                current_owner_from_esi = {
+                    "alliance_id": int(alliance_id),
+                    "alliance_name": resolved.get("alliance_name"),
+                }
+            else:
+                current_owner_from_esi = {
+                    "alliance_id": None,
+                    "alliance_name": None,
+                }
+
+        mismatch = (
+            current_owner_from_esi is not None
+            and current_owner_from_history is not None
+            and _sov_owner_key(current_owner_from_esi) != _sov_owner_key(current_owner_from_history)
+        )
+
+    return {
+        "system_id": system_id,
+        "system_name": system_name,
+        "available": True,
+        "sync_status": sync_status,
+        "sync_error": sync_error,
+        "dotlan_fetched_at": dotlan_fetched_at.isoformat() if dotlan_fetched_at else None,
+        "current_state_mismatch": mismatch,
+        "rows": rows,
+        "kill_stats_progressive": True,
+    }
+
+
+def _get_system_history_period_kills(system_id, start_at, end_at=None):
+    system_id = int(system_id)
+    if end_at is not None and end_at <= start_at:
+        raise ValueError("invalid_history_period")
+
+    with db() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT
+                    to_regclass('rawkm.killmails'),
+                    to_regclass('rawkm.killmail_import_days')
+                """
+            )
+            tables = cur.fetchone()
+        if not (tables and tables[0] and tables[1]):
+            return {
+                "available": False,
+                "reason": "unavailable",
+                "kills_total": None,
+                "kills_total_display": "—",
+            }
+
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT MIN(day), MAX(day)
+                FROM rawkm.killmail_import_days
+                WHERE status = 'success'
+                """
+            )
+            coverage_row = cur.fetchone()
+
+        coverage_min = coverage_row[0] if coverage_row else None
+        coverage_max = coverage_row[1] if coverage_row else None
+        if coverage_min is None or coverage_max is None:
+            return {
+                "available": False,
+                "reason": "unavailable",
+                "kills_total": None,
+                "kills_total_display": "—",
+            }
+
+        coverage_end = datetime.combine(
+            coverage_max + timedelta(days=1),
+            datetime.min.time(),
+            tzinfo=timezone.utc,
+        )
+        if start_at.date() < coverage_min:
+            return {
+                "available": False,
+                "reason": "outside_coverage",
+                "coverage_from": coverage_min.isoformat(),
+                "coverage_to": coverage_max.isoformat(),
+                "kills_total": None,
+                "kills_total_display": "—",
+            }
+        if end_at is not None and end_at > coverage_end:
+            return {
+                "available": False,
+                "reason": "outside_coverage",
+                "coverage_from": coverage_min.isoformat(),
+                "coverage_to": coverage_max.isoformat(),
+                "kills_total": None,
+                "kills_total_display": "—",
+            }
+
+        end_bound = min(end_at, coverage_end) if end_at is not None else coverage_end
+        with conn.cursor() as cur:
+            cur.execute("SET LOCAL statement_timeout = '50000ms'")
+            cur.execute(
+                """
+                SELECT COUNT(*)::bigint
+                FROM rawkm.killmails
+                WHERE solar_system_id = %s
+                  AND killmail_time >= %s
+                  AND killmail_time < %s
+                """,
+                (system_id, start_at, end_bound),
+            )
+            count_row = cur.fetchone()
+
+    kills_total = int(count_row[0] or 0) if count_row else 0
+    return {
+        "available": True,
+        "reason": None,
+        "coverage_from": coverage_min.isoformat(),
+        "coverage_to": coverage_max.isoformat(),
+        "kills_total": kills_total,
+        "kills_total_display": _format_history_count(kills_total),
+    }
+
+
 def _get_character_affiliation_history(character_id):
     character_id = int(character_id)
     rows = []
@@ -4710,7 +5253,7 @@ def entity_profile(request: Request, entity_type: str, entity_id: int):
     allowed_tabs = {"killboard", "pilotable-ships"}
     if entity_type in {"alliance", "corporation"}:
         allowed_tabs.add("population")
-    if entity_type in {"character", "corporation", "alliance"}:
+    if entity_type in {"character", "corporation", "alliance", "system"}:
         allowed_tabs.add("history")
     if requested_tab not in allowed_tabs:
         requested_tab = "killboard"
@@ -4776,7 +5319,29 @@ def entity_profile(request: Request, entity_type: str, entity_id: int):
             return _entity_route_error_response(request, exc)
 
     profile_menu = []
-    if profile and profile.get("entity_type") in {"character", "corporation", "alliance"}:
+    if profile and profile.get("entity_type") == "system":
+        base_url = f"/system/{profile['entity_id']}"
+        profile_menu = [
+            {
+                "id": None,
+                "menu_key": "killboard",
+                "label": "Killboard",
+                "href": base_url,
+                "icon": "☠",
+                "permission_key": "entities.view",
+                "active": requested_tab == "killboard",
+            },
+            {
+                "id": None,
+                "menu_key": "history",
+                "label": "History",
+                "href": f"{base_url}?tab=history",
+                "icon": "🕘",
+                "permission_key": "entities.view",
+                "active": requested_tab == "history",
+            },
+        ]
+    elif profile and profile.get("entity_type") in {"character", "corporation", "alliance"}:
         base_url = f"/{profile['entity_type']}/{profile['entity_id']}"
         profile_menu = [
             {
