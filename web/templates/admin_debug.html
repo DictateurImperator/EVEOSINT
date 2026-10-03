@@ -62,6 +62,10 @@
       </div>
     </div>
     <div class="muted-line small mt-2" id="sovEsiMeta">No ESI run yet.</div>
+    <details class="mt-2">
+      <summary class="small">ESI log</summary>
+      <pre class="log-viewer mt-2 mb-0" style="min-height:100px;max-height:220px;" id="sovEsiLog">Loading…</pre>
+    </details>
   </div>
 
   <div class="border border-secondary-subtle rounded-3 p-3">
@@ -261,21 +265,29 @@ async function refreshSovStatus(){
   }catch(e){}
 }
 
-async function refreshDotlanLog(){
+async function refreshSovLog(key, lines){
   try{
-    const r=await fetch('/admin/debug/api/sovereignty/log?job=dotlan&lines=350',{cache:'no-store'});
+    const r=await fetch('/admin/debug/api/sovereignty/log?job='+key+'&lines='+lines,{cache:'no-store'});
     if(!r.ok)return;
-    const target=document.getElementById('sovDotlanLog');
+    const target=document.getElementById(key==='esi'?'sovEsiLog':'sovDotlanLog');
+    if(!target)return;
     const atBottom=target.scrollTop+target.clientHeight+50>=target.scrollHeight;
     target.textContent=(await r.text())||'No log yet.';
     if(atBottom)target.scrollTop=target.scrollHeight;
   }catch(e){}
 }
 
-document.getElementById('sovRefreshLogs').addEventListener('click',refreshDotlanLog);
+async function refreshSovLogs(){
+  await Promise.all([
+    refreshSovLog('esi',250),
+    refreshSovLog('dotlan',350),
+  ]);
+}
+
+document.getElementById('sovRefreshLogs').addEventListener('click',refreshSovLogs);
 renderSov(sovState);
-refreshDotlanLog();
+refreshSovLogs();
 setInterval(refreshSovStatus,2500);
-setInterval(refreshDotlanLog,4000);
+setInterval(refreshSovLogs,4000);
 </script>
 {% endblock %}
