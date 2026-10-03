@@ -883,7 +883,7 @@ def main():
         flush=True,
     )
     print(
-        f"DOTLAN throttle: 1 request / {REQUEST_INTERVAL_SECONDS:.0f}s; "
+        f"DOTLAN throttle: {1.0 / REQUEST_INTERVAL_SECONDS:.2f} requests/s; "
         f"historical window: {MAX_WINDOW_DAYS} days difference max",
         flush=True,
     )
