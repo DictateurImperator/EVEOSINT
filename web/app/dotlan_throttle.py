@@ -6,7 +6,7 @@ import time
 from pathlib import Path
 
 
-REQUEST_INTERVAL_SECONDS = 3.0
+REQUEST_INTERVAL_SECONDS = 1.0 / 3.0
 _LOCK_FILE = Path(tempfile.gettempdir()) / "eveosint_dotlan_global.lock"
 _PROCESS_LOCK = threading.Lock()
 
