@@ -86,9 +86,11 @@ File: `scripts/import_sovereignty_dotlan.py`
 This downloads each source system page at
 `https://evemaps.dotlan.net/system/{system_name}` and extracts the
 **Sovereignty Changes** table, only for the **conquerable 0.0** SDE scope. This DOTLAN scope is intentionally narrower than the global ESI current-map ingestion. Records include source URL, date/time as displayed
-by DOTLAN, raw action, normalized action (GAIN/LOST/TRANSFER/LEVEL_CHANGE/OTHER),
-optional displayed Alliance and Corporation names/links, raw source cells,
-row index, fetch time and the EVEOSINT ownership convention active at that date.
+by DOTLAN, raw action and normalized semantic action
+(GAIN/LOST/LEVEL_CHANGE/OTHER), optional displayed Alliance and Corporation
+names/links, raw source cells, row index, fetch time and the EVEOSINT ownership
+convention active at that date. A raw DOTLAN `Transfer` is preserved in
+`action_raw`, but normalized into **LOST + GAIN** at the same timestamp.
 
 **Important:** This step stores DOTLAN **source events**, not reconstructed
 ownership intervals. A level-up/down event does not itself change the owner.
@@ -112,6 +114,13 @@ This is an explicit EVEOSINT analytical convention, not a claim that DOTLAN
 contains a complete historical IHub ownership feed. The public History pages
 will need to display that convention when this reconstructed SOV history is
 surfaced.
+
+For DOTLAN transfer rows, EVEOSINT reconstructs the previous owner from the
+older ownership context on the same system when available. If that previous
+owner cannot be established from the source history, the generated `LOST`
+event is retained with an unknown owner rather than inventing one. Existing
+legacy normalized `TRANSFER` rows are removed and their systems marked
+pending for a clean re-fetch under this rule.
 
 Use small batches first:
 
