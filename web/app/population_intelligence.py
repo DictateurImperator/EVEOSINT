@@ -306,14 +306,12 @@ def get_alliance_population_history(alliance_id):
     oldest_synced_date = sync_row[1].isoformat() if sync_row and sync_row[1] else (rows[0]["date"] if rows else None)
     last_synced_date = sync_row[2].isoformat() if sync_row and sync_row[2] else (rows[-1]["date"] if rows else None)
 
-    history_unavailable = bool(sync_row[5]) if sync_row and has_history_unavailable else False
-
     return {
         "alliance_id": alliance_id,
         "available": bool(rows),
-        "history_available": False if history_unavailable else (True if rows else None),
+        "history_available": True if rows else None,
         "source": "dotlan",
-        "initialization_done": bool(sync_row[3]) if sync_row else False,
+        "initialization_done": bool(sync_row[3]) and bool(rows) if sync_row else False,
         "first_available_date": first_available_date,
         "oldest_synced_date": oldest_synced_date,
         "last_synced_date": last_synced_date,
