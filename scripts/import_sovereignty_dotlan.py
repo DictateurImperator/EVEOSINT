@@ -688,23 +688,32 @@ def backfill_existing_alliance_ids(conn, session):
         urls = [row[0] for row in cur.fetchall()]
 
     updated = unresolved = 0
-    for alliance_url in urls:
+    for index, alliance_url in enumerate(urls, start=1):
         alliance_id = resolve_dotlan_alliance_url(conn, session, alliance_url)
         if alliance_id is None:
             unresolved += 1
-            continue
-        with conn.cursor() as cur:
-            cur.execute(
-                """
-                UPDATE sovereignty.dotlan_events
-                SET alliance_id = %s
-                WHERE alliance_url = %s
-                  AND alliance_id IS NULL
-                """,
-                (alliance_id, alliance_url),
+        else:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE sovereignty.dotlan_events
+                    SET alliance_id = %s
+                    WHERE alliance_url = %s
+                      AND alliance_id IS NULL
+                    """,
+                    (alliance_id, alliance_url),
+                )
+                updated += cur.rowcount
+            conn.commit()
+
+        if index % 25 == 0 or index == len(urls):
+            LOG.info(
+                "SOV_DOTLAN alliance_backfill progress=%d/%d rows_updated=%d unresolved_links=%d",
+                index,
+                len(urls),
+                updated,
+                unresolved,
             )
-            updated += cur.rowcount
-        conn.commit()
 
     if urls:
         LOG.info(
