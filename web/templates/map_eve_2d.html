@@ -448,14 +448,10 @@
     const NEUTRAL_OWNER = -2;
 
     const bestOwner = new Int32Array(count);
-    const secondOwner = new Int32Array(count);
     bestOwner.fill(NO_OWNER);
-    secondOwner.fill(NO_OWNER);
 
     const bestDist = new Float32Array(count);
-    const secondDist = new Float32Array(count);
     bestDist.fill(Infinity);
-    secondDist.fill(Infinity);
 
     const groupIndexById = new Map(
       influenceGroups.map((group, index) => [String(group.id), index])
@@ -471,27 +467,9 @@
     const radiusCells = Math.ceil(radiusPx);
 
     function recordCandidate(index, sourceOwner, distanceSq) {
-      if (sourceOwner === bestOwner[index]) {
-        if (distanceSq < bestDist[index]) bestDist[index] = distanceSq;
-        return;
-      }
-
-      if (sourceOwner === secondOwner[index]) {
-        if (distanceSq < secondDist[index]) secondDist[index] = distanceSq;
-        return;
-      }
-
       if (distanceSq < bestDist[index]) {
-        secondOwner[index] = bestOwner[index];
-        secondDist[index] = bestDist[index];
         bestOwner[index] = sourceOwner;
         bestDist[index] = distanceSq;
-        return;
-      }
-
-      if (distanceSq < secondDist[index]) {
-        secondOwner[index] = sourceOwner;
-        secondDist[index] = distanceSq;
       }
     }
 
@@ -519,38 +497,15 @@
       }
     });
 
-    // Build the territorial owner grid directly from the circles:
-    // same camp + same camp => continuous territory;
-    // different camps => frontier at the meeting point;
-    // neutral => invisible territory that blocks colour.
+    // Strict rule: among all circles covering a pixel, the closest system wins.
+    // Neutral winner => invisible/black. Owned winner => its camp colour.
+    // No artificial border or tie-zone is created.
     const ownerGrid = new Int32Array(count);
     ownerGrid.fill(NO_OWNER);
-    const boundaryWidth = 0.9;
 
     for (let index = 0; index < count; index++) {
-      const owner = bestOwner[index];
-      if (owner === NO_OWNER || !Number.isFinite(bestDist[index])) continue;
-
-      if (owner === NEUTRAL_OWNER) {
-        ownerGrid[index] = NEUTRAL_OWNER;
-        continue;
-      }
-
-      const rival = secondOwner[index];
-      if (
-        rival !== NO_OWNER
-        && rival !== owner
-        && Number.isFinite(secondDist[index])
-      ) {
-        const nearestDistance = Math.sqrt(bestDist[index]);
-        const rivalDistance = Math.sqrt(secondDist[index]);
-        if ((rivalDistance - nearestDistance) <= boundaryWidth) {
-          ownerGrid[index] = NEUTRAL_OWNER;
-          continue;
-        }
-      }
-
-      ownerGrid[index] = owner;
+      if (!Number.isFinite(bestDist[index])) continue;
+      ownerGrid[index] = bestOwner[index];
     }
 
     assignNeighbourAwareColors(ownerGrid, surfaceWidth, surfaceHeight);
