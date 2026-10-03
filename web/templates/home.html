@@ -1,15 +1,190 @@
 {% extends "base.html" %}
 
 {% block content %}
-<div class="d-flex justify-content-between align-items-start mb-4">
+<style>
+  .home-version-badge {
+    display:inline-flex;
+    align-items:center;
+    gap:.45rem;
+    padding:.38rem .7rem;
+    border:1px solid rgba(96,165,250,.32);
+    border-radius:999px;
+    background:rgba(37,99,235,.12);
+    color:#bfdbfe;
+    font-size:.78rem;
+    font-weight:800;
+    letter-spacing:.035em;
+    text-transform:uppercase;
+  }
+
+  .changelog-version {
+    border:1px solid rgba(148,163,184,.18);
+    border-radius:16px;
+    background:rgba(15,23,42,.42);
+    overflow:hidden;
+  }
+
+  .changelog-version-head {
+    display:flex;
+    flex-wrap:wrap;
+    align-items:center;
+    justify-content:space-between;
+    gap:.8rem 1.2rem;
+    padding:1rem 1.1rem;
+    border-bottom:1px solid rgba(148,163,184,.16);
+    background:rgba(15,23,42,.70);
+  }
+
+  .changelog-version-title {
+    display:flex;
+    flex-wrap:wrap;
+    align-items:center;
+    gap:.65rem;
+  }
+
+  .changelog-status {
+    display:inline-flex;
+    align-items:center;
+    padding:.25rem .55rem;
+    border-radius:999px;
+    background:rgba(245,158,11,.14);
+    border:1px solid rgba(245,158,11,.30);
+    color:#fde68a;
+    font-size:.72rem;
+    font-weight:800;
+    text-transform:uppercase;
+    letter-spacing:.04em;
+  }
+
+  .changelog-grid {
+    display:grid;
+    grid-template-columns:repeat(2,minmax(0,1fr));
+    gap:1rem;
+    padding:1rem;
+  }
+
+  .changelog-group {
+    min-width:0;
+    padding:.95rem 1rem;
+    border:1px solid rgba(148,163,184,.14);
+    border-radius:12px;
+    background:rgba(2,6,23,.30);
+  }
+
+  .changelog-group h3 {
+    margin:0 0 .65rem;
+    color:#dbeafe;
+    font-size:.9rem;
+    font-weight:850;
+    letter-spacing:.035em;
+    text-transform:uppercase;
+  }
+
+  .changelog-group ul {
+    margin:0;
+    padding-left:1.15rem;
+  }
+
+  .changelog-group li {
+    margin:.38rem 0;
+    color:#cbd5e1;
+    line-height:1.45;
+  }
+
+  .changelog-base {
+    padding:.8rem 1.1rem;
+    border-top:1px solid rgba(148,163,184,.14);
+    color:#738197;
+    font-size:.78rem;
+  }
+
+  @media(max-width:900px) {
+    .changelog-grid { grid-template-columns:1fr; }
+  }
+</style>
+
+<div class="d-flex justify-content-between align-items-start gap-3 flex-wrap mb-4">
   <div>
     <h1 class="h3 fw-bold mb-1">Home</h1>
     <div class="muted-line">Active session : {{ username }}</div>
   </div>
+  <div class="home-version-badge">EVEOSINT changelog</div>
 </div>
 
+<section class="content-card p-3 p-md-4 mb-4">
+  <div class="d-flex justify-content-between align-items-start gap-3 flex-wrap">
+    <div>
+      <h2 class="h5 mb-1">EVEOSINT</h2>
+      <div class="muted-line">Operational web interface.</div>
+    </div>
+    <div class="muted-line small">Latest development changes are listed below.</div>
+  </div>
+</section>
+
 <section class="content-card p-3 p-md-4">
-  <h2 class="h5 mb-2">EVEOSINT</h2>
-  <div class="muted-line">Operational web interface.</div>
+  <div class="d-flex justify-content-between align-items-end gap-3 flex-wrap mb-3">
+    <div>
+      <h2 class="h5 fw-bold mb-1">Changelog</h2>
+      <div class="muted-line">Changes between published versions.</div>
+    </div>
+  </div>
+
+  <article class="changelog-version">
+    <div class="changelog-version-head">
+      <div class="changelog-version-title">
+        <span class="fw-bold">0.1.2</span>
+        <span class="changelog-status">In development</span>
+      </div>
+      <div class="muted-line small">Changes since 0.1.1</div>
+    </div>
+
+    <div class="changelog-grid">
+      <section class="changelog-group">
+        <h3>Sovereignty Intelligence</h3>
+        <ul>
+          <li>Added the CCP ESI current sovereignty collector using the current sovereignty systems endpoint.</li>
+          <li>Current sovereignty now stores the complete K-space snapshot returned by CCP, including explicit unclaimed systems.</li>
+          <li>Added a resumable, globally throttled DOTLAN sovereignty-history importer for conquerable nullsec systems.</li>
+          <li>Historical ownership is reconstructed across legacy SOV, IHub and SovHub eras.</li>
+          <li>Ownership changes are normalized as <strong>LOST</strong> + <strong>GAIN</strong>; no direct transfer is inferred from snapshot polling.</li>
+        </ul>
+      </section>
+
+      <section class="changelog-group">
+        <h3>System History</h3>
+        <ul>
+          <li>Added a History view to solar-system profiles, based on the existing Player History interface.</li>
+          <li>System sovereignty history displays Alliance and historical root Coalition periods.</li>
+          <li>Unclaimed periods are displayed explicitly.</li>
+          <li>Each period calculates total kills in the system and its share of the system's recorded kill activity.</li>
+          <li>System pages now link directly between Map, Killboard and History views.</li>
+        </ul>
+      </section>
+
+      <section class="changelog-group">
+        <h3>Entity History & Analysis</h3>
+        <ul>
+          <li>Added historical Coalition segmentation to Character, Corporation and Alliance histories.</li>
+          <li>Nested coalitions resolve to their effective root coalition, with INCLUDE / EXCLUDE history respected.</li>
+          <li>Coalition logos are now shown in affiliation history when available.</li>
+          <li>Affiliation timelines are interactive.</li>
+          <li>SuperIntel Evolution and Ship Analysis charts are now interactive.</li>
+        </ul>
+      </section>
+
+      <section class="changelog-group">
+        <h3>Admin, Debug & Reliability</h3>
+        <ul>
+          <li>Added Admin Debug launch, stop, status and live-log controls for ESI and DOTLAN sovereignty collectors.</li>
+          <li>Added sovereignty SQL inspection, direct current ESI snapshot inspection and copy-to-clipboard controls for collector logs.</li>
+          <li>Added an independent systemd job/timer for current sovereignty collection.</li>
+          <li>Added cache / ETag / Expires handling, incomplete-snapshot guards and DOTLAN Retry-After protection.</li>
+          <li>Added offline sovereignty collector tests and migration handling for the new CCP sovereignty endpoint.</li>
+        </ul>
+      </section>
+    </div>
+
+    <div class="changelog-base">Base release: 0.1.1</div>
+  </article>
 </section>
 {% endblock %}
