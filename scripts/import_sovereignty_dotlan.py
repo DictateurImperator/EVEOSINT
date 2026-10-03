@@ -15,7 +15,7 @@ import time
 from datetime import date, datetime, timezone
 from html.parser import HTMLParser
 from pathlib import Path
-from urllib.parse import quote, unquote, urljoin
+from urllib.parse import quote, unquote, urljoin, urlparse
 
 import psycopg2
 from psycopg2.extras import execute_values
@@ -169,10 +169,25 @@ def entity_cell(cells, prefix, action_pos):
     return None, None
 
 
+def alliance_id_from_url(alliance_url):
+    """Return an AllianceID only when DOTLAN encoded it directly in the link."""
+    if not alliance_url:
+        return None
+    try:
+        path = urlparse(str(alliance_url)).path.rstrip("/")
+    except ValueError:
+        return None
+    if not path:
+        return None
+    candidate = unquote(path.rsplit("/", 1)[-1])
+    return int(candidate) if candidate.isdigit() else None
+
+
 def _event_owner(event):
     if not event:
         return None
     values = (
+        event.get("alliance_id"),
         event.get("alliance_name"),
         event.get("alliance_url"),
         event.get("corporation_name"),
@@ -184,12 +199,14 @@ def _event_owner(event):
 def _with_owner(event, owner):
     item = dict(event)
     if owner is None:
+        item["alliance_id"] = None
         item["alliance_name"] = None
         item["alliance_url"] = None
         item["corporation_name"] = None
         item["corporation_url"] = None
     else:
         (
+            item["alliance_id"],
             item["alliance_name"],
             item["alliance_url"],
             item["corporation_name"],
@@ -312,6 +329,7 @@ def parse_events(html, system_id, url):
             "action": classification(action),
             "action_raw": action,
             "ownership_model": ownership_model(event_at),
+            "alliance_id": alliance_id_from_url(alliance_url),
             "alliance_name": alliance_name,
             "alliance_url": alliance_url,
             "corporation_name": corporation_name,
@@ -384,6 +402,7 @@ def ensure_tables(conn):
                 ownership_model TEXT,
                 alliance_name TEXT,
                 alliance_url TEXT,
+                alliance_id BIGINT,
                 corporation_name TEXT,
                 corporation_url TEXT,
                 raw_cells JSONB NOT NULL,
@@ -396,6 +415,10 @@ def ensure_tables(conn):
         cur.execute("""
             ALTER TABLE sovereignty.dotlan_events
             ADD COLUMN IF NOT EXISTS ownership_model TEXT
+        """)
+        cur.execute("""
+            ALTER TABLE sovereignty.dotlan_events
+            ADD COLUMN IF NOT EXISTS alliance_id BIGINT
         """)
         cur.execute("""
             UPDATE sovereignty.dotlan_events
@@ -421,6 +444,19 @@ def ensure_tables(conn):
         cur.execute("""
             CREATE INDEX IF NOT EXISTS sov_dotlan_events_date_idx
             ON sovereignty.dotlan_events (event_at DESC)
+        """)
+        cur.execute("""
+            CREATE INDEX IF NOT EXISTS sov_dotlan_events_alliance_idx
+            ON sovereignty.dotlan_events (alliance_id)
+        """)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS sovereignty.dotlan_alliance_refs (
+                alliance_url TEXT PRIMARY KEY,
+                alliance_id BIGINT,
+                resolved_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                last_status TEXT NOT NULL,
+                last_error TEXT
+            )
         """)
         cur.execute("""
             CREATE TABLE IF NOT EXISTS sovereignty.dotlan_system_sync (
@@ -555,6 +591,131 @@ def fetch_page(session, url):
     raise RuntimeError("DOTLAN retries exhausted")
 
 
+def parse_dotlan_alliance_id(html):
+    """Read AllianceID from the exact DOTLAN alliance page reached by its link."""
+    plain = normalized(re.sub(r"<[^>]*>", " ", html))
+    match = re.search(r"\bAllianceID\s+(\d+)\b", plain, flags=re.I)
+    if not match:
+        raise ValueError("DOTLAN alliance page missing AllianceID")
+    return int(match.group(1))
+
+
+def _cache_alliance_ref(conn, alliance_url, alliance_id, status, error=None):
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO sovereignty.dotlan_alliance_refs (
+                alliance_url, alliance_id, resolved_at, last_status, last_error
+            ) VALUES (%s, %s, NOW(), %s, %s)
+            ON CONFLICT (alliance_url) DO UPDATE SET
+                alliance_id=EXCLUDED.alliance_id,
+                resolved_at=EXCLUDED.resolved_at,
+                last_status=EXCLUDED.last_status,
+                last_error=EXCLUDED.last_error
+            """,
+            (alliance_url, alliance_id, status, str(error)[:500] if error else None),
+        )
+    conn.commit()
+
+
+def resolve_dotlan_alliance_url(conn, session, alliance_url):
+    """Resolve only from the DOTLAN link. Alliance names are never used as identifiers."""
+    if not alliance_url:
+        return None
+
+    direct_id = alliance_id_from_url(alliance_url)
+    if direct_id is not None:
+        _cache_alliance_ref(conn, alliance_url, direct_id, "ok")
+        return direct_id
+
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT alliance_id
+            FROM sovereignty.dotlan_alliance_refs
+            WHERE alliance_url = %s
+              AND last_status = 'ok'
+              AND alliance_id IS NOT NULL
+            """,
+            (alliance_url,),
+        )
+        cached = cur.fetchone()
+    if cached:
+        return int(cached[0])
+
+    try:
+        alliance_html = fetch_page(session, alliance_url)
+        alliance_id = parse_dotlan_alliance_id(alliance_html)
+    except Exception as exc:
+        _cache_alliance_ref(conn, alliance_url, None, "failed", exc)
+        LOG.warning(
+            "SOV_DOTLAN alliance_ref url=%s status=failed error=%s",
+            alliance_url,
+            exc,
+        )
+        return None
+
+    _cache_alliance_ref(conn, alliance_url, alliance_id, "ok")
+    return alliance_id
+
+
+def resolve_event_alliance_ids(conn, session, events):
+    resolved = {}
+    for item in events:
+        alliance_url = item.get("alliance_url")
+        if not alliance_url:
+            item["alliance_id"] = None
+            continue
+        if alliance_url not in resolved:
+            resolved[alliance_url] = resolve_dotlan_alliance_url(conn, session, alliance_url)
+        item["alliance_id"] = resolved[alliance_url]
+    return events
+
+
+def backfill_existing_alliance_ids(conn, session):
+    """Repair existing SOV rows from their stored DOTLAN links, never from names."""
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT DISTINCT alliance_url
+            FROM sovereignty.dotlan_events
+            WHERE alliance_id IS NULL
+              AND alliance_url IS NOT NULL
+              AND alliance_url <> ''
+            ORDER BY alliance_url
+            """
+        )
+        urls = [row[0] for row in cur.fetchall()]
+
+    updated = unresolved = 0
+    for alliance_url in urls:
+        alliance_id = resolve_dotlan_alliance_url(conn, session, alliance_url)
+        if alliance_id is None:
+            unresolved += 1
+            continue
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE sovereignty.dotlan_events
+                SET alliance_id = %s
+                WHERE alliance_url = %s
+                  AND alliance_id IS NULL
+                """,
+                (alliance_id, alliance_url),
+            )
+            updated += cur.rowcount
+        conn.commit()
+
+    if urls:
+        LOG.info(
+            "SOV_DOTLAN alliance_backfill links=%d rows_updated=%d unresolved_links=%d",
+            len(urls),
+            updated,
+            unresolved,
+        )
+    return updated, unresolved
+
+
 def save_system(conn, system_id, name, url, html, events):
     fetched = datetime.now(timezone.utc)
     digest = hashlib.sha256(html.encode("utf-8")).hexdigest()
@@ -565,7 +726,7 @@ def save_system(conn, system_id, name, url, html, events):
             execute_values(cur, """
                 INSERT INTO sovereignty.dotlan_events (
                     system_id, event_hash, event_at, action, action_raw, ownership_model,
-                    alliance_name, alliance_url, corporation_name, corporation_url,
+                    alliance_name, alliance_url, alliance_id, corporation_name, corporation_url,
                     raw_cells, row_position, source_url, fetched_at
                 ) VALUES %s
                 ON CONFLICT (system_id, event_hash) DO NOTHING
@@ -573,7 +734,7 @@ def save_system(conn, system_id, name, url, html, events):
                 (
                     system_id, item["event_hash"], item["event_at"],
                     item["action"], item["action_raw"], item["ownership_model"],
-                    item["alliance_name"], item["alliance_url"],
+                    item["alliance_name"], item["alliance_url"], item.get("alliance_id"),
                     item["corporation_name"], item["corporation_url"],
                     json.dumps(item["raw_cells"], ensure_ascii=False),
                     item["row_position"], url, fetched,
@@ -665,12 +826,14 @@ def main():
                     "Accept": "text/html,application/xhtml+xml",
                     "Accept-Language": "en-US,en;q=0.8",
                 })
+                backfill_existing_alliance_ids(conn, session)
                 for system_id, name in pending:
                     path = "/system/" + quote(name.replace(" ", "_"), safe="-_")
                     url = urljoin(BASE_URL, path)
                     try:
                         html = fetch_page(session, url)
                         events = parse_events(html, system_id, url)
+                        resolve_event_alliance_ids(conn, session, events)
                         save_system(conn, system_id, name, url, html, events)
                         ok += 1
                         total_events += len(events)
