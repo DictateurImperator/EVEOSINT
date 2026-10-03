@@ -465,7 +465,13 @@ def system_names(conn, scope, selected, claimable=None):
     current_ids = set()
     if scope == "current":
         with conn.cursor() as cur:
-            cur.execute("SELECT system_id FROM sovereignty.current_map")
+            cur.execute("""
+                SELECT system_id
+                FROM sovereignty.current_map
+                WHERE alliance_id IS NOT NULL
+                   OR corporation_id IS NOT NULL
+                   OR faction_id IS NOT NULL
+            """)
             current_ids = {int(row[0]) for row in cur.fetchall()}
         if not current_ids and not selected:
             raise RuntimeError("Current SOV table empty: run sync_sovereignty_esi.py first")
