@@ -652,6 +652,16 @@ def get_eve_2d_influence(target_date=None, grouping="coalition"):
             for alliance_id in members:
                 alliance_to_group.setdefault(int(alliance_id), group_id)
 
+        unaligned_group_id = "coalition:none"
+        groups[unaligned_group_id] = {
+            "id": unaligned_group_id,
+            "entity_type": "coalition",
+            "entity_id": None,
+            "name": "Sans coalition",
+            "color": "hsl(0 0% 100%)",
+            "system_ids": [],
+        }
+
         for system_id, owner in owners.items():
             if int(system_id) not in topology["systems"]:
                 continue
@@ -659,18 +669,7 @@ def get_eve_2d_influence(target_date=None, grouping="coalition"):
             if alliance_id is None:
                 continue
 
-            group_id = alliance_to_group.get(int(alliance_id))
-            if group_id is None:
-                group_id = f"alliance:{alliance_id}"
-                if group_id not in groups:
-                    groups[group_id] = {
-                        "id": group_id,
-                        "entity_type": "alliance",
-                        "entity_id": int(alliance_id),
-                        "name": alliance_names.get(int(alliance_id), f"Alliance {alliance_id}"),
-                        "color": _influence_color(int(alliance_id)),
-                        "system_ids": [],
-                    }
+            group_id = alliance_to_group.get(int(alliance_id), unaligned_group_id)
             groups[group_id]["system_ids"].append(int(system_id))
 
     result_groups = [
