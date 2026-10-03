@@ -74,6 +74,15 @@
               Mettre à jour les alliances actives
             </button>
           </form>
+        {% elif job.type == "sovereignty_esi" %}
+          <div class="small muted-line mb-3">
+            Met à jour la souveraineté courante depuis CCP ESI.
+          </div>
+          <form method="post" action="/admin/jobs/sovereignty-esi/run" class="mb-3">
+            <button type="submit" class="btn btn-primary" {% if not job.enabled or job.running %}disabled{% endif %}>
+              Mettre à jour la SOV ESI
+            </button>
+          </form>
         {% elif job.type == "sde" %}
           <form method="post" action="/admin/jobs/sde/run" class="mb-3">
             <button type="submit" class="btn btn-primary" {% if not job.enabled or job.running %}disabled{% endif %}>
