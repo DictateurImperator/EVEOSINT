@@ -59,6 +59,38 @@
 <section class="content-card p-3 p-md-4 mb-4">
   <div class="d-flex justify-content-between align-items-center mb-2">
     <div>
+      <h2 class="h5 mb-1">Next update will run</h2>
+      <div class="muted-line small">Loaded from the current pipeline definition, not from the previous run.</div>
+    </div>
+  </div>
+  {% if pipeline.next_plan.error %}
+    <div class="small text-danger">{{ pipeline.next_plan.error }}</div>
+  {% elif pipeline.next_plan.steps %}
+    {% for step in pipeline.next_plan.steps %}
+      <div class="pipeline-step">
+        <div class="pipeline-num">{{ loop.index }}</div>
+        <div class="min-w-0">
+          <div class="fw-semibold">{{ step.label }}</div>
+          <div class="pipeline-command" title="{{ (step.command or []) | join(' ') }}">
+            {% if step.command %}
+              {{ step.command | join(' ') }}
+            {% else %}
+              Command resolved at runtime.
+            {% endif %}
+          </div>
+        </div>
+        <div class="step-status"><span class="badge text-bg-secondary">{{ step.group }}</span></div>
+        <div class="step-time text-end small muted-line">planned</div>
+      </div>
+    {% endfor %}
+  {% else %}
+    <div class="muted-line py-3">No update steps found.</div>
+  {% endif %}
+</section>
+
+<section class="content-card p-3 p-md-4 mb-4">
+  <div class="d-flex justify-content-between align-items-center mb-2">
+    <div>
       <h2 class="h5 mb-1">Current / latest run</h2>
       <div id="runMeta" class="muted-line small">{{ pipeline.run_id or 'No run yet' }}</div>
     </div>
