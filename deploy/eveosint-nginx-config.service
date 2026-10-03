@@ -1,0 +1,13 @@
+[Unit]
+Description=EVEOSINT Nginx configuration worker
+After=network.target
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+WorkingDirectory=/home/ubuntu/eveosint
+ExecStart=/home/ubuntu/eveosint/venv/bin/python /home/ubuntu/eveosint/web/app/nginx_config.py run-request
+Environment=PYTHONUNBUFFERED=1
+UMask=0077
+TimeoutStartSec=1min
