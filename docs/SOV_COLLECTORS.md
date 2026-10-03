@@ -21,19 +21,17 @@ row from `sovereignty.current_map`, its normalized DOTLAN history from
 
 File: `scripts/sync_sovereignty_esi.py`
 
-- One public GET: `https://esi.evetech.net/latest/sovereignty/map/?datasource=tranquility`. The response is stored **globally as returned by ESI**; no local nullsec purge/filter is applied at ingestion time.
+- One public GET: `https://esi.evetech.net/sovereignty/systems` with `X-Tenant: tranquility`. This is CCP's current combined sovereignty route. EVEOSINT keeps every K-space row returned by ESI; no local nullsec purge/filter is applied at ingestion time.
 - No OAuth, API key, scraping or pagination.
 - Identifiable User-Agent (app, version and public source URL) and pinned
   `X-Compatibility-Date: 2026-09-28`.
-- Obeys the `Expires` HTTP cache header (never requests early); sends the
-  previous full `ETag` as `If-None-Match` after expiry and handles 304 without
-  reloading the map.
+- Reuses CCP cache metadata: if an `Expires` header is supplied it is honored; the previous `ETag` is sent as `If-None-Match` and 304 is handled without reloading the map.
 - Honors CCP's `Retry-After`, old error-budget headers and transient 5xx
   backoff. A short/broken payload, transport failure or HTTP error does **not**
   delete or replace the existing map.
-- `sovereignty.current_map` is the complete current ESI sovereignty response.
+- `sovereignty.current_map` stores the current ownership state for every K-space system returned by `/sovereignty/systems`, including explicit unclaimed rows.
 - `sovereignty.map_changes` stores **only detected changes** between two complete responses: `GAIN` and `LOST`. If an owner tuple changes between snapshots, EVEOSINT records `LOST` for the previous owner plus `GAIN` for the new owner; it does **not** infer a direct transfer. Unchanged systems create no history row.
-- The first complete global snapshot is a **baseline** and creates no synthetic history. This also prevents the previous filtered EVEOSINT state from generating false `GAIN` rows when upgrading.
+- The first complete `/sovereignty/systems` snapshot is a **baseline** and creates no synthetic history. The scope marker changes on this migration so the old `/sovereignty/map` dataset cannot generate false `GAIN`/`LOST` rows.
 - Current-state replacement and change inserts are committed in the same transaction.
 - Persistent advisory lock prevents overlapping ESI collector executions.
 
@@ -45,7 +43,7 @@ cd /home/ubuntu/eveosint
 ```
 
 The script creates `sovereignty.current_map` (system_id, alliance_id,
-corporation_id, faction_id, observed_at, source), `sovereignty.map_changes`
+corporation_id, faction_id, unclaimed, observed_at, source), `sovereignty.map_changes`
 (delta history), and `sovereignty.esi_map_state` (cache state, scope marker and
 last HTTP status) if missing.
 
@@ -69,7 +67,9 @@ not treated as a guarantee the cache expired.
 Check current data:
 
 ```sql
-SELECT COUNT(*) AS claimed_systems, MAX(observed_at) AS source_observed_at
+SELECT COUNT(*) AS kspace_systems,
+       COUNT(*) FILTER (WHERE unclaimed) AS unclaimed_systems,
+       MAX(observed_at) AS source_observed_at
 FROM sovereignty.current_map;
 
 SELECT etag, expires_at, fetched_at, row_count, last_status, map_scope
@@ -182,6 +182,7 @@ before a full historical crawl.
 References:
 
 - CCP ESI: https://developers.eveonline.com/docs/services/esi/best-practices/
+- CCP Equinox ESI sovereignty systems route: https://developers.eveonline.com/blog/equinox-on-esi-structures-sovereignty-and-access-lists
 - CCP limits: https://developers.eveonline.com/docs/services/esi/rate-limiting/
 - CCP static-data ID ranges: https://developers.eveonline.com/docs/guides/id-ranges/
 - CCP Equinox sovereignty transition: https://support.eveonline.com/hc/en-us/articles/14189361268636-Equinox-Sovereignty-Updates
