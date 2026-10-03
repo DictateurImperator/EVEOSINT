@@ -125,6 +125,111 @@
 <section class="content-card p-3 p-md-4 mb-4">
   <div class="d-flex flex-wrap justify-content-between align-items-start gap-3 mb-3">
     <div>
+      <h2 class="h5 fw-bold mb-1">Current ESI snapshot · SQL</h2>
+      <div class="muted-line small">Direct view of what the last ESI baseline/run inserted into <code>sovereignty.current_map</code>.</div>
+    </div>
+    {% if esi_snapshot.available %}
+    <span class="badge text-bg-secondary">{{ esi_snapshot.total }} rows</span>
+    {% endif %}
+  </div>
+
+  {% if esi_snapshot.available %}
+  <div class="debug-grid mb-4">
+    <div class="debug-stat">
+      <div class="muted-line small">Total K-space rows</div>
+      <div class="value">{{ esi_snapshot.total }}</div>
+    </div>
+    <div class="debug-stat">
+      <div class="muted-line small">Alliance claimed</div>
+      <div class="value">{{ esi_snapshot.alliance_claimed }}</div>
+    </div>
+    <div class="debug-stat">
+      <div class="muted-line small">Faction claimed</div>
+      <div class="value">{{ esi_snapshot.faction_claimed }}</div>
+    </div>
+    <div class="debug-stat">
+      <div class="muted-line small">Unclaimed</div>
+      <div class="value">{{ esi_snapshot.unclaimed }}</div>
+    </div>
+  </div>
+
+  <form method="get" action="/admin/debug" class="row g-2 mb-4">
+    <div class="col-lg-10">
+      <label class="form-label small" for="esiSnapshotSystem">Inspect one current ESI row</label>
+      <select class="form-select" id="esiSnapshotSystem" name="esi_system_id">
+        <option value="">Choose a system…</option>
+        {% for system in esi_snapshot.systems %}
+        <option value="{{ system.system_id }}" {% if esi_snapshot.selected and esi_snapshot.selected.system_id == system.system_id %}selected{% endif %}>
+          {{ system.system_name }} · {{ system.system_id }}
+        </option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="col-lg-2 d-flex align-items-end">
+      <button class="btn btn-primary w-100" type="submit">Inspect row</button>
+    </div>
+  </form>
+
+  {% if esi_snapshot.selected %}
+  {% set esi_selected = esi_snapshot.selected %}
+  <div class="sov-stat mb-4">
+    <div class="muted-line small">Selected row</div>
+    <div class="value">{{ esi_selected.system_name }} · {{ esi_selected.system_id }}</div>
+    {% if esi_selected.unclaimed %}
+    <div class="small mt-1">Unclaimed</div>
+    {% else %}
+    <div class="small mt-1">
+      Alliance {{ esi_selected.alliance_id or '—' }} ·
+      Corporation {{ esi_selected.corporation_id or '—' }} ·
+      Faction {{ esi_selected.faction_id or '—' }}
+    </div>
+    {% endif %}
+    <div class="muted-line small mt-1">Observed: {{ esi_selected.observed_at or '—' }}</div>
+  </div>
+  {% endif %}
+
+  <div class="d-flex justify-content-between align-items-center gap-2 mb-2">
+    <h3 class="h6 fw-bold mb-0">First 100 rows from <code>sovereignty.current_map</code></h3>
+    <span class="muted-line small">ordered by system name</span>
+  </div>
+  <div class="table-responsive">
+    <table class="table table-dark table-hover table-sm history-table align-middle mb-0">
+      <thead>
+        <tr>
+          <th>System</th>
+          <th>System ID</th>
+          <th>Alliance</th>
+          <th>Corporation</th>
+          <th>Faction</th>
+          <th>Unclaimed</th>
+          <th>Observed</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in esi_snapshot.rows %}
+        <tr>
+          <td>{{ row.system_name }}</td>
+          <td>{{ row.system_id }}</td>
+          <td>{{ row.alliance_id or '—' }}</td>
+          <td>{{ row.corporation_id or '—' }}</td>
+          <td>{{ row.faction_id or '—' }}</td>
+          <td>{% if row.unclaimed %}<span class="badge text-bg-secondary">yes</span>{% else %}—{% endif %}</td>
+          <td>{{ row.observed_at }}</td>
+        </tr>
+        {% else %}
+        <tr><td colspan="7" class="muted-line">No current ESI row stored.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <div class="muted-line">No <code>sovereignty.current_map</code> table yet. Run the ESI collector first.</div>
+  {% endif %}
+</section>
+
+<section class="content-card p-3 p-md-4 mb-4">
+  <div class="d-flex flex-wrap justify-content-between align-items-start gap-3 mb-3">
+    <div>
       <h2 class="h5 fw-bold mb-1">Sovereignty SQL inspector</h2>
       <div class="muted-line small">Select a system already entered by the DOTLAN importer and inspect exactly what is stored in SQL.</div>
     </div>
