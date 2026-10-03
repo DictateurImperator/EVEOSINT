@@ -98,9 +98,11 @@ def _sovereignty_debug_inspection(system_id=None):
             )
             current_columns = (
                 """
+                cm.system_id,
                 cm.alliance_id,
                 cm.corporation_id,
                 cm.faction_id,
+                cm.unclaimed,
                 cm.observed_at
                 """
                 if current_table
@@ -108,6 +110,8 @@ def _sovereignty_debug_inspection(system_id=None):
                 NULL::BIGINT,
                 NULL::BIGINT,
                 NULL::BIGINT,
+                NULL::BIGINT,
+                NULL::BOOLEAN,
                 NULL::TIMESTAMPTZ
                 """
             )
@@ -138,10 +142,12 @@ def _sovereignty_debug_inspection(system_id=None):
                     "fetched_at": row[4],
                     "last_status": row[5],
                     "last_error": row[6],
-                    "current_alliance_id": row[7],
-                    "current_corporation_id": row[8],
-                    "current_faction_id": row[9],
-                    "current_observed_at": row[10],
+                    "current_row_exists": row[7] is not None,
+                    "current_alliance_id": row[8],
+                    "current_corporation_id": row[9],
+                    "current_faction_id": row[10],
+                    "current_unclaimed": row[11],
+                    "current_observed_at": row[12],
                 }
 
         if selected and events_table:
