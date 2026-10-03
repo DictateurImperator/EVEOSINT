@@ -42,16 +42,20 @@ class EsiDeltaTests(unittest.TestCase):
         }
 
         changes = build_changes(previous, current, observed)
-        by_system = {row[0]: row for row in changes}
+        by_system = {}
+        for row in changes:
+            by_system.setdefault(row[0], []).append(row)
 
         self.assertEqual(set(by_system), {30000002, 30000003, 30000004})
-        self.assertEqual(by_system[30000002][1], "TRANSFER")
-        self.assertEqual(by_system[30000002][2:8], (1002, None, None, 2002, None, None))
-        self.assertEqual(by_system[30000003][1], "LOST")
-        self.assertEqual(by_system[30000003][2:8], (1003, None, None, None, None, None))
-        self.assertEqual(by_system[30000004][1], "GAIN")
-        self.assertEqual(by_system[30000004][2:8], (None, None, None, 1004, None, None))
+        self.assertEqual([row[1] for row in by_system[30000002]], ["LOST", "GAIN"])
+        self.assertEqual(by_system[30000002][0][2:8], (1002, None, None, None, None, None))
+        self.assertEqual(by_system[30000002][1][2:8], (None, None, None, 2002, None, None))
+        self.assertEqual(by_system[30000003][0][1], "LOST")
+        self.assertEqual(by_system[30000003][0][2:8], (1003, None, None, None, None, None))
+        self.assertEqual(by_system[30000004][0][1], "GAIN")
+        self.assertEqual(by_system[30000004][0][2:8], (None, None, None, 1004, None, None))
         self.assertTrue(all(row[8] == observed for row in changes))
+        self.assertNotIn("TRANSFER", [row[1] for row in changes])
 
     def test_unchanged_map_produces_no_history(self):
         from datetime import datetime, timezone
