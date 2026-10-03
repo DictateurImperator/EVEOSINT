@@ -26,6 +26,136 @@ router = APIRouter()
 
 
 
+def _esi_snapshot_inspection(selected_system_id=None):
+    output = {
+        "available": False,
+        "total": 0,
+        "alliance_claimed": 0,
+        "faction_claimed": 0,
+        "unclaimed": 0,
+        "systems": [],
+        "rows": [],
+        "selected": None,
+    }
+
+    with db() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT
+                    to_regclass('sovereignty.current_map'),
+                    to_regclass('public.sde_mapsolarsystems')
+            """)
+            current_table, sde_table = cur.fetchone()
+
+        if not current_table:
+            return output
+
+        output["available"] = True
+
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT
+                    COUNT(*) AS total,
+                    COUNT(*) FILTER (WHERE alliance_id IS NOT NULL) AS alliance_claimed,
+                    COUNT(*) FILTER (WHERE faction_id IS NOT NULL) AS faction_claimed,
+                    COUNT(*) FILTER (
+                        WHERE alliance_id IS NULL
+                          AND corporation_id IS NULL
+                          AND faction_id IS NULL
+                    ) AS unclaimed
+                FROM sovereignty.current_map
+            """)
+            row = cur.fetchone()
+            output.update({
+                "total": int(row[0] or 0),
+                "alliance_claimed": int(row[1] or 0),
+                "faction_claimed": int(row[2] or 0),
+                "unclaimed": int(row[3] or 0),
+            })
+
+        if sde_table:
+            name_expr = "COALESCE(s.data->'name'->>'en', 'System ' || cm.system_id::text)"
+            join_sql = "LEFT JOIN public.sde_mapsolarsystems s ON s.sde_key::bigint = cm.system_id"
+        else:
+            name_expr = "'System ' || cm.system_id::text"
+            join_sql = ""
+
+        with conn.cursor() as cur:
+            cur.execute(f"""
+                SELECT cm.system_id, {name_expr} AS system_name
+                FROM sovereignty.current_map cm
+                {join_sql}
+                ORDER BY LOWER({name_expr}), cm.system_id
+            """)
+            output["systems"] = [
+                {
+                    "system_id": int(row[0]),
+                    "system_name": row[1],
+                }
+                for row in cur.fetchall()
+            ]
+
+        with conn.cursor() as cur:
+            cur.execute(f"""
+                SELECT
+                    cm.system_id,
+                    {name_expr} AS system_name,
+                    cm.alliance_id,
+                    cm.corporation_id,
+                    cm.faction_id,
+                    cm.observed_at
+                FROM sovereignty.current_map cm
+                {join_sql}
+                ORDER BY LOWER({name_expr}), cm.system_id
+                LIMIT 100
+            """)
+            output["rows"] = [
+                {
+                    "system_id": int(row[0]),
+                    "system_name": row[1],
+                    "alliance_id": row[2],
+                    "corporation_id": row[3],
+                    "faction_id": row[4],
+                    "unclaimed": row[2] is None and row[3] is None and row[4] is None,
+                    "observed_at": row[5],
+                }
+                for row in cur.fetchall()
+            ]
+
+        try:
+            selected_system_id = int(selected_system_id) if selected_system_id else None
+        except (TypeError, ValueError):
+            selected_system_id = None
+
+        if selected_system_id is not None:
+            with conn.cursor() as cur:
+                cur.execute(f"""
+                    SELECT
+                        cm.system_id,
+                        {name_expr} AS system_name,
+                        cm.alliance_id,
+                        cm.corporation_id,
+                        cm.faction_id,
+                        cm.observed_at
+                    FROM sovereignty.current_map cm
+                    {join_sql}
+                    WHERE cm.system_id = %s
+                """, (selected_system_id,))
+                row = cur.fetchone()
+                if row:
+                    output["selected"] = {
+                        "system_id": int(row[0]),
+                        "system_name": row[1],
+                        "alliance_id": row[2],
+                        "corporation_id": row[3],
+                        "faction_id": row[4],
+                        "unclaimed": row[2] is None and row[3] is None and row[4] is None,
+                        "observed_at": row[5],
+                    }
+
+    return output
+
+
 def _sovereignty_debug_inspection(system_id=None):
     systems = []
     selected = None
@@ -251,8 +381,12 @@ def admin_debug(request: Request):
     inspection = _sovereignty_debug_inspection(
         request.query_params.get("system_id")
     )
+    esi_snapshot = _esi_snapshot_inspection(
+        request.query_params.get("esi_system_id")
+    )
     context.update({
         "sovereignty_debug": get_sovereignty_debug_status(),
+        "esi_snapshot": esi_snapshot,
         "sovereignty_inspection": inspection,
         "can_run": "admin.jobs.run" in user.get("permissions", set()),
         "error": request.query_params.get("error"),
