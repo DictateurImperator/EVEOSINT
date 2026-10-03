@@ -458,10 +458,7 @@ def sync_is_terminal(conn, sync):
     return bool(
         sync
         and sync.get("initialization_done")
-        and (
-            sync.get("history_unavailable")
-            or alliance_has_population_rows(conn, sync["alliance_id"])
-        )
+        and alliance_has_population_rows(conn, sync["alliance_id"])
     )
 
 
@@ -502,12 +499,10 @@ def get_alliance_history_initialization_state(alliance_id):
 
         has_rows = alliance_has_population_rows(conn, alliance_id)
 
-        history_unavailable = bool(row[7])
-
         return {
             "known": True,
-            "initialization_done": bool(row[0]) and (has_rows or history_unavailable),
-            "history_available": False if history_unavailable else (True if has_rows else None),
+            "initialization_done": bool(row[0]) and has_rows,
+            "history_available": True if has_rows else None,
             "first_available_date": iso(row[1]),
             "oldest_synced_date": iso(row[2]),
             "last_synced_date": iso(row[3]),
