@@ -522,12 +522,6 @@ def weekly_steps():
             ],
         ),
         step(
-            "population_alliances_daily",
-            "Population · DOTLAN alliances daily",
-            "population",
-            [py, str(WEB_DIR / "app" / "population_alliances_daily.py")],
-        ),
-        step(
             "sovereignty_esi",
             "Sovereignty · ESI refresh",
             "sovereignty",
