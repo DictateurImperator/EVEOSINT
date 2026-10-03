@@ -1,3 +1,4 @@
+from datetime import date
 from functools import lru_cache
 
 from .db import db
@@ -408,6 +409,258 @@ def get_eve_2d_map():
             {"label": "New Eden", "url": "/map"},
             {"label": "2D EVE Map", "url": "/map/eve-2d"},
         ],
+    }
+
+
+def _influence_color(group_id):
+    value = abs(int(group_id))
+    hue = (value * 137.508) % 360
+    return f"hsl({hue:.1f} 62% 58%)"
+
+
+def get_eve_2d_influence(target_date=None):
+    topology = _topology()
+
+    with db() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT
+                    to_regclass('sovereignty.current_map'),
+                    to_regclass('sovereignty.map_changes')
+            """)
+            current_table, changes_table = cur.fetchone()
+            if current_table is None or changes_table is None:
+                raise MapDataError("sovereignty_history_unavailable")
+
+            cur.execute("SELECT MAX(observed_at)::date FROM sovereignty.current_map")
+            latest_date = cur.fetchone()[0]
+            if latest_date is None:
+                raise MapDataError("sovereignty_history_unavailable")
+
+            cur.execute("SELECT MIN(source_observed_at)::date FROM sovereignty.map_changes")
+            earliest_change_date = cur.fetchone()[0]
+
+            if target_date is None:
+                selected_date = latest_date
+            elif isinstance(target_date, date):
+                selected_date = target_date
+            else:
+                try:
+                    selected_date = date.fromisoformat(str(target_date))
+                except ValueError as exc:
+                    raise MapDataError("influence_date_invalid") from exc
+
+            if selected_date > latest_date:
+                selected_date = latest_date
+            if earliest_change_date is not None and selected_date < earliest_change_date:
+                raise MapDataError("influence_date_before_history")
+
+            cur.execute("""
+                SELECT system_id, alliance_id, corporation_id, faction_id
+                FROM sovereignty.current_map
+            """)
+            owners = {
+                int(system_id): (
+                    int(alliance_id) if alliance_id is not None else None,
+                    int(corporation_id) if corporation_id is not None else None,
+                    int(faction_id) if faction_id is not None else None,
+                )
+                for system_id, alliance_id, corporation_id, faction_id in cur.fetchall()
+            }
+
+            cur.execute("""
+                SELECT
+                    system_id,
+                    change_type,
+                    old_alliance_id,
+                    old_corporation_id,
+                    old_faction_id,
+                    new_alliance_id,
+                    new_corporation_id,
+                    new_faction_id
+                FROM sovereignty.map_changes
+                WHERE source_observed_at::date > %s
+                ORDER BY source_observed_at DESC, change_id DESC
+            """, (selected_date,))
+
+            for (
+                system_id,
+                change_type,
+                old_alliance_id,
+                old_corporation_id,
+                old_faction_id,
+                _new_alliance_id,
+                _new_corporation_id,
+                _new_faction_id,
+            ) in cur.fetchall():
+                system_id = int(system_id)
+                if change_type == "GAIN":
+                    owners[system_id] = (None, None, None)
+                elif change_type == "LOST":
+                    owners[system_id] = (
+                        int(old_alliance_id) if old_alliance_id is not None else None,
+                        int(old_corporation_id) if old_corporation_id is not None else None,
+                        int(old_faction_id) if old_faction_id is not None else None,
+                    )
+
+            alliance_ids = sorted({
+                owner[0]
+                for owner in owners.values()
+                if owner and owner[0] is not None
+            })
+
+            coalition_rows = []
+            membership_rows = []
+            if alliance_ids:
+                cur.execute("""
+                    SELECT coalition_id, name, short_name
+                    FROM entities.coalitions
+                    ORDER BY coalition_id
+                """)
+                coalition_rows = cur.fetchall()
+
+                cur.execute("""
+                    SELECT coalition_id, operation, member_type, member_id, valid_from, valid_to
+                    FROM entities.coalition_memberships
+                    ORDER BY id
+                """)
+                membership_rows = cur.fetchall()
+
+                cur.execute("""
+                    SELECT alliance_id, name
+                    FROM entities.alliances
+                    WHERE alliance_id = ANY(%s)
+                """, (alliance_ids,))
+                alliance_names = {
+                    int(alliance_id): (name or f"Alliance {alliance_id}")
+                    for alliance_id, name in cur.fetchall()
+                }
+            else:
+                alliance_names = {}
+
+    coalitions = {
+        int(coalition_id): {
+            "id": int(coalition_id),
+            "name": name or short_name or f"Coalition {coalition_id}",
+            "short_name": short_name,
+        }
+        for coalition_id, name, short_name in coalition_rows
+    }
+
+    rules_by_coalition = {coalition_id: [] for coalition_id in coalitions}
+    active_child_coalitions = set()
+    for coalition_id, operation, member_type, member_id, valid_from, valid_to in membership_rows:
+        if valid_from is not None and valid_from > selected_date:
+            continue
+        if valid_to is not None and valid_to < selected_date:
+            continue
+        coalition_id = int(coalition_id)
+        member_id = int(member_id)
+        rule = {
+            "operation": operation,
+            "member_type": member_type,
+            "member_id": member_id,
+        }
+        rules_by_coalition.setdefault(coalition_id, []).append(rule)
+        if operation == "include" and member_type == "coalition":
+            active_child_coalitions.add(member_id)
+
+    resolved_cache = {}
+
+    def resolve_coalition(coalition_id, stack=frozenset()):
+        coalition_id = int(coalition_id)
+        if coalition_id in resolved_cache:
+            return resolved_cache[coalition_id]
+        if coalition_id in stack:
+            return set()
+
+        includes = set()
+        excludes = set()
+        next_stack = stack | {coalition_id}
+        for rule in rules_by_coalition.get(coalition_id, []):
+            member_type = rule["member_type"]
+            member_id = rule["member_id"]
+            if member_type == "alliance":
+                target = {member_id}
+            elif member_type == "coalition":
+                target = resolve_coalition(member_id, next_stack)
+            else:
+                continue
+
+            if rule["operation"] == "exclude":
+                excludes.update(target)
+            else:
+                includes.update(target)
+
+        result = includes - excludes
+        resolved_cache[coalition_id] = result
+        return result
+
+    alliance_to_group = {}
+    top_level_ids = [
+        coalition_id
+        for coalition_id in coalitions
+        if coalition_id not in active_child_coalitions
+    ]
+    top_level_ids.sort(
+        key=lambda coalition_id: (
+            -len(resolve_coalition(coalition_id)),
+            coalitions[coalition_id]["name"].casefold(),
+            coalition_id,
+        )
+    )
+
+    groups = {}
+    for coalition_id in top_level_ids:
+        members = resolve_coalition(coalition_id)
+        if not members:
+            continue
+        group_id = f"coalition:{coalition_id}"
+        group = {
+            "id": group_id,
+            "entity_type": "coalition",
+            "entity_id": coalition_id,
+            "name": coalitions[coalition_id]["name"],
+            "color": _influence_color(coalition_id),
+            "system_ids": [],
+        }
+        groups[group_id] = group
+        for alliance_id in members:
+            alliance_to_group.setdefault(int(alliance_id), group_id)
+
+    for system_id, owner in owners.items():
+        if int(system_id) not in topology["systems"]:
+            continue
+        alliance_id = owner[0] if owner else None
+        if alliance_id is None:
+            continue
+
+        group_id = alliance_to_group.get(int(alliance_id))
+        if group_id is None:
+            group_id = f"alliance:{alliance_id}"
+            if group_id not in groups:
+                groups[group_id] = {
+                    "id": group_id,
+                    "entity_type": "alliance",
+                    "entity_id": int(alliance_id),
+                    "name": alliance_names.get(int(alliance_id), f"Alliance {alliance_id}"),
+                    "color": _influence_color(int(alliance_id)),
+                    "system_ids": [],
+                }
+        groups[group_id]["system_ids"].append(int(system_id))
+
+    result_groups = [
+        group
+        for group in groups.values()
+        if group["system_ids"]
+    ]
+    result_groups.sort(key=lambda item: (-len(item["system_ids"]), item["name"].casefold()))
+
+    return {
+        "date": selected_date.isoformat(),
+        "min_date": earliest_change_date.isoformat() if earliest_change_date else selected_date.isoformat(),
+        "max_date": latest_date.isoformat(),
+        "groups": result_groups,
     }
 
 
