@@ -3,7 +3,7 @@ import re
 import time
 from datetime import date, datetime, timedelta, timezone
 from html.parser import HTMLParser
-from urllib.parse import quote, urljoin
+from urllib.parse import urljoin
 
 import requests
 from psycopg2.extras import execute_values
@@ -436,14 +436,6 @@ def alliance_history_initialization_needed(alliance_id):
     return not get_alliance_history_initialization_state(alliance_id)["initialization_done"]
 
 
-def dotlan_slug_from_name(alliance_name):
-    # DOTLAN alliance URLs use the alliance name with spaces replaced by underscores.
-    # Quote the rest so apostrophes, unicode and other reserved characters cannot break
-    # the path. The stable EVE alliance_id is verified after the page is fetched.
-    normalized = "_".join(str(alliance_name or "").strip().split())
-    return quote(normalized, safe="._-")
-
-
 def _ensure_sync_placeholder(conn, alliance_id, alliance_name, slug):
     with conn.cursor() as cur:
         cur.execute(
@@ -455,12 +447,7 @@ def _ensure_sync_placeholder(conn, alliance_id, alliance_name, slug):
             VALUES (%s, %s, %s, false, now(), now())
             ON CONFLICT (alliance_id) DO UPDATE SET
                 alliance_name = COALESCE(EXCLUDED.alliance_name, population.alliance_sync.alliance_name),
-                dotlan_slug = CASE
-                    WHEN population.alliance_sync.dotlan_slug IS NULL
-                         OR population.alliance_sync.dotlan_slug = ''
-                    THEN EXCLUDED.dotlan_slug
-                    ELSE population.alliance_sync.dotlan_slug
-                END,
+                dotlan_slug = EXCLUDED.dotlan_slug,
                 last_attempt_at = now(),
                 last_error = NULL,
                 updated_at = now()
@@ -828,15 +815,13 @@ def initialize_alliance(
 def initialize_alliance_on_demand(alliance_id, alliance_name):
     """Best-effort historical DOTLAN initialization for an alliance profile.
 
-    This is intentionally ID-verified: the name is only used to build the DOTLAN
-    URL. No data is stored if DOTLAN resolves that name to another alliance ID.
-    Existing partial initializations are resumed. Historical holes are crossed by
+    Alliance identity is resolved strictly from the EVE AllianceID. The alliance
+    name is display-only and is never used to select a DOTLAN page. Existing
+    partial initializations are resumed. Historical holes are crossed by
     initialize_alliance() instead of being mistaken for end-of-history.
     """
     alliance_id = int(alliance_id)
-    alliance_name = str(alliance_name or "").strip()
-    if not alliance_name:
-        return "missing_name"
+    alliance_name = str(alliance_name or "").strip() or f"Alliance {alliance_id}"
 
     conn = db()
     locked = False
@@ -846,9 +831,9 @@ def initialize_alliance_on_demand(alliance_id, alliance_name):
         if sync and sync["initialization_done"]:
             return "skipped"
 
-        slug = (sync or {}).get("dotlan_slug") or dotlan_slug_from_name(alliance_name)
-        if not slug:
-            return "missing_slug"
+        # DOTLAN accepts /alliance/<AllianceID> and redirects to the canonical
+        # alliance page. Never build this identity from the alliance name.
+        dotlan_ref = str(alliance_id)
 
         # Prevent two web requests/workers from backfilling the same alliance at once.
         with conn.cursor() as cur:
@@ -862,13 +847,14 @@ def initialize_alliance_on_demand(alliance_id, alliance_name):
         if sync and sync["initialization_done"]:
             return "skipped"
 
-        _ensure_sync_placeholder(conn, alliance_id, alliance_name, slug)
+        # Replace any legacy name-derived slug from a previous failed attempt.
+        _ensure_sync_placeholder(conn, alliance_id, alliance_name, dotlan_ref)
 
         client = DotlanClient()
         alliance = {
             "name": alliance_name,
-            "slug": slug,
-            "href": f"/alliance/{slug}",
+            "slug": dotlan_ref,
+            "href": f"/alliance/{alliance_id}",
         }
         return initialize_alliance(
             conn,
