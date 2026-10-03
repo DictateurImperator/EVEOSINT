@@ -527,6 +527,12 @@ def weekly_steps():
             "population",
             [py, str(WEB_DIR / "app" / "population_alliances_daily.py")],
         ),
+        step(
+            "sovereignty_esi",
+            "Sovereignty · ESI refresh",
+            "sovereignty",
+            [py, str(SCRIPT_DIR / "sync_sovereignty_esi.py")],
+        ),
     ]
 
 
