@@ -488,7 +488,12 @@ def main():
             # Never bypass CCP's cache window. If this database still contains
             # the old filtered EVEOSINT map, wait for expiry, then request one
             # full 200 response without If-None-Match and adopt it as baseline.
-            if existing > 0 and expires_at and utcnow() < expires_at:
+            if (
+                map_scope == MAP_SCOPE
+                and existing > 0
+                and expires_at
+                and utcnow() < expires_at
+            ):
                 LOG.info(
                     "SOV_ESI status=cached systems=%d scope=%s next_fetch=%s",
                     existing,
