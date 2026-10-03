@@ -170,7 +170,7 @@ def get_next_update_plan():
     return {"steps": steps, "error": None}
 
 
-def get_pipeline_status(include_history=True):
+def get_pipeline_status(include_history=True, include_next_plan=True):
     state = _load_json(STATUS_PATH) or {
         "run_id": None,
         "mode": None,
@@ -194,7 +194,7 @@ def get_pipeline_status(include_history=True):
     if state["running"] and state.get("pipeline_status") not in {"failed", "done"}:
         state["pipeline_status"] = "running"
     state["timer"] = get_timer_status()
-    state["next_plan"] = get_next_update_plan()
+    state["next_plan"] = get_next_update_plan() if include_next_plan else {"steps": [], "error": None}
     if include_history:
         state["history"] = list_pipeline_history(limit=20)
     return state
@@ -259,7 +259,7 @@ def start_update_pipeline(mode="weekly", trigger="admin"):
 
 
 def get_superintel_runtime_status():
-    state = get_pipeline_status(include_history=False)
+    state = get_pipeline_status(include_history=False, include_next_plan=False)
     super_steps = [item for item in state.get("steps", []) if item.get("group") == "superintel"]
     current = next((item for item in super_steps if item.get("status") == "running"), None)
     failed = next((item for item in super_steps if item.get("status") == "failed"), None)
