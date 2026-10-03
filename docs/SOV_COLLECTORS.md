@@ -27,7 +27,7 @@ File: `scripts/sync_sovereignty_esi.py`
   backoff. A short/broken payload, transport failure or HTTP error does **not**
   delete or replace the existing map.
 - `sovereignty.current_map` is the complete current ESI sovereignty response.
-- `sovereignty.map_changes` stores **only detected changes** between two complete responses: `GAIN` (new system entry), `LOST` (entry disappeared), or `TRANSFER` (owner tuple changed). Unchanged systems create no history row.
+- `sovereignty.map_changes` stores **only detected changes** between two complete responses: `GAIN` and `LOST`. If an owner tuple changes between snapshots, EVEOSINT records `LOST` for the previous owner plus `GAIN` for the new owner; it does **not** infer a direct transfer. Unchanged systems create no history row.
 - The first complete global snapshot is a **baseline** and creates no synthetic history. This also prevents the previous filtered EVEOSINT state from generating false `GAIN` rows when upgrading.
 - Current-state replacement and change inserts are committed in the same transaction.
 - Persistent advisory lock prevents overlapping ESI collector executions.
