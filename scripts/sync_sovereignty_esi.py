@@ -518,7 +518,7 @@ def main():
                         response,
                     )
                     LOG.info(
-                        "SOV_ESI status=not_modified systems=%d scope=global_systems_2026",
+                        "SOV_ESI status=not_modified systems=%d scope=global_systems_2026_systems_2026",
                         existing,
                     )
                     return 0
@@ -544,13 +544,13 @@ def main():
                 )
                 if history_ready:
                     LOG.info(
-                        "SOV_ESI status=updated systems=%d changes=%d scope=global",
+                        "SOV_ESI status=updated systems=%d changes=%d scope=global_systems_2026",
                         count,
                         change_count,
                     )
                 else:
                     LOG.info(
-                        "SOV_ESI status=baseline systems=%d changes=0 scope=global",
+                        "SOV_ESI status=baseline systems=%d changes=0 scope=global_systems_2026",
                         count,
                     )
                 return 0
