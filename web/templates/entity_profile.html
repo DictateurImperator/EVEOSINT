@@ -485,7 +485,15 @@
   {% if profile and profile.entity_type in ['system', 'constellation', 'region'] %}
     <div class="system-view-switch" aria-label="Location view">
       <a href="/map/{{ profile.entity_type }}/{{ profile.entity_id }}">MAP</a>
-      <span class="active">KILLBOARD</span>
+      {% if profile.entity_type == 'system' and profile_tab == 'history' %}
+        <a href="/system/{{ profile.entity_id }}">KILLBOARD</a>
+        <span class="active">HISTORY</span>
+      {% else %}
+        <span class="active">KILLBOARD</span>
+        {% if profile.entity_type == 'system' %}
+          <a href="/system/{{ profile.entity_id }}?tab=history">HISTORY</a>
+        {% endif %}
+      {% endif %}
     </div>
     <div></div>
   {% endif %}
@@ -1018,6 +1026,245 @@
   </script>
   {% elif profile.entity_type in ['alliance', 'corporation'] and profile_tab == 'population' %}
     {% include "entity_population.html" %}
+  {% elif profile.entity_type == 'system' and profile_tab == 'history' %}
+    <div id="system-history-root"
+         data-history-url="/api/system/{{ profile.entity_id }}/history"
+         data-kills-url="/api/system/{{ profile.entity_id }}/history/kills">
+      <div class="card bg-transparent border-secondary-subtle mb-3">
+        <div class="card-body">
+          <div class="d-flex justify-content-between align-items-start gap-3 flex-wrap mb-3">
+            <div>
+              <h2 class="h5 fw-bold mb-1">History</h2>
+              <div class="muted-line">Alliance / coalition sovereignty periods with total kill activity in this system during each period.</div>
+            </div>
+          </div>
+
+          <div data-history-content>
+            <div class="d-flex align-items-center gap-2 muted-line py-2">
+              <span class="spinner-border spinner-border-sm" aria-hidden="true"></span>
+              <span>Loading history…</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <script>
+      (function () {
+        const root = document.getElementById('system-history-root');
+        if (!root) return;
+
+        const content = root.querySelector('[data-history-content]');
+        const url = root.getAttribute('data-history-url');
+        const killsUrl = root.getAttribute('data-kills-url');
+
+        function escapeHtml(value) {
+          return String(value == null ? '' : value)
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#039;');
+        }
+
+        function allianceIcon(entityId, name) {
+          if (!entityId) return '';
+          return '<img class="history-entity-icon" src="https://images.evetech.net/alliances/'
+            + encodeURIComponent(entityId) + '/logo?size=64" alt="" title="'
+            + escapeHtml(name || '') + '" loading="lazy"'
+            + ' onerror="this.style.display=\'none\'">';
+        }
+
+        function allianceCell(row) {
+          if (row.unclaimed) return '<span class="fw-semibold">Unclaimed</span>';
+          if (!row.alliance_id) {
+            return '<span class="fw-semibold">' + escapeHtml(row.alliance_name || 'Unknown alliance') + '</span>';
+          }
+          let text = '<a class="text-decoration-none fw-semibold" href="/alliance/'
+            + encodeURIComponent(row.alliance_id) + '">'
+            + escapeHtml(row.alliance_name || ('Alliance ' + row.alliance_id)) + '</a>';
+          if (row.alliance_ticker) text += '<div class="muted-line">[' + escapeHtml(row.alliance_ticker) + ']</div>';
+          if (row.alliance_deleted) text += '<div><span class="badge text-bg-secondary mt-1">Closed</span></div>';
+          return '<div class="d-flex align-items-center gap-2">'
+            + allianceIcon(row.alliance_id, row.alliance_name)
+            + '<div>' + text + '</div></div>';
+        }
+
+        function coalitionCell(row) {
+          const coalitions = Array.isArray(row && row.coalitions) ? row.coalitions : [];
+          if (!coalitions.length) return '<span class="fw-semibold">No coalition</span>';
+          return coalitions.map(function (coalition) {
+            let text = '<a class="text-decoration-none fw-semibold" href="/coalition/'
+              + encodeURIComponent(coalition.coalition_id) + '">'
+              + escapeHtml(coalition.name || ('Coalition ' + coalition.coalition_id)) + '</a>';
+            if (coalition.short_name) text += ' <span class="muted-line">[' + escapeHtml(coalition.short_name) + ']</span>';
+            const logo = coalition.logo_url
+              ? '<img class="history-entity-icon" src="' + escapeHtml(coalition.logo_url) + '"'
+                + ' alt="" title="' + escapeHtml(coalition.name || '') + '" loading="lazy"'
+                + ' onerror="this.style.display=\'none\'">'
+              : '';
+            return '<div class="d-flex align-items-center gap-2">' + logo + '<div>' + text + '</div></div>';
+          }).join('');
+        }
+
+        function numericHistoryValue(value) {
+          if (value === null || value === undefined || value === '') return null;
+          const numericValue = Number(value);
+          return Number.isFinite(numericValue) ? numericValue : null;
+        }
+
+        function historyShare(value, total) {
+          const numericValue = numericHistoryValue(value);
+          if (numericValue === null || !Number.isFinite(total) || total <= 0) return '';
+          const percent = (numericValue * 100) / total;
+          if (numericValue > 0 && percent > 0 && percent < 0.1) return '&lt;0.1%';
+          return percent.toFixed(1) + '%';
+        }
+
+        function historyDateDay(value) {
+          if (!value) return null;
+          const parts = String(value).slice(0, 10).split('-').map(Number);
+          if (parts.length !== 3 || parts.some(function (part) { return !Number.isFinite(part); })) return null;
+          return Math.floor(Date.UTC(parts[0], parts[1] - 1, parts[2]) / 86400000);
+        }
+
+        function historyTodayDay() {
+          const now = new Date();
+          return Math.floor(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()) / 86400000);
+        }
+
+        function historyDurationDays(row) {
+          const start = historyDateDay(row.start_date);
+          if (start === null) return null;
+          const end = row.current ? historyTodayDay() : historyDateDay(row.end_date);
+          if (end === null) return null;
+          return Math.max(0, end - start);
+        }
+
+        function historyDurationCell(days, totalDays) {
+          if (days === null || days === undefined) return '—';
+          const share = totalDays > 0 ? historyShare(days, totalDays) : '';
+          return '<div>' + escapeHtml(days) + ' day' + (days === 1 ? '' : 's') + '</div>'
+            + (share ? '<div class="history-share">' + share + '</div>' : '');
+        }
+
+        function killCellHtml(row, showShare, total) {
+          if (row._killState === 'loading') return '<span class="muted-line"><span class="spinner-border spinner-border-sm me-1" aria-hidden="true"></span>Calculating…</span>';
+          if (row._killState === 'waiting') return '<span class="muted-line">Waiting…</span>';
+          if (row._killState === 'unavailable') return '<span class="muted-line">No data</span>';
+          if (row._killState === 'failed') return '<span class="text-danger">Failed</span>';
+          const raw = row.kills_total;
+          const share = showShare ? historyShare(raw, total) : '';
+          return '<div>' + escapeHtml(row.kills_total_display || '—') + '</div>'
+            + (share ? '<div class="history-share">' + share + '</div>' : '');
+        }
+
+        function refreshKillCells(rows, showShares) {
+          const totalKills = rows.reduce(function (sum, row) {
+            const value = numericHistoryValue(row.kills_total);
+            return sum + (value === null ? 0 : value);
+          }, 0);
+          rows.forEach(function (row, index) {
+            const target = document.getElementById('system-history-kills-' + index);
+            if (target) target.innerHTML = killCellHtml(row, showShares, totalKills);
+          });
+        }
+
+        async function loadKillPeriods(rows) {
+          const progress = root.querySelector('[data-kill-progress]');
+          let processed = 0;
+          for (let index = 0; index < rows.length; index += 1) {
+            const row = rows[index];
+            row._killState = 'loading';
+            refreshKillCells(rows, false);
+            if (progress) progress.textContent = 'Kill statistics: ' + processed + ' / ' + rows.length + ' periods processed';
+
+            const params = new URLSearchParams();
+            params.set('start_at', row.kill_start_at);
+            if (row.kill_end_at) params.set('end_at', row.kill_end_at);
+
+            try {
+              const response = await fetch(killsUrl + '?' + params.toString(), {credentials: 'same-origin', cache: 'no-store'});
+              let payload = {};
+              try { payload = await response.json(); } catch (_) {}
+              if (!response.ok) throw new Error(payload.error || ('Erreur ' + response.status));
+              if (payload.available === false) {
+                row._killState = 'unavailable';
+              } else {
+                row.kills_total = payload.kills_total;
+                row.kills_total_display = payload.kills_total_display;
+                row._killState = 'done';
+              }
+            } catch (_) {
+              row._killState = 'failed';
+            }
+
+            processed += 1;
+            refreshKillCells(rows, processed === rows.length);
+            if (progress) progress.textContent = 'Kill statistics: ' + processed + ' / ' + rows.length + ' periods processed';
+          }
+        }
+
+        function render(data) {
+          const rows = Array.isArray(data && data.rows) ? data.rows : [];
+          if (data && data.available === false) {
+            const reason = data.reason === 'dotlan_not_imported'
+              ? 'SOV history has not been imported from DOTLAN for this system yet.'
+              : 'SOV history is not available.';
+            content.innerHTML = '<div class="muted-line">' + escapeHtml(reason) + '</div>';
+            return;
+          }
+          if (!rows.length) {
+            content.innerHTML = '<div class="muted-line">No sovereignty ownership history is available.</div>';
+            return;
+          }
+
+          rows.forEach(function (row) { row._killState = 'waiting'; });
+          const rowDurations = rows.map(historyDurationDays);
+          const totalHistoryDays = rowDurations.reduce(function (sum, value) {
+            return sum + (value === null ? 0 : value);
+          }, 0);
+
+          let html = '';
+          if (data.current_state_mismatch) {
+            html += '<div class="alert alert-warning py-2">Current ESI owner does not match the latest reconstructed history state yet.</div>';
+          }
+          html += '<div class="muted-line mb-2" data-kill-progress>Kill statistics: 0 / ' + rows.length + ' periods processed</div>'
+            + '<div class="table-responsive">'
+            + '<table class="table table-dark table-hover align-middle mb-0">'
+            + '<thead><tr><th>Alliance</th><th>Coalition</th><th>Entry</th><th>Exit</th>'
+            + '<th class="text-end">Duration</th><th class="text-end">Kills in system</th>'
+            + '</tr></thead><tbody>';
+
+          rows.forEach(function (row, rowIndex) {
+            html += '<tr>'
+              + '<td>' + allianceCell(row) + '</td>'
+              + '<td>' + coalitionCell(row) + '</td>'
+              + '<td class="text-nowrap">' + escapeHtml(row.start_date || '—') + '</td>'
+              + '<td class="text-nowrap">' + (row.current ? '<span class="badge text-bg-success">Current</span>' : escapeHtml(row.end_date || '—')) + '</td>'
+              + '<td class="text-end text-nowrap">' + historyDurationCell(rowDurations[rowIndex], totalHistoryDays) + '</td>'
+              + '<td id="system-history-kills-' + rowIndex + '" class="text-end text-nowrap"><span class="muted-line">Waiting…</span></td>'
+              + '</tr>';
+          });
+
+          html += '</tbody></table></div>';
+          content.innerHTML = html;
+          loadKillPeriods(rows);
+        }
+
+        fetch(url, {credentials: 'same-origin', cache: 'no-store'})
+          .then(async function (response) {
+            let data = {};
+            try { data = await response.json(); } catch (_) {}
+            if (!response.ok) throw new Error(data.error || ('Erreur ' + response.status));
+            render(data);
+          })
+          .catch(function (error) {
+            content.innerHTML = '<div class="alert alert-danger py-2 mb-0">'
+              + escapeHtml(window.eveosintPublicError(error)) + '</div>';
+          });
+      })();
+    </script>
   {% elif profile.entity_type == 'character' and profile_tab == 'history' %}
     <div id="character-history-root"
          data-history-url="/api/character/{{ profile.entity_id }}/history"
