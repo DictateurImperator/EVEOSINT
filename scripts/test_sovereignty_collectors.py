@@ -134,6 +134,40 @@ class DotlanSourceTests(unittest.TestCase):
         self.assertEqual(parsed[0]["event_hash"], parse_events(self.SAMPLE, 30000001, url)[0]["event_hash"])
         self.assertEqual(parsed[0]["ownership_model"], "ihub_proxy")
 
+    def test_transfer_becomes_lost_then_gain(self):
+        html = """<html><h2>Sovereignty Changes [3]</h2>
+          <table>
+          <tr><th>Date</th><th>Time</th><th>Action</th>
+              <th>Alliance</th><th>Corporation</th></tr>
+          <tr><td>2025-10-13</td><td>11:26</td><td>Transfer</td><td></td>
+              <td><a href="/alliance/New_Alliance">New Alliance</a></td><td></td>
+              <td><a href="/corp/New_Corp">New Corp</a></td></tr>
+          <tr><td>2025-09-19</td><td>12:51</td><td>4
+              <img alt="-&gt;"/>5</td><td></td>
+              <td><a href="/alliance/Old_Alliance">Old Alliance</a></td><td></td>
+              <td><a href="/corp/Old_Corp">Old Corp</a></td></tr>
+          <tr><td>2025-06-12</td><td>11:05</td><td>Gain</td><td></td>
+              <td><a href="/alliance/Old_Alliance">Old Alliance</a></td><td></td>
+              <td><a href="/corp/Old_Corp">Old Corp</a></td></tr>
+          </table></html>"""
+
+        parsed = parse_events(
+            html,
+            30000001,
+            "https://evemaps.dotlan.net/system/TEST",
+        )
+        transfer_rows = [
+            row for row in parsed
+            if row["action_raw"].lower() == "transfer"
+        ]
+
+        self.assertEqual([row["action"] for row in transfer_rows], ["LOST", "GAIN"])
+        self.assertEqual(transfer_rows[0]["alliance_name"], "Old Alliance")
+        self.assertEqual(transfer_rows[0]["corporation_name"], "Old Corp")
+        self.assertEqual(transfer_rows[1]["alliance_name"], "New Alliance")
+        self.assertEqual(transfer_rows[1]["corporation_name"], "New Corp")
+        self.assertNotIn("TRANSFER", [row["action"] for row in parsed])
+
     def test_no_inferred_owner_when_no_link(self):
         parsed = parse_events(self.SAMPLE, 30000001, "https://evemaps.dotlan.net/system/TEST")
         self.assertIsNone(parsed[1]["corporation_url"])
