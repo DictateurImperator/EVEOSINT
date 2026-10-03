@@ -4490,9 +4490,12 @@ def _sov_owner_key(owner):
         return ("unclaimed",)
     if owner.get("alliance_id") is not None:
         return ("alliance", int(owner["alliance_id"]))
-    name = str(owner.get("alliance_name") or "").strip()
-    if name:
-        return ("alliance_name", name.casefold())
+    source_url = str(owner.get("alliance_source_url") or "").strip()
+    if source_url:
+        return ("alliance_url", source_url)
+    unresolved_key = owner.get("unresolved_owner_key")
+    if unresolved_key is not None:
+        return ("unresolved", str(unresolved_key))
     return ("unclaimed",)
 
 
@@ -4655,6 +4658,7 @@ def _system_sovereignty_history(system_id):
                         "alliance_name": alliance_name,
                         "alliance_ticker": None,
                         "alliance_deleted": False,
+                        "unresolved_owner_key": f"dotlan:{event_at}:{row_position}",
                     }
                 owner["alliance_source_url"] = alliance_url
             normalized_at = _history_datetime(event_at)
