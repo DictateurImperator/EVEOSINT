@@ -46,7 +46,7 @@ from .entities import (
 from .db import db
 from .coalitions import coalition_logo_url, get_coalition, list_coalitions, list_coalition_overviews, list_memberships
 from .layout import app_context
-from .map_data import MapDataError, get_constellation_map, get_eve_2d_map, get_location_preview, get_region_map, get_system_map, get_universe_map
+from .map_data import MapDataError, get_constellation_map, get_eve_2d_influence, get_eve_2d_map, get_location_preview, get_region_map, get_system_map, get_universe_map
 from .main_objects import templates
 from .population_intelligence import (
     get_alliance_population_history,
@@ -230,6 +230,21 @@ def map_eve_2d(request: Request):
     if redirect:
         return redirect
     return _map_response(request, user, get_eve_2d_map())
+
+
+@router.get("/api/map/eve-2d/influence")
+def map_eve_2d_influence(request: Request, date_value: str | None = Query(None, alias="date")):
+    user = require_login(request)
+    redirect = require_permission_or_redirect(user, "entities.view")
+    if redirect:
+        return redirect
+    try:
+        payload = get_eve_2d_influence(date_value)
+    except MapDataError as exc:
+        code = str(exc)
+        status = 400 if code in {"influence_date_invalid", "influence_date_before_history"} else 503
+        return JSONResponse({"error": code}, status_code=status)
+    return JSONResponse(payload)
 
 
 @router.get("/map/region/{region_id}", response_class=HTMLResponse)
