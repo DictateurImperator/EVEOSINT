@@ -1,0 +1,414 @@
+{% extends "base.html" %}
+
+{% block content %}
+<style>
+  .eve2d-page {
+    display:flex;
+    flex-direction:column;
+    gap:12px;
+    min-height:calc(100vh - 96px);
+  }
+  .eve2d-head {
+    display:grid;
+    grid-template-columns:minmax(0,1fr) auto;
+    gap:16px;
+    align-items:end;
+  }
+  .eve2d-breadcrumbs {
+    display:flex;
+    gap:7px;
+    align-items:center;
+    color:#7d8da5;
+    font-size:.74rem;
+    margin-bottom:4px;
+  }
+  .eve2d-breadcrumbs a { color:#8fa7c6; text-decoration:none; }
+  .eve2d-breadcrumbs a:hover { color:#c8d7eb; }
+  .eve2d-toolbar { display:flex; gap:6px; align-items:center; }
+  .eve2d-shell {
+    position:relative;
+    flex:1;
+    min-height:680px;
+    overflow:hidden;
+    border:1px solid rgba(111,137,173,.25);
+    border-radius:12px;
+    background:
+      radial-gradient(circle at 50% 45%, rgba(39,57,83,.18), rgba(5,10,17,0) 44%),
+      #050a11;
+  }
+  #eve2dCanvas {
+    display:block;
+    width:100%;
+    height:100%;
+    min-height:680px;
+    cursor:grab;
+  }
+  #eve2dCanvas.dragging { cursor:grabbing; }
+  .eve2d-help {
+    position:absolute;
+    left:12px;
+    bottom:10px;
+    z-index:3;
+    color:#65758c;
+    font-size:.72rem;
+    pointer-events:none;
+  }
+  .eve2d-tooltip {
+    position:absolute;
+    display:none;
+    z-index:5;
+    pointer-events:none;
+    max-width:260px;
+    padding:8px 10px;
+    border:1px solid rgba(128,157,195,.3);
+    border-radius:7px;
+    background:rgba(7,13,22,.96);
+    color:#dce7f5;
+    font-size:.76rem;
+    line-height:1.35;
+    box-shadow:0 8px 30px rgba(0,0,0,.35);
+  }
+  .eve2d-tooltip strong { color:#fff; }
+  .eve2d-tooltip .muted { color:#8fa0b7; }
+  .eve2d-mode-badge {
+    display:inline-flex;
+    align-items:center;
+    gap:6px;
+    font-size:.72rem;
+    color:#9fb1c8;
+    padding:5px 8px;
+    border:1px solid rgba(111,137,173,.2);
+    border-radius:7px;
+    background:rgba(255,255,255,.025);
+  }
+  @media (max-width:800px) {
+    .eve2d-head { grid-template-columns:1fr; align-items:start; }
+    .eve2d-toolbar { justify-content:flex-start; flex-wrap:wrap; }
+  }
+</style>
+
+<div class="eve2d-page">
+  <div class="eve2d-head">
+    <div>
+      <div class="eve2d-breadcrumbs">
+        {% for crumb in map_payload.breadcrumbs %}
+          {% if not loop.last %}
+            <a href="{{ crumb.url }}">{{ crumb.label }}</a><span>›</span>
+          {% else %}
+            <span>{{ crumb.label }}</span>
+          {% endif %}
+        {% endfor %}
+      </div>
+      <h1 class="h3 fw-bold mb-1">MAP — New Eden · 2D EVE Map</h1>
+      <div class="muted-line">{{ map_payload.subtitle }}</div>
+    </div>
+
+    <div class="eve2d-toolbar">
+      <span class="eve2d-mode-badge">SDE position2D · systems + stargates</span>
+      <a class="btn btn-sm btn-outline-primary" href="/map">Region Map</a>
+      <button class="btn btn-sm btn-outline-secondary" type="button" id="eve2dZoomOut">−</button>
+      <button class="btn btn-sm btn-outline-secondary" type="button" id="eve2dFit">Fit</button>
+      <button class="btn btn-sm btn-outline-secondary" type="button" id="eve2dZoomIn">+</button>
+    </div>
+  </div>
+
+  <div class="eve2d-shell" id="eve2dShell">
+    <canvas id="eve2dCanvas" aria-label="New Eden 2D system and stargate map"></canvas>
+    <div class="eve2d-tooltip" id="eve2dTooltip"></div>
+    <div class="eve2d-help">Drag to pan · wheel to zoom · hover a system · click a system to open</div>
+  </div>
+</div>
+
+<script id="eve2dData" type="application/json">{{ map_data_json | safe }}</script>
+<script>
+(() => {
+  const dataEl = document.getElementById("eve2dData");
+  const shell = document.getElementById("eve2dShell");
+  const canvas = document.getElementById("eve2dCanvas");
+  const tooltip = document.getElementById("eve2dTooltip");
+  if (!dataEl || !shell || !canvas) return;
+
+  const payload = JSON.parse(dataEl.textContent || "{}");
+  const nodes = Array.isArray(payload.nodes) ? payload.nodes : [];
+  const edges = Array.isArray(payload.edges) ? payload.edges : [];
+  const nodeById = new Map(nodes.map(node => [String(node.id), node]));
+  const ctx = canvas.getContext("2d", {alpha:true});
+
+  if (!nodes.length || !ctx) return;
+
+  let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+  nodes.forEach(node => {
+    const x = Number(node.x || 0);
+    const y = Number(node.y || 0);
+    minX = Math.min(minX, x);
+    maxX = Math.max(maxX, x);
+    minY = Math.min(minY, y);
+    maxY = Math.max(maxY, y);
+  });
+
+  const rawWidth = Math.max(1e-9, maxX - minX);
+  const rawHeight = Math.max(1e-9, maxY - minY);
+  const WORLD_WIDTH = 1800;
+  const WORLD_HEIGHT = Math.max(850, WORLD_WIDTH * rawHeight / rawWidth);
+
+  nodes.forEach(node => {
+    node._x = ((Number(node.x || 0) - minX) / rawWidth) * WORLD_WIDTH;
+    node._y = ((maxY - Number(node.y || 0)) / rawHeight) * WORLD_HEIGHT;
+  });
+
+  const edgePairs = edges.map(edge => [
+    nodeById.get(String(edge.source)),
+    nodeById.get(String(edge.target))
+  ]).filter(pair => pair[0] && pair[1]);
+
+  let dpr = Math.max(1, Math.min(2, window.devicePixelRatio || 1));
+  let cssWidth = 1;
+  let cssHeight = 1;
+  let scale = 1;
+  let offsetX = 0;
+  let offsetY = 0;
+  let dragging = false;
+  let moved = false;
+  let dragStartX = 0;
+  let dragStartY = 0;
+  let dragOffsetX = 0;
+  let dragOffsetY = 0;
+  let hovered = null;
+  let pointerX = 0;
+  let pointerY = 0;
+
+  function resizeCanvas() {
+    const rect = shell.getBoundingClientRect();
+    cssWidth = Math.max(1, rect.width);
+    cssHeight = Math.max(1, rect.height);
+    dpr = Math.max(1, Math.min(2, window.devicePixelRatio || 1));
+    canvas.width = Math.round(cssWidth * dpr);
+    canvas.height = Math.round(cssHeight * dpr);
+    canvas.style.width = cssWidth + "px";
+    canvas.style.height = cssHeight + "px";
+    draw();
+  }
+
+  function fitMap() {
+    const padding = 48;
+    const sx = (cssWidth - padding * 2) / WORLD_WIDTH;
+    const sy = (cssHeight - padding * 2) / WORLD_HEIGHT;
+    scale = Math.max(.05, Math.min(sx, sy));
+    offsetX = (cssWidth - WORLD_WIDTH * scale) / 2;
+    offsetY = (cssHeight - WORLD_HEIGHT * scale) / 2;
+    draw();
+  }
+
+  function worldToScreen(node) {
+    return {
+      x: offsetX + node._x * scale,
+      y: offsetY + node._y * scale,
+    };
+  }
+
+  function securityColor(sec) {
+    const value = Number(sec);
+    if (!Number.isFinite(value)) return "#d9e3ef";
+    if (value >= .45) return "#9ed8ff";
+    if (value > 0) return "#f0c86c";
+    return "#dbe3ee";
+  }
+
+  function drawGrid() {
+    if (scale < .7) return;
+    const step = 120 * scale;
+    if (step < 35) return;
+    ctx.beginPath();
+    ctx.strokeStyle = "rgba(95,119,151,.055)";
+    ctx.lineWidth = 1;
+    const startX = ((offsetX % step) + step) % step;
+    const startY = ((offsetY % step) + step) % step;
+    for (let x = startX; x < cssWidth; x += step) {
+      ctx.moveTo(x, 0);
+      ctx.lineTo(x, cssHeight);
+    }
+    for (let y = startY; y < cssHeight; y += step) {
+      ctx.moveTo(0, y);
+      ctx.lineTo(cssWidth, y);
+    }
+    ctx.stroke();
+  }
+
+  function draw() {
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, cssWidth, cssHeight);
+    drawGrid();
+
+    ctx.beginPath();
+    ctx.strokeStyle = "rgba(104,132,170,.34)";
+    ctx.lineWidth = Math.max(.45, Math.min(1.15, .62 * Math.sqrt(scale)));
+    edgePairs.forEach(([source, target]) => {
+      const a = worldToScreen(source);
+      const b = worldToScreen(target);
+      if ((a.x < -30 && b.x < -30) || (a.x > cssWidth + 30 && b.x > cssWidth + 30)
+          || (a.y < -30 && b.y < -30) || (a.y > cssHeight + 30 && b.y > cssHeight + 30)) return;
+      ctx.moveTo(a.x, a.y);
+      ctx.lineTo(b.x, b.y);
+    });
+    ctx.stroke();
+
+    const radius = Math.max(1.15, Math.min(3.1, 1.25 * Math.sqrt(scale)));
+    nodes.forEach(node => {
+      const p = worldToScreen(node);
+      if (p.x < -8 || p.x > cssWidth + 8 || p.y < -8 || p.y > cssHeight + 8) return;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, node === hovered ? radius + 2.1 : radius, 0, Math.PI * 2);
+      ctx.fillStyle = node === hovered ? "#ffffff" : securityColor(node.security);
+      ctx.fill();
+    });
+
+    if (scale >= 3.2) {
+      ctx.font = "10px system-ui, sans-serif";
+      ctx.fillStyle = "rgba(218,229,242,.78)";
+      nodes.forEach(node => {
+        const p = worldToScreen(node);
+        if (p.x < -80 || p.x > cssWidth + 80 || p.y < -20 || p.y > cssHeight + 20) return;
+        ctx.fillText(node.name || "", p.x + 5, p.y - 4);
+      });
+    }
+  }
+
+  function zoomAt(factor, clientX, clientY) {
+    const rect = canvas.getBoundingClientRect();
+    const x = clientX - rect.left;
+    const y = clientY - rect.top;
+    const oldScale = scale;
+    const next = Math.max(.08, Math.min(16, scale * factor));
+    if (next === oldScale) return;
+    const worldX = (x - offsetX) / oldScale;
+    const worldY = (y - offsetY) / oldScale;
+    scale = next;
+    offsetX = x - worldX * scale;
+    offsetY = y - worldY * scale;
+    draw();
+  }
+
+  function nearestNode(clientX, clientY) {
+    const rect = canvas.getBoundingClientRect();
+    const x = clientX - rect.left;
+    const y = clientY - rect.top;
+    const maxDistance = Math.max(7, Math.min(13, 8 + scale * .7));
+    const maxSq = maxDistance * maxDistance;
+    let best = null;
+    let bestSq = maxSq;
+
+    for (const node of nodes) {
+      const p = worldToScreen(node);
+      const dx = p.x - x;
+      const dy = p.y - y;
+      const d2 = dx * dx + dy * dy;
+      if (d2 < bestSq) {
+        bestSq = d2;
+        best = node;
+      }
+    }
+    return best;
+  }
+
+  function showTooltip(node, clientX, clientY) {
+    if (!node) {
+      tooltip.style.display = "none";
+      return;
+    }
+    const shellRect = shell.getBoundingClientRect();
+    const sec = Number(node.security);
+    const secText = Number.isFinite(sec) ? sec.toFixed(2) : "?";
+    tooltip.innerHTML =
+      "<strong>" + escapeHtml(node.name) + "</strong>" +
+      "<br><span class=\"muted\">" + escapeHtml(node.region_name || "") +
+      " · " + escapeHtml(node.constellation_name || "") + "</span>" +
+      "<br>Security: " + secText;
+    tooltip.style.display = "block";
+    const left = Math.min(shellRect.width - 280, Math.max(8, clientX - shellRect.left + 14));
+    const top = Math.min(shellRect.height - 80, Math.max(8, clientY - shellRect.top + 14));
+    tooltip.style.left = left + "px";
+    tooltip.style.top = top + "px";
+  }
+
+  function escapeHtml(value) {
+    return String(value ?? "").replace(/[&<>'"]/g, ch => ({
+      "&":"&amp;", "<":"&lt;", ">":"&gt;", "'":"&#39;", '"':"&quot;"
+    }[ch]));
+  }
+
+  canvas.addEventListener("wheel", event => {
+    event.preventDefault();
+    zoomAt(event.deltaY < 0 ? 1.16 : .86, event.clientX, event.clientY);
+  }, {passive:false});
+
+  canvas.addEventListener("pointerdown", event => {
+    if (event.button !== 0) return;
+    dragging = true;
+    moved = false;
+    dragStartX = event.clientX;
+    dragStartY = event.clientY;
+    dragOffsetX = offsetX;
+    dragOffsetY = offsetY;
+    canvas.classList.add("dragging");
+    canvas.setPointerCapture(event.pointerId);
+  });
+
+  canvas.addEventListener("pointermove", event => {
+    pointerX = event.clientX;
+    pointerY = event.clientY;
+    if (dragging) {
+      const dx = event.clientX - dragStartX;
+      const dy = event.clientY - dragStartY;
+      if (Math.abs(dx) + Math.abs(dy) > 3) moved = true;
+      offsetX = dragOffsetX + dx;
+      offsetY = dragOffsetY + dy;
+      tooltip.style.display = "none";
+      draw();
+      return;
+    }
+
+    const nextHovered = nearestNode(event.clientX, event.clientY);
+    if (nextHovered !== hovered) {
+      hovered = nextHovered;
+      draw();
+    }
+    showTooltip(hovered, pointerX, pointerY);
+  });
+
+  canvas.addEventListener("pointerleave", () => {
+    if (!dragging) {
+      hovered = null;
+      tooltip.style.display = "none";
+      draw();
+    }
+  });
+
+  canvas.addEventListener("pointerup", event => {
+    if (!dragging) return;
+    dragging = false;
+    canvas.classList.remove("dragging");
+    if (canvas.hasPointerCapture(event.pointerId)) canvas.releasePointerCapture(event.pointerId);
+
+    if (!moved) {
+      const target = nearestNode(event.clientX, event.clientY);
+      if (target && target.url) window.location.href = target.url;
+    }
+  });
+
+  document.getElementById("eve2dFit").addEventListener("click", fitMap);
+  document.getElementById("eve2dZoomIn").addEventListener("click", () => {
+    const rect = canvas.getBoundingClientRect();
+    zoomAt(1.25, rect.left + rect.width / 2, rect.top + rect.height / 2);
+  });
+  document.getElementById("eve2dZoomOut").addEventListener("click", () => {
+    const rect = canvas.getBoundingClientRect();
+    zoomAt(.8, rect.left + rect.width / 2, rect.top + rect.height / 2);
+  });
+
+  const observer = new ResizeObserver(() => resizeCanvas());
+  observer.observe(shell);
+  resizeCanvas();
+  fitMap();
+})();
+</script>
+{% endblock %}
