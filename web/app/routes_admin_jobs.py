@@ -12,6 +12,7 @@ from .jobs import (
     run_population_alliances_daily_job,
     run_recent_kill_pilots_affiliation_job,
     run_character_skill_inference_job,
+    run_sovereignty_esi_job,
     run_sde_job,
 )
 from .layout import app_context
@@ -148,6 +149,42 @@ def admin_jobs_run_population_alliances_daily(request: Request):
             username=user["username"],
             target_type="job",
             target_id="population_alliances_daily",
+            details=str(exc),
+        )
+        return _error_redirect(exc)
+
+    if not ok:
+        return RedirectResponse(url="/admin/jobs?error=job_failed", status_code=302)
+
+    return RedirectResponse(url="/admin/jobs?success=job_started", status_code=302)
+
+
+@router.post("/admin/jobs/sovereignty-esi/run")
+def admin_jobs_run_sovereignty_esi(request: Request):
+    user = require_login(request)
+    redirect = require_permission_or_redirect(user, "admin.jobs.run")
+    if redirect:
+        return redirect
+
+    try:
+        ok, message = run_sovereignty_esi_job()
+        audit_log(
+            request,
+            "admin_job_run",
+            user_id=user["id"],
+            username=user["username"],
+            target_type="job",
+            target_id="sync_sovereignty_esi",
+            details=message,
+        )
+    except JobError as exc:
+        audit_log(
+            request,
+            "admin_job_run_failed",
+            user_id=user["id"],
+            username=user["username"],
+            target_type="job",
+            target_id="sync_sovereignty_esi",
             details=str(exc),
         )
         return _error_redirect(exc)
