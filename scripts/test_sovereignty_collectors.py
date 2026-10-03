@@ -8,19 +8,54 @@ from scripts.sovereignty_scope import claimable_sov_systems_from_rows
 
 
 class EsiSnapshotTests(unittest.TestCase):
-    def test_map_validation(self):
-        rows = normalize([
-            {"system_id": 30004759, "alliance_id": 1354830081},
-            {"system_id": 30004760, "corporation_id": 98000001, "faction_id": None},
-        ])
-        self.assertEqual(rows[30004759], (1354830081, None, None))
-        self.assertEqual(rows[30004760], (None, 98000001, None))
+    def test_sovereignty_systems_validation(self):
+        rows = normalize({
+            "solar_systems": [
+                {
+                    "solar_system_id": 30004759,
+                    "claim": {
+                        "alliance": {
+                            "alliance_id": 1354830081,
+                            "corporation_id": 98000001,
+                        }
+                    },
+                },
+                {
+                    "solar_system_id": 30004760,
+                    "claim": {"faction": {"faction_id": 500001}},
+                },
+                {
+                    "solar_system_id": 30004761,
+                    "claim": {"unclaimed": True},
+                },
+            ]
+        })
+        self.assertEqual(rows[30004759], (1354830081, 98000001, None))
+        self.assertEqual(rows[30004760], (None, None, 500001))
+        self.assertEqual(rows[30004761], (None, None, None))
 
     def test_reject_empty_or_partial_corruption(self):
-        for payload in ([], {}, [{"system_id": 3}], [
-            {"system_id": 1, "faction_id": 5},
-            {"system_id": 1, "faction_id": 6},
-        ]):
+        payloads = (
+            [],
+            {},
+            {"solar_systems": []},
+            {"solar_systems": [{"solar_system_id": 3}]},
+            {
+                "solar_systems": [
+                    {
+                        "solar_system_id": 3,
+                        "claim": {
+                            "alliance": {
+                                "alliance_id": 10,
+                                "corporation_id": 20,
+                            },
+                            "unclaimed": True,
+                        },
+                    }
+                ]
+            },
+        )
+        for payload in payloads:
             with self.subTest(payload=payload), self.assertRaises(ValueError):
                 normalize(payload)
 
@@ -56,6 +91,26 @@ class EsiDeltaTests(unittest.TestCase):
         self.assertEqual(by_system[30000004][0][2:8], (None, None, None, 1004, None, None))
         self.assertTrue(all(row[8] == observed for row in changes))
         self.assertNotIn("TRANSFER", [row[1] for row in changes])
+
+    def test_claimed_unclaimed_transitions(self):
+        from datetime import datetime, timezone
+
+        observed = datetime(2026, 10, 3, 12, 0, tzinfo=timezone.utc)
+        previous = {
+            30000001: (1001, 2001, None),
+            30000002: (None, None, None),
+        }
+        current = {
+            30000001: (None, None, None),
+            30000002: (1002, 2002, None),
+            30000003: (None, None, None),
+        }
+
+        changes = build_changes(previous, current, observed)
+        self.assertEqual(
+            [(row[0], row[1]) for row in changes],
+            [(30000001, "LOST"), (30000002, "GAIN")],
+        )
 
     def test_unchanged_map_produces_no_history(self):
         from datetime import datetime, timezone
