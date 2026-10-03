@@ -4691,7 +4691,7 @@ def _system_sovereignty_history(system_id):
                 "owner": owner,
                 "source": "dotlan",
                 "ownership_model": model,
-                "order": int(row_position or 0),
+                "order": -int(row_position or 0),
             })
 
         for change_id, observed_at, action, old_alliance_id, new_alliance_id in esi_rows:
@@ -4718,8 +4718,8 @@ def _system_sovereignty_history(system_id):
         events.sort(
             key=lambda item: (
                 item["at"],
-                0 if item["action"] == "LOST" else 1,
                 item["order"],
+                0 if item["action"] == "LOST" else 1,
             )
         )
 
