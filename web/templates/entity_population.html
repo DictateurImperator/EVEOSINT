@@ -49,6 +49,12 @@
     try {
       const state = await readStatus();
       if (state.initialization_done) {
+        if (state.history_available === false) {
+          text.textContent = 'DOTLAN has no population history for this alliance.';
+          hideSpinner();
+          if (startedHere) setTimeout(() => window.location.reload(), 450);
+          return;
+        }
         if (startedHere) {
           text.textContent = 'DOTLAN population history loaded.';
           hideSpinner();
@@ -1297,6 +1303,12 @@
           officialRows=Array.isArray(payload.rows)?payload.rows:[];
           if(!officialRows.length){
             renderStatus(payload);
+            if(payload && payload.history_available === false){
+              loadingEl.hidden=true;
+              errorEl.hidden=false;
+              errorEl.textContent='DOTLAN has no population history for this {{ profile.entity_type }}.';
+              return;
+            }
             if(payload && payload.initialization_done === false && !payload.last_error){
               loadingEl.hidden=false;
               loadingEl.textContent='Loading population history from DOTLAN…';
