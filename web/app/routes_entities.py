@@ -4455,41 +4455,6 @@ def _merge_character_corporation_periods(history_rows):
     return merged
 
 
-def _resolve_sov_alliance_names(conn, alliance_names):
-    names = sorted({
-        str(value).strip()
-        for value in (alliance_names or [])
-        if str(value or "").strip()
-    })
-    if not names:
-        return {}
-
-    with conn.cursor() as cur:
-        cur.execute("SELECT to_regclass('entities.alliances')")
-        if not cur.fetchone()[0]:
-            return {}
-        cur.execute(
-            """
-            SELECT alliance_id, name, ticker, COALESCE(is_deleted, FALSE)
-            FROM entities.alliances
-            WHERE lower(name) = ANY(%s)
-            """,
-            ([name.casefold() for name in names],),
-        )
-        rows = cur.fetchall()
-
-    return {
-        str(name).casefold(): {
-            "alliance_id": int(alliance_id),
-            "alliance_name": name,
-            "alliance_ticker": ticker,
-            "alliance_deleted": bool(is_deleted),
-        }
-        for alliance_id, name, ticker, is_deleted in rows
-        if name
-    }
-
-
 def _resolve_sov_alliance_ids(conn, alliance_ids):
     ids = sorted({int(value) for value in (alliance_ids or []) if value is not None})
     if not ids:
@@ -4586,6 +4551,7 @@ def _system_sovereignty_history(system_id):
                 SELECT
                     event_at,
                     action,
+                    alliance_id,
                     alliance_name,
                     alliance_url,
                     ownership_model,
@@ -4602,12 +4568,11 @@ def _system_sovereignty_history(system_id):
             )
             dotlan_rows = cur.fetchall()
 
-        dotlan_names = {
-            row[2]
+        dotlan_alliance_ids = {
+            int(row[2])
             for row in dotlan_rows
-            if row[2]
+            if row[2] is not None
         }
-        alliance_by_name = _resolve_sov_alliance_names(conn, dotlan_names)
 
         esi_rows = []
         if tables[2]:
@@ -4659,23 +4624,31 @@ def _system_sovereignty_history(system_id):
                 )
                 current_row = cur.fetchone()
 
-        esi_alliance_ids = {
+        alliance_ids = set(dotlan_alliance_ids)
+        alliance_ids.update({
             int(value)
             for row in esi_rows
             for value in (row[3], row[4])
             if value is not None
-        }
+        })
         if current_row and current_row[0] is not None:
-            esi_alliance_ids.add(int(current_row[0]))
-        alliance_by_id = _resolve_sov_alliance_ids(conn, esi_alliance_ids)
+            alliance_ids.add(int(current_row[0]))
+        alliance_by_id = _resolve_sov_alliance_ids(conn, alliance_ids)
 
         events = []
-        for event_at, action, alliance_name, alliance_url, model, row_position in dotlan_rows:
+        for event_at, action, alliance_id, alliance_name, alliance_url, model, row_position in dotlan_rows:
             owner = None
-            if action == "GAIN" and alliance_name:
-                resolved = alliance_by_name.get(str(alliance_name).casefold())
-                if resolved:
-                    owner = dict(resolved)
+            if action == "GAIN" and (alliance_id is not None or alliance_name):
+                if alliance_id is not None:
+                    owner = dict(
+                        alliance_by_id.get(int(alliance_id))
+                        or {
+                            "alliance_id": int(alliance_id),
+                            "alliance_name": alliance_name or f"Alliance {int(alliance_id)}",
+                            "alliance_ticker": None,
+                            "alliance_deleted": False,
+                        }
+                    )
                 else:
                     owner = {
                         "alliance_id": None,
