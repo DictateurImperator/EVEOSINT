@@ -151,7 +151,7 @@ def _normalize_job(raw_job):
     log_path = raw_job.get("log_path")
     enabled = bool(raw_job.get("enabled", True))
 
-    if job_type not in {"sde", "killmails", "recent_kill_pilots_affiliation", "character_skill_inference", "population_alliances_init", "population_alliances_daily"}:
+    if job_type not in {"sde", "killmails", "recent_kill_pilots_affiliation", "character_skill_inference", "population_alliances_init", "population_alliances_daily", "sovereignty_esi"}:
         raise JobError(f"job_type_invalid:{key}")
 
     if not isinstance(command, list) or not command:
@@ -221,6 +221,23 @@ def load_jobs_config():
             )
         )
 
+    if not any(job["key"] == "sync_sovereignty_esi" for job in jobs):
+        jobs.append(
+            _normalize_job(
+                {
+                    "key": "sync_sovereignty_esi",
+                    "label": "Sovereignty · Refresh ESI",
+                    "type": "sovereignty_esi",
+                    "command": [
+                        sys.executable,
+                        str(Path(__file__).resolve().parents[2] / "scripts" / "sync_sovereignty_esi.py"),
+                    ],
+                    "log_path": str(Path.home() / "eveosint" / "data" / "logs" / "sovereignty_esi.log"),
+                    "enabled": True,
+                }
+            )
+        )
+
     allowed_keys = {
         "sync_sde",
         "sync_killmails",
@@ -228,6 +245,7 @@ def load_jobs_config():
         "sync_character_skill_inference",
         "population_alliances_init",
         "population_alliances_daily",
+        "sync_sovereignty_esi",
     }
     unexpected = {job["key"] for job in jobs} - allowed_keys
     if unexpected:
@@ -436,5 +454,13 @@ def run_population_alliances_daily_job():
     job = get_job("population_alliances_daily")
     if job["type"] != "population_alliances_daily":
         raise JobError("job_type_mismatch:population_alliances_daily")
+
+    return _start_process(job, job["command"])
+
+
+def run_sovereignty_esi_job():
+    job = get_job("sync_sovereignty_esi")
+    if job["type"] != "sovereignty_esi":
+        raise JobError("job_type_mismatch:sync_sovereignty_esi")
 
     return _start_process(job, job["command"])
