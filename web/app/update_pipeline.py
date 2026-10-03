@@ -136,6 +136,40 @@ def get_timer_status():
     }
 
 
+def get_next_update_plan():
+    if not PYTHON_BIN.is_file():
+        return {"steps": [], "error": "pipeline_python_missing"}
+    if not RUNNER_PATH.is_file():
+        return {"steps": [], "error": "pipeline_runner_missing"}
+
+    try:
+        completed = subprocess.run(
+            [str(PYTHON_BIN), str(RUNNER_PATH), "--print-plan-json"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+    except Exception as exc:
+        return {"steps": [], "error": f"pipeline_plan_failed:{exc}"}
+
+    if completed.returncode != 0:
+        detail = (completed.stderr or completed.stdout or "").strip()
+        return {"steps": [], "error": detail or f"pipeline_plan_rc_{completed.returncode}"}
+
+    try:
+        payload = json.loads(completed.stdout)
+    except Exception:
+        return {"steps": [], "error": "pipeline_plan_invalid_json"}
+
+    steps = payload.get("steps") if isinstance(payload, dict) else None
+    if not isinstance(steps, list):
+        return {"steps": [], "error": "pipeline_plan_invalid"}
+
+    return {"steps": steps, "error": None}
+
+
 def get_pipeline_status(include_history=True):
     state = _load_json(STATUS_PATH) or {
         "run_id": None,
@@ -160,6 +194,7 @@ def get_pipeline_status(include_history=True):
     if state["running"] and state.get("pipeline_status") not in {"failed", "done"}:
         state["pipeline_status"] = "running"
     state["timer"] = get_timer_status()
+    state["next_plan"] = get_next_update_plan()
     if include_history:
         state["history"] = list_pipeline_history(limit=20)
     return state
