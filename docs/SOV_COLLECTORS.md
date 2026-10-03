@@ -16,7 +16,7 @@ they populate the real `sovereignty.*` tables.
 
 File: `scripts/sync_sovereignty_esi.py`
 
-- One public GET: `https://esi.evetech.net/latest/sovereignty/map/?datasource=tranquility`. CCP does not expose a server-side `nullsec only` filter, so EVEOSINT performs the scope filter locally after this single response.
+- One public GET: `https://esi.evetech.net/latest/sovereignty/map/?datasource=tranquility`. The response is stored **globally as returned by ESI**; no local nullsec purge/filter is applied at ingestion time.
 - No OAuth, API key, scraping or pagination.
 - Identifiable User-Agent (app, version and public source URL) and pinned
   `X-Compatibility-Date: 2026-09-28`.
@@ -26,8 +26,10 @@ File: `scripts/sync_sovereignty_esi.py`
 - Honors CCP's `Retry-After`, old error-budget headers and transient 5xx
   backoff. A short/broken payload, transport failure or HTTP error does **not**
   delete or replace the existing map.
-- EVEOSINT stores only **conquerable 0.0**: `securityStatus <= 0.0`, known-space regions, with NPC faction ownership excluded at system/constellation/region level. This removes HS/LS, Pochven, wormholes, NPC nullsec regions and NPC pockets.
-- Atomic complete current snapshot inside that scope; absence of a formerly owned claimable system from a valid ESI response means it is no longer part of the current SOV map.
+- `sovereignty.current_map` is the complete current ESI sovereignty response.
+- `sovereignty.map_changes` stores **only detected changes** between two complete responses: `GAIN` (new system entry), `LOST` (entry disappeared), or `TRANSFER` (owner tuple changed). Unchanged systems create no history row.
+- The first complete global snapshot is a **baseline** and creates no synthetic history. This also prevents the previous filtered EVEOSINT state from generating false `GAIN` rows when upgrading.
+- Current-state replacement and change inserts are committed in the same transaction.
 - Persistent advisory lock prevents overlapping ESI collector executions.
 
 **First run on the EVEOSINT host**, once code is deployed:
@@ -38,8 +40,9 @@ cd /home/ubuntu/eveosint
 ```
 
 The script creates `sovereignty.current_map` (system_id, alliance_id,
-corporation_id, faction_id, observed_at, source) and
-`sovereignty.esi_map_state` (cache state and last HTTP status) if missing.
+corporation_id, faction_id, observed_at, source), `sovereignty.map_changes`
+(delta history), and `sovereignty.esi_map_state` (cache state, scope marker and
+last HTTP status) if missing.
 
 To enable the **independent** refresh timer (not part of the current weekly
 pipeline; it doesn't depend on users visiting the web UI):
@@ -64,9 +67,16 @@ Check current data:
 SELECT COUNT(*) AS claimed_systems, MAX(observed_at) AS source_observed_at
 FROM sovereignty.current_map;
 
-SELECT etag, expires_at, fetched_at, row_count, last_status
+SELECT etag, expires_at, fetched_at, row_count, last_status, map_scope
 FROM sovereignty.esi_map_state
 WHERE id = 1;
+
+SELECT system_id, change_type,
+       old_alliance_id, new_alliance_id,
+       source_observed_at
+FROM sovereignty.map_changes
+ORDER BY source_observed_at DESC, change_id DESC
+LIMIT 50;
 ```
 
 ## 2. Historical DOTLAN event import (manual and resumable)
@@ -75,7 +85,7 @@ File: `scripts/import_sovereignty_dotlan.py`
 
 This downloads each source system page at
 `https://evemaps.dotlan.net/system/{system_name}` and extracts the
-**Sovereignty Changes** table, but only for the same **conquerable 0.0** SDE scope as the ESI collector. Records include source URL, date/time as displayed
+**Sovereignty Changes** table, only for the **conquerable 0.0** SDE scope. This DOTLAN scope is intentionally narrower than the global ESI current-map ingestion. Records include source URL, date/time as displayed
 by DOTLAN, raw action, normalized action (GAIN/LOST/TRANSFER/LEVEL_CHANGE/OTHER),
 optional displayed Alliance and Corporation names/links, raw source cells,
 row index, fetch time and the EVEOSINT ownership convention active at that date.
