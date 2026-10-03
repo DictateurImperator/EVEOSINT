@@ -1,28 +1,22 @@
 #!/usr/bin/env python3
-"""Refresh current conquerable-nullsec sovereignty from CCP ESI.
+"""Refresh the complete current sovereignty map from CCP ESI.
 
-One cached public endpoint, local SDE scope filter, one atomic database replacement. No browser/server
-requests are triggered by page views. Run manually or from update_pipeline.
+One cached public endpoint, one atomic current-state replacement. The SQL
+history stores only changes detected between two complete ESI responses.
 """
 import argparse
 import json
 import logging
-import os
 import random
 import sys
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 from pathlib import Path
 
 import psycopg2
 from psycopg2.extras import execute_values
 import requests
-
-try:
-    from sovereignty_scope import load_claimable_sov_systems
-except ModuleNotFoundError:  # package import used by offline unittest
-    from scripts.sovereignty_scope import load_claimable_sov_systems
 
 ROOT = Path(__file__).resolve().parents[1]
 CONFIG_PATH = ROOT / "config" / "db.json"
@@ -31,6 +25,7 @@ USER_AGENT = "EVEOSINT-Sovereignty/1.0 (+https://github.com/DictateurImperator/E
 COMPATIBILITY_DATE = "2026-09-28"
 TIMEOUT = (5, 60)
 ATTEMPTS = 4
+MAP_SCOPE = "global"
 LOG = logging.getLogger("sov_esi")
 
 
@@ -63,8 +58,10 @@ def connect():
     with CONFIG_PATH.open(encoding="utf-8") as fp:
         config = json.load(fp)
     return psycopg2.connect(
-        dbname=config["db_name"], user=config["db_user"],
-        password=config["db_password"], host=config["db_host"],
+        dbname=config["db_name"],
+        user=config["db_user"],
+        password=config["db_password"],
+        host=config["db_host"],
         port=config["db_port"],
     )
 
@@ -87,6 +84,30 @@ def ensure_tables(conn):
             ON sovereignty.current_map (alliance_id)
         """)
         cur.execute("""
+            CREATE TABLE IF NOT EXISTS sovereignty.map_changes (
+                change_id BIGSERIAL PRIMARY KEY,
+                system_id BIGINT NOT NULL,
+                change_type TEXT NOT NULL CHECK (change_type IN ('GAIN', 'LOST', 'TRANSFER')),
+                old_alliance_id BIGINT,
+                old_corporation_id BIGINT,
+                old_faction_id BIGINT,
+                new_alliance_id BIGINT,
+                new_corporation_id BIGINT,
+                new_faction_id BIGINT,
+                source_observed_at TIMESTAMPTZ NOT NULL,
+                detected_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                source TEXT NOT NULL DEFAULT 'esi'
+            )
+        """)
+        cur.execute("""
+            CREATE INDEX IF NOT EXISTS sov_map_changes_system_date_idx
+            ON sovereignty.map_changes (system_id, source_observed_at DESC)
+        """)
+        cur.execute("""
+            CREATE INDEX IF NOT EXISTS sov_map_changes_date_idx
+            ON sovereignty.map_changes (source_observed_at DESC)
+        """)
+        cur.execute("""
             CREATE TABLE IF NOT EXISTS sovereignty.esi_map_state (
                 id INTEGER PRIMARY KEY CHECK (id = 1),
                 etag TEXT,
@@ -94,8 +115,13 @@ def ensure_tables(conn):
                 last_modified TIMESTAMPTZ,
                 fetched_at TIMESTAMPTZ,
                 row_count INTEGER NOT NULL DEFAULT 0 CHECK (row_count >= 0),
-                last_status INTEGER
+                last_status INTEGER,
+                map_scope TEXT
             )
+        """)
+        cur.execute("""
+            ALTER TABLE sovereignty.esi_map_state
+            ADD COLUMN IF NOT EXISTS map_scope TEXT
         """)
     conn.commit()
 
@@ -122,43 +148,72 @@ def normalize(payload):
     return result
 
 
-def get_state(conn, claimable_ids):
+def load_current_map(conn):
     with conn.cursor() as cur:
         cur.execute("""
-            SELECT etag, expires_at, row_count
-            FROM sovereignty.esi_map_state WHERE id = 1
+            SELECT system_id, alliance_id, corporation_id, faction_id
+            FROM sovereignty.current_map
+        """)
+        return {
+            int(system_id): (alliance_id, corporation_id, faction_id)
+            for system_id, alliance_id, corporation_id, faction_id in cur.fetchall()
+        }
+
+
+def get_state(conn):
+    with conn.cursor() as cur:
+        cur.execute("""
+            SELECT etag, expires_at, row_count, map_scope
+            FROM sovereignty.esi_map_state
+            WHERE id = 1
         """)
         row = cur.fetchone()
-        cur.execute("SELECT system_id FROM sovereignty.current_map")
-        stored_ids = {int(item[0]) for item in cur.fetchall()}
-    stored_count = len(stored_ids)
-    out_of_scope = stored_ids - set(claimable_ids)
-    if not row:
-        return None, None, stored_count, stored_count, len(out_of_scope)
-    return row[0], row[1], row[2], stored_count, len(out_of_scope)
-
-
-def prune_current_map_scope(conn, claimable_ids):
-    claimable_ids = sorted(int(value) for value in claimable_ids)
-    if len(claimable_ids) < 1000:
-        raise RuntimeError(
-            "Refusing current SOV scope prune with suspiciously small claimable set (%d)"
-            % len(claimable_ids)
-        )
-    with conn.cursor() as cur:
-        cur.execute(
-            "DELETE FROM sovereignty.current_map WHERE NOT (system_id = ANY(%s))",
-            (claimable_ids,),
-        )
-        removed = cur.rowcount
         cur.execute("SELECT COUNT(*) FROM sovereignty.current_map")
-        remaining = int(cur.fetchone()[0])
-        cur.execute(
-            "UPDATE sovereignty.esi_map_state SET row_count = %s WHERE id = 1",
-            (remaining,),
-        )
-    conn.commit()
-    return removed, remaining
+        stored_count = int(cur.fetchone()[0])
+    if not row:
+        return None, None, stored_count, None
+    return row[0], row[1], stored_count, row[3]
+
+
+def build_changes(previous, current, source_observed_at):
+    changes = []
+    previous_ids = set(previous)
+    current_ids = set(current)
+
+    for system_id in sorted(current_ids - previous_ids):
+        new_owner = current[system_id]
+        changes.append((
+            system_id,
+            "GAIN",
+            None, None, None,
+            new_owner[0], new_owner[1], new_owner[2],
+            source_observed_at,
+        ))
+
+    for system_id in sorted(previous_ids - current_ids):
+        old_owner = previous[system_id]
+        changes.append((
+            system_id,
+            "LOST",
+            old_owner[0], old_owner[1], old_owner[2],
+            None, None, None,
+            source_observed_at,
+        ))
+
+    for system_id in sorted(previous_ids & current_ids):
+        old_owner = previous[system_id]
+        new_owner = current[system_id]
+        if old_owner == new_owner:
+            continue
+        changes.append((
+            system_id,
+            "TRANSFER",
+            old_owner[0], old_owner[1], old_owner[2],
+            new_owner[0], new_owner[1], new_owner[2],
+            source_observed_at,
+        ))
+
+    return changes
 
 
 def update_not_modified(conn, old_count, etag, response):
@@ -166,53 +221,84 @@ def update_not_modified(conn, old_count, etag, response):
     modified = http_date(response.headers.get("Last-Modified"))
     with conn.cursor() as cur:
         cur.execute("""
-            INSERT INTO sovereignty.esi_map_state
-                (id, etag, expires_at, last_modified, fetched_at, row_count, last_status)
-            VALUES (1, %s, %s, %s, NOW(), %s, 304)
+            INSERT INTO sovereignty.esi_map_state (
+                id, etag, expires_at, last_modified, fetched_at,
+                row_count, last_status, map_scope
+            )
+            VALUES (1, %s, %s, %s, NOW(), %s, 304, %s)
             ON CONFLICT (id) DO UPDATE SET
                 etag = EXCLUDED.etag,
                 expires_at = EXCLUDED.expires_at,
-                last_modified = COALESCE(EXCLUDED.last_modified, sovereignty.esi_map_state.last_modified),
+                last_modified = COALESCE(
+                    EXCLUDED.last_modified,
+                    sovereignty.esi_map_state.last_modified
+                ),
                 fetched_at = EXCLUDED.fetched_at,
-                last_status = 304
-        """, (etag, expires, modified, old_count))
+                row_count = EXCLUDED.row_count,
+                last_status = 304,
+                map_scope = EXCLUDED.map_scope
+        """, (etag, expires, modified, old_count, MAP_SCOPE))
     conn.commit()
 
 
-def replace_map(conn, rows, response):
-    # Validation must finish before the first DELETE; both DELETE and INSERT
-    # and cache metadata are committed as one transaction.
+def replace_map(conn, rows, response, previous, record_history):
     observed = http_date(response.headers.get("Last-Modified")) or utcnow()
     values = [
         (system_id, owner[0], owner[1], owner[2], observed)
         for system_id, owner in rows.items()
     ]
+    changes = build_changes(previous, rows, observed) if record_history else []
+
+    # Changes, current state and cache metadata are one transaction. A failed
+    # write cannot leave history ahead of current_map or vice versa.
     with conn.cursor() as cur:
+        if changes:
+            execute_values(cur, """
+                INSERT INTO sovereignty.map_changes (
+                    system_id,
+                    change_type,
+                    old_alliance_id,
+                    old_corporation_id,
+                    old_faction_id,
+                    new_alliance_id,
+                    new_corporation_id,
+                    new_faction_id,
+                    source_observed_at
+                )
+                VALUES %s
+            """, changes, page_size=1000)
+
         cur.execute("DELETE FROM sovereignty.current_map")
         execute_values(cur, """
-            INSERT INTO sovereignty.current_map
-                (system_id, alliance_id, corporation_id, faction_id, observed_at)
+            INSERT INTO sovereignty.current_map (
+                system_id, alliance_id, corporation_id, faction_id, observed_at
+            )
             VALUES %s
         """, values, page_size=1000)
+
         cur.execute("""
-            INSERT INTO sovereignty.esi_map_state
-                (id, etag, expires_at, last_modified, fetched_at, row_count, last_status)
-            VALUES (1, %s, %s, %s, NOW(), %s, 200)
+            INSERT INTO sovereignty.esi_map_state (
+                id, etag, expires_at, last_modified, fetched_at,
+                row_count, last_status, map_scope
+            )
+            VALUES (1, %s, %s, %s, NOW(), %s, 200, %s)
             ON CONFLICT (id) DO UPDATE SET
                 etag = EXCLUDED.etag,
                 expires_at = EXCLUDED.expires_at,
                 last_modified = EXCLUDED.last_modified,
                 fetched_at = EXCLUDED.fetched_at,
                 row_count = EXCLUDED.row_count,
-                last_status = 200
+                last_status = 200,
+                map_scope = EXCLUDED.map_scope
         """, (
             response.headers.get("ETag"),
             http_date(response.headers.get("Expires")),
             http_date(response.headers.get("Last-Modified")),
             len(values),
+            MAP_SCOPE,
         ))
     conn.commit()
-    return len(values)
+    return len(values), len(changes)
 
 
 def esi_request(session, etag):
@@ -223,136 +309,175 @@ def esi_request(session, etag):
     }
     if etag:
         headers["If-None-Match"] = etag
+
     for attempt in range(1, ATTEMPTS + 1):
         try:
             response = session.get(
-                ESI_URL, params={"datasource": "tranquility"},
-                headers=headers, timeout=TIMEOUT,
+                ESI_URL,
+                params={"datasource": "tranquility"},
+                headers=headers,
+                timeout=TIMEOUT,
             )
         except requests.RequestException as exc:
-            LOG.warning("ESI network failure attempt=%d type=%s", attempt, type(exc).__name__)
+            LOG.warning(
+                "ESI network failure attempt=%d type=%s",
+                attempt,
+                type(exc).__name__,
+            )
             if attempt == ATTEMPTS:
                 raise
-            time.sleep(min(60.0, 3.0 * 2 ** (attempt - 1)) + random.uniform(0, 1))
+            time.sleep(
+                min(60.0, 3.0 * 2 ** (attempt - 1))
+                + random.uniform(0, 1)
+            )
             continue
 
         remain = seconds(response.headers.get("X-ESI-Error-Limit-Remain"))
         reset = seconds(response.headers.get("X-ESI-Error-Limit-Reset"))
         bucket = seconds(response.headers.get("X-Ratelimit-Remaining"))
         status = response.status_code
-        LOG.info("ESI status=%s error_remain=%s bucket_remain=%s attempt=%s",
-                 status, remain, bucket, attempt)
+        LOG.info(
+            "ESI status=%s error_remain=%s bucket_remain=%s attempt=%s",
+            status,
+            remain,
+            bucket,
+            attempt,
+        )
 
         if status in (200, 304):
             return response
 
-        # Stop on a low old-style error budget instead of generating new errors.
         if remain is not None and remain <= 5:
-            raise RuntimeError("ESI error budget low; stopping, wait %.0fs" % (reset or 60))
+            raise RuntimeError(
+                "ESI error budget low; stopping, wait %.0fs"
+                % (reset or 60)
+            )
 
         if status in (420, 429, 500, 502, 503, 504):
             retry_after = seconds(response.headers.get("Retry-After"))
             if attempt == ATTEMPTS:
                 break
             if status in (420, 429):
-                delay = retry_after if retry_after is not None else (reset if status == 420 and reset is not None else 900.0)
+                delay = (
+                    retry_after
+                    if retry_after is not None
+                    else (reset if status == 420 and reset is not None else 900.0)
+                )
                 delay += 1
             else:
-                delay = min(90.0, 4.0 * 2 ** (attempt - 1)) + random.uniform(0, 2)
-            LOG.warning("ESI status=%s; retrying in %.1fs", status, delay)
+                delay = (
+                    min(90.0, 4.0 * 2 ** (attempt - 1))
+                    + random.uniform(0, 2)
+                )
+            LOG.warning(
+                "ESI status=%s; retrying in %.1fs",
+                status,
+                delay,
+            )
             time.sleep(delay)
             continue
         break
-    raise RuntimeError("ESI sovereignty request failed with HTTP %s; previous map retained" % status)
+
+    raise RuntimeError(
+        "ESI sovereignty request failed with HTTP %s; previous map retained"
+        % status
+    )
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    args = parser.parse_args()
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    parser.parse_args()
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s %(message)s",
+    )
 
     with connect() as conn:
-        # Single-job advisory lock: do not allow concurrent ESI updates.
         with conn.cursor() as cur:
             cur.execute("SELECT pg_try_advisory_lock(184624, 1)")
             if not cur.fetchone()[0]:
                 LOG.info("Another sovereignty ESI job is already active")
                 return 0
+
         try:
             ensure_tables(conn)
-            claimable = load_claimable_sov_systems(conn)
-            claimable_ids = set(claimable)
-            if len(claimable_ids) < 1000:
-                raise RuntimeError(
-                    "SDE conquerable-nullsec scope looks incomplete (%d systems)" % len(claimable_ids)
-                )
+            etag, expires_at, existing, map_scope = get_state(conn)
 
-            etag, expires_at, expected, existing, out_of_scope = get_state(conn, claimable_ids)
-            if out_of_scope:
-                removed, existing = prune_current_map_scope(conn, claimable_ids)
-                expected = existing
+            # Never bypass CCP's cache window. If this database still contains
+            # the old filtered EVEOSINT map, wait for expiry, then request one
+            # full 200 response without If-None-Match and adopt it as baseline.
+            if existing > 0 and expires_at and utcnow() < expires_at:
                 LOG.info(
-                    "SOV_ESI scope_migration removed=%d remaining=%d scope=claimable_nullsec",
-                    removed,
+                    "SOV_ESI status=cached systems=%d scope=%s next_fetch=%s",
                     existing,
-                )
-            local_scope_valid = True
-            if (
-                existing > 0
-                and expected == existing
-                and expires_at
-                and utcnow() < expires_at
-            ):
-                LOG.info(
-                    "SOV_ESI status=cached systems=%d scope=claimable_nullsec next_fetch=%s",
-                    existing,
+                    map_scope or "legacy",
                     expires_at.isoformat(),
                 )
                 return 0
+
+            previous = load_current_map(conn)
+            history_ready = bool(previous) and map_scope == MAP_SCOPE
+
             with requests.Session() as session:
                 response = esi_request(
                     session,
-                    etag if local_scope_valid and existing > 0 and expected == existing else None,
+                    etag if history_ready else None,
                 )
+
                 if response.status_code == 304:
-                    if existing <= 0 or expected != existing:
-                        raise RuntimeError("Unexpected 304 without a valid local map")
-                    update_not_modified(conn, existing, response.headers.get("ETag") or etag, response)
-                    LOG.info("SOV_ESI status=not_modified systems=%d", existing)
+                    if not history_ready:
+                        raise RuntimeError(
+                            "Unexpected 304 without a complete global baseline"
+                        )
+                    update_not_modified(
+                        conn,
+                        existing,
+                        response.headers.get("ETag") or etag,
+                        response,
+                    )
+                    LOG.info(
+                        "SOV_ESI status=not_modified systems=%d scope=global",
+                        existing,
+                    )
                     return 0
+
                 result = normalize(response.json())
                 if len(result) < 1000:
                     raise ValueError(
-                        "Suspiciously incomplete global ESI map (%d systems); current state retained"
-                        % len(result)
+                        "Suspiciously incomplete global ESI map (%d systems); "
+                        "current state retained" % len(result)
+                    )
+                if history_ready and existing >= 1000 and len(result) < existing * 0.70:
+                    raise ValueError(
+                        "Global ESI map shrank unexpectedly (%d -> %d); "
+                        "current state retained" % (existing, len(result))
                     )
 
-                result = {
-                    system_id: owner
-                    for system_id, owner in result.items()
-                    if system_id in claimable_ids
-                }
-                if len(result) < 1000:
-                    raise ValueError(
-                        "Suspiciously incomplete conquerable-nullsec ESI map (%d systems); current state retained"
-                        % len(result)
-                    )
-                if local_scope_valid and existing >= 1000 and len(result) < existing * 0.70:
-                    raise ValueError(
-                        "Conquerable-nullsec ESI map shrank unexpectedly (%d -> %d); current state retained"
-                        % (existing, len(result))
-                    )
-
-                count = replace_map(conn, result, response)
-                LOG.info(
-                    "SOV_ESI status=updated systems=%d scope=claimable_nullsec sde_scope=%d",
-                    count,
-                    len(claimable_ids),
+                count, change_count = replace_map(
+                    conn,
+                    result,
+                    response,
+                    previous,
+                    record_history=history_ready,
                 )
+                if history_ready:
+                    LOG.info(
+                        "SOV_ESI status=updated systems=%d changes=%d scope=global",
+                        count,
+                        change_count,
+                    )
+                else:
+                    LOG.info(
+                        "SOV_ESI status=baseline systems=%d changes=0 scope=global",
+                        count,
+                    )
                 return 0
+
         except Exception:
             conn.rollback()
-            LOG.exception("Sovereignty ESI refresh failed; existing map preserved")
+            LOG.exception(
+                "Sovereignty ESI refresh failed; existing map and history preserved"
+            )
             return 1
         finally:
             with conn.cursor() as cur:
