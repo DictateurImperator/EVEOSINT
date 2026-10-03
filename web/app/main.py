@@ -17,6 +17,7 @@ from .routes_admin_jobs import router as admin_jobs_router
 from .routes_admin_debug import router as admin_debug_router
 from .routes_admin_update_pipeline import router as admin_update_pipeline_router
 from .routes_admin_mer import router as admin_mer_router
+from .routes_admin_nginx import router as admin_nginx_router
 from .routes_admin_system import router as admin_system_router
 from .routes_admin_users import router as admin_users_router
 from .routes_entities import router as entities_router
@@ -242,4 +243,5 @@ app.include_router(admin_jobs_router)
 app.include_router(admin_debug_router)
 app.include_router(admin_update_pipeline_router)
 app.include_router(admin_mer_router)
+app.include_router(admin_nginx_router)
 app.include_router(admin_audit_router)
