@@ -44,7 +44,7 @@ def _nginx_redirect(*, success=None, error=None):
 @router.get("/admin/nginx", response_class=HTMLResponse)
 def admin_nginx(request: Request):
     user = require_login(request)
-    redirect = require_permission_or_redirect(user, "admin.system.view")
+    redirect = require_permission_or_redirect(user, "admin.nginx.manage")
     if redirect:
         return redirect
 
@@ -53,7 +53,7 @@ def admin_nginx(request: Request):
         user=user,
         title="EVEOSINT - Admin Nginx",
         active_module="admin",
-        active_menu_key="admin.system",
+        active_menu_key="admin.nginx",
     )
     context.update({
         "nginx": get_nginx_snapshot(),
@@ -66,7 +66,7 @@ def admin_nginx(request: Request):
 @router.get("/admin/nginx/status")
 def admin_nginx_status(request: Request):
     user = require_login(request)
-    redirect = require_permission_or_redirect(user, "admin.system.view")
+    redirect = require_permission_or_redirect(user, "admin.nginx.manage")
     if redirect:
         return JSONResponse({"error": "forbidden"}, status_code=403)
 
@@ -88,7 +88,7 @@ def admin_nginx_save(
     config_content: str = Form(...),
 ):
     user = require_login(request)
-    redirect = require_permission_or_redirect(user, "admin.system.view")
+    redirect = require_permission_or_redirect(user, "admin.nginx.manage")
     if redirect:
         return redirect
 
