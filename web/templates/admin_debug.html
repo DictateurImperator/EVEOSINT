@@ -2,11 +2,12 @@
 {% block content %}
 <style>
   .sov-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px; }
+  .snapshot-grid { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:12px; }
   .sov-stat { border:1px solid rgba(148,163,184,.15); border-radius:10px; padding:10px 12px; background:rgba(15,23,42,.45); }
   .sov-stat .value { font-weight:700; }
   .history-table td, .history-table th { white-space:nowrap; vertical-align:middle; }
   .history-table td.wrap { white-space:normal; min-width:180px; }
-  @media (max-width:900px){ .sov-grid{grid-template-columns:1fr;} }
+  @media (max-width:900px){ .sov-grid,.snapshot-grid{grid-template-columns:1fr;} }
 </style>
 
 <div class="d-flex flex-wrap justify-content-between align-items-start gap-3 mb-4">
@@ -134,20 +135,20 @@
   </div>
 
   {% if esi_snapshot.available %}
-  <div class="debug-grid mb-4">
-    <div class="debug-stat">
+  <div class="snapshot-grid mb-4">
+    <div class="sov-stat">
       <div class="muted-line small">Total K-space rows</div>
       <div class="value">{{ esi_snapshot.total }}</div>
     </div>
-    <div class="debug-stat">
+    <div class="sov-stat">
       <div class="muted-line small">Alliance claimed</div>
       <div class="value">{{ esi_snapshot.alliance_claimed }}</div>
     </div>
-    <div class="debug-stat">
+    <div class="sov-stat">
       <div class="muted-line small">Faction claimed</div>
       <div class="value">{{ esi_snapshot.faction_claimed }}</div>
     </div>
-    <div class="debug-stat">
+    <div class="sov-stat">
       <div class="muted-line small">Unclaimed</div>
       <div class="value">{{ esi_snapshot.unclaimed }}</div>
     </div>
