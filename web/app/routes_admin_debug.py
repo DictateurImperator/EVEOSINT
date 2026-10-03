@@ -158,7 +158,14 @@ def _sovereignty_debug_inspection(system_id=None):
                         row_position
                     FROM sovereignty.dotlan_events
                     WHERE system_id = %s
-                    ORDER BY event_at DESC, row_position ASC, action ASC
+                    ORDER BY
+                        event_at DESC,
+                        row_position ASC,
+                        CASE action
+                            WHEN 'LOST' THEN 0
+                            WHEN 'GAIN' THEN 1
+                            ELSE 2
+                        END
                     LIMIT 1000
                 """, (system_id,))
                 dotlan_events = [
