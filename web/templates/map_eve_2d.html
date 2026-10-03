@@ -81,6 +81,68 @@
     border-radius:7px;
     background:rgba(255,255,255,.025);
   }
+  .eve2d-mode-panel {
+    position:absolute;
+    z-index:4;
+    top:14px;
+    left:14px;
+    width:250px;
+    padding:12px;
+    border:1px solid rgba(111,137,173,.26);
+    border-radius:10px;
+    background:rgba(6,12,20,.92);
+    box-shadow:0 12px 34px rgba(0,0,0,.28);
+    backdrop-filter:blur(6px);
+  }
+  .eve2d-mode-title {
+    margin-bottom:9px;
+    font-size:.75rem;
+    font-weight:700;
+    letter-spacing:.06em;
+    text-transform:uppercase;
+    color:#91a5bf;
+  }
+  .eve2d-mode-list {
+    display:grid;
+    gap:6px;
+  }
+  .eve2d-mode-option {
+    width:100%;
+    border:1px solid rgba(111,137,173,.22);
+    border-radius:7px;
+    padding:8px 10px;
+    background:rgba(255,255,255,.025);
+    color:#c7d4e4;
+    text-align:left;
+    font-size:.82rem;
+  }
+  .eve2d-mode-option:hover {
+    border-color:rgba(114,170,255,.42);
+    background:rgba(83,139,220,.08);
+  }
+  .eve2d-mode-option.active {
+    border-color:rgba(91,157,255,.62);
+    background:rgba(70,130,210,.16);
+    color:#fff;
+  }
+  .eve2d-influence-controls {
+    margin-top:10px;
+    padding-top:10px;
+    border-top:1px solid rgba(111,137,173,.17);
+  }
+  .eve2d-influence-controls[hidden] { display:none; }
+  .eve2d-influence-controls label {
+    display:block;
+    margin-bottom:5px;
+    font-size:.72rem;
+    color:#8ea0b7;
+  }
+  .eve2d-influence-status {
+    min-height:16px;
+    margin-top:6px;
+    font-size:.68rem;
+    color:#788aa1;
+  }
   @media (max-width:800px) {
     .eve2d-head { grid-template-columns:1fr; align-items:start; }
     .eve2d-toolbar { justify-content:flex-start; flex-wrap:wrap; }
@@ -113,6 +175,18 @@
   </div>
 
   <div class="eve2d-shell" id="eve2dShell">
+    <div class="eve2d-mode-panel">
+      <div class="eve2d-mode-title">Display mode</div>
+      <div class="eve2d-mode-list">
+        <button class="eve2d-mode-option active" type="button" data-eve2d-mode="systems">Systems</button>
+        <button class="eve2d-mode-option" type="button" data-eve2d-mode="influence">Influence</button>
+      </div>
+      <div class="eve2d-influence-controls" id="eve2dInfluenceControls" hidden>
+        <label for="eve2dInfluenceDate">Date</label>
+        <input class="form-control form-control-sm" type="date" id="eve2dInfluenceDate">
+        <div class="eve2d-influence-status" id="eve2dInfluenceStatus"></div>
+      </div>
+    </div>
     <canvas id="eve2dCanvas" aria-label="New Eden 2D system and stargate map"></canvas>
     <div class="eve2d-tooltip" id="eve2dTooltip"></div>
     <div class="eve2d-help">Drag to pan · wheel to zoom · hover a system · click a system to open</div>
@@ -126,6 +200,10 @@
   const shell = document.getElementById("eve2dShell");
   const canvas = document.getElementById("eve2dCanvas");
   const tooltip = document.getElementById("eve2dTooltip");
+  const influenceControls = document.getElementById("eve2dInfluenceControls");
+  const influenceDate = document.getElementById("eve2dInfluenceDate");
+  const influenceStatus = document.getElementById("eve2dInfluenceStatus");
+  const modeButtons = Array.from(document.querySelectorAll("[data-eve2d-mode]"));
   if (!dataEl || !shell || !canvas) return;
 
   const payload = JSON.parse(dataEl.textContent || "{}");
@@ -176,6 +254,10 @@
   let hovered = null;
   let pointerX = 0;
   let pointerY = 0;
+  let activeMode = "systems";
+  let influenceGroups = [];
+  let influenceBySystem = new Map();
+  let influenceRequestToken = 0;
 
   function resizeCanvas() {
     const rect = shell.getBoundingClientRect();
@@ -234,10 +316,76 @@
     ctx.stroke();
   }
 
+  function drawInfluence() {
+    if (activeMode !== "influence" || !influenceGroups.length) return;
+
+    const baseRadius = Math.max(13, 22 * scale);
+    const baseWidth = Math.max(24, 42 * scale);
+
+    influenceGroups.forEach(group => {
+      const color = group.color || "#8294aa";
+      const systemIds = Array.isArray(group.system_ids) ? group.system_ids : [];
+      if (!systemIds.length) return;
+
+      ctx.save();
+      ctx.strokeStyle = color;
+      ctx.fillStyle = color;
+      ctx.lineCap = "round";
+      ctx.lineJoin = "round";
+
+      ctx.globalAlpha = .08;
+      ctx.lineWidth = baseWidth * 1.55;
+      ctx.beginPath();
+      edgePairs.forEach(([source, target]) => {
+        const sourceGroup = influenceBySystem.get(String(source.id));
+        const targetGroup = influenceBySystem.get(String(target.id));
+        if (sourceGroup !== group || targetGroup !== group) return;
+        const a = worldToScreen(source);
+        const b = worldToScreen(target);
+        ctx.moveTo(a.x, a.y);
+        ctx.lineTo(b.x, b.y);
+      });
+      ctx.stroke();
+      systemIds.forEach(systemId => {
+        const node = nodeById.get(String(systemId));
+        if (!node) return;
+        const p = worldToScreen(node);
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, baseRadius * 1.55, 0, Math.PI * 2);
+        ctx.fill();
+      });
+
+      ctx.globalAlpha = .22;
+      ctx.lineWidth = baseWidth;
+      ctx.beginPath();
+      edgePairs.forEach(([source, target]) => {
+        const sourceGroup = influenceBySystem.get(String(source.id));
+        const targetGroup = influenceBySystem.get(String(target.id));
+        if (sourceGroup !== group || targetGroup !== group) return;
+        const a = worldToScreen(source);
+        const b = worldToScreen(target);
+        ctx.moveTo(a.x, a.y);
+        ctx.lineTo(b.x, b.y);
+      });
+      ctx.stroke();
+      systemIds.forEach(systemId => {
+        const node = nodeById.get(String(systemId));
+        if (!node) return;
+        const p = worldToScreen(node);
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, baseRadius, 0, Math.PI * 2);
+        ctx.fill();
+      });
+
+      ctx.restore();
+    });
+  }
+
   function draw() {
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, cssWidth, cssHeight);
     drawGrid();
+    drawInfluence();
 
     ctx.beginPath();
     ctx.strokeStyle = "rgba(104,132,170,.34)";
@@ -318,11 +466,15 @@
     const shellRect = shell.getBoundingClientRect();
     const sec = Number(node.security);
     const secText = Number.isFinite(sec) ? sec.toFixed(2) : "?";
+    const influenceGroup = activeMode === "influence"
+      ? influenceBySystem.get(String(node.id))
+      : null;
     tooltip.innerHTML =
       "<strong>" + escapeHtml(node.name) + "</strong>" +
       "<br><span class=\"muted\">" + escapeHtml(node.region_name || "") +
       " · " + escapeHtml(node.constellation_name || "") + "</span>" +
-      "<br>Security: " + secText;
+      "<br>Security: " + secText +
+      (influenceGroup ? "<br>Influence: " + escapeHtml(influenceGroup.name || "") : "");
     tooltip.style.display = "block";
     const left = Math.min(shellRect.width - 280, Math.max(8, clientX - shellRect.left + 14));
     const top = Math.min(shellRect.height - 80, Math.max(8, clientY - shellRect.top + 14));
@@ -334,6 +486,77 @@
     return String(value ?? "").replace(/[&<>'"]/g, ch => ({
       "&":"&amp;", "<":"&lt;", ">":"&gt;", "'":"&#39;", '"':"&quot;"
     }[ch]));
+  }
+
+  function applyInfluence(payload) {
+    influenceGroups = Array.isArray(payload.groups) ? payload.groups : [];
+    influenceBySystem = new Map();
+    influenceGroups.forEach(group => {
+      (group.system_ids || []).forEach(systemId => {
+        influenceBySystem.set(String(systemId), group);
+      });
+    });
+
+    if (influenceDate) {
+      influenceDate.value = payload.date || "";
+      influenceDate.min = payload.min_date || "";
+      influenceDate.max = payload.max_date || "";
+    }
+    if (influenceStatus) {
+      influenceStatus.textContent = influenceGroups.length
+        ? influenceGroups.length + " influence groups"
+        : "No sovereignty influence for this date";
+    }
+    draw();
+  }
+
+  async function loadInfluence(dateValue) {
+    const token = ++influenceRequestToken;
+    if (influenceStatus) influenceStatus.textContent = "Loading…";
+    const query = dateValue ? "?date=" + encodeURIComponent(dateValue) : "";
+    try {
+      const response = await fetch("/api/map/eve-2d/influence" + query, {
+        headers: {"Accept": "application/json"},
+        cache: "no-store",
+      });
+      const payload = await response.json();
+      if (token !== influenceRequestToken) return;
+      if (!response.ok) {
+        throw new Error(payload.error || "Influence loading failed");
+      }
+      applyInfluence(payload);
+    } catch (error) {
+      if (token !== influenceRequestToken) return;
+      influenceGroups = [];
+      influenceBySystem = new Map();
+      if (influenceStatus) influenceStatus.textContent = String(error.message || error);
+      draw();
+    }
+  }
+
+  function setMode(mode) {
+    activeMode = mode === "influence" ? "influence" : "systems";
+    modeButtons.forEach(button => {
+      button.classList.toggle("active", button.dataset.eve2dMode === activeMode);
+    });
+    if (influenceControls) influenceControls.hidden = activeMode !== "influence";
+
+    if (activeMode === "influence") {
+      loadInfluence(influenceDate && influenceDate.value ? influenceDate.value : null);
+    } else {
+      ++influenceRequestToken;
+      draw();
+    }
+  }
+
+  modeButtons.forEach(button => {
+    button.addEventListener("click", () => setMode(button.dataset.eve2dMode));
+  });
+
+  if (influenceDate) {
+    influenceDate.addEventListener("change", () => {
+      if (activeMode === "influence") loadInfluence(influenceDate.value || null);
+    });
   }
 
   canvas.addEventListener("wheel", event => {
