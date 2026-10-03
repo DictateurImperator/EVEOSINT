@@ -20,8 +20,199 @@ from .sovereignty_debug_runs import (
 )
 from .layout import app_context
 from .main_objects import templates
+from .db import db
 
 router = APIRouter()
+
+
+
+def _sovereignty_debug_inspection(system_id=None):
+    systems = []
+    selected = None
+    dotlan_events = []
+    esi_changes = []
+
+    with db() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT
+                    to_regclass('sovereignty.dotlan_system_sync'),
+                    to_regclass('sovereignty.current_map'),
+                    to_regclass('sovereignty.dotlan_events'),
+                    to_regclass('sovereignty.map_changes')
+            """)
+            sync_table, current_table, events_table, changes_table = cur.fetchone()
+
+        if sync_table:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT
+                        system_id,
+                        system_name,
+                        last_status,
+                        event_count,
+                        fetched_at
+                    FROM sovereignty.dotlan_system_sync
+                    ORDER BY LOWER(system_name), system_id
+                """)
+                systems = [
+                    {
+                        "system_id": int(row[0]),
+                        "system_name": row[1],
+                        "last_status": row[2],
+                        "event_count": int(row[3] or 0),
+                        "fetched_at": row[4],
+                    }
+                    for row in cur.fetchall()
+                ]
+
+        if system_id is None:
+            return {
+                "systems": systems,
+                "selected": None,
+                "dotlan_events": [],
+                "esi_changes": [],
+            }
+
+        try:
+            system_id = int(system_id)
+        except (TypeError, ValueError):
+            system_id = None
+
+        if system_id is None or not sync_table:
+            return {
+                "systems": systems,
+                "selected": None,
+                "dotlan_events": [],
+                "esi_changes": [],
+            }
+
+        with conn.cursor() as cur:
+            current_join = (
+                """
+                LEFT JOIN sovereignty.current_map cm
+                  ON cm.system_id = s.system_id
+                """
+                if current_table
+                else ""
+            )
+            current_columns = (
+                """
+                cm.alliance_id,
+                cm.corporation_id,
+                cm.faction_id,
+                cm.observed_at
+                """
+                if current_table
+                else """
+                NULL::BIGINT,
+                NULL::BIGINT,
+                NULL::BIGINT,
+                NULL::TIMESTAMPTZ
+                """
+            )
+            cur.execute(
+                f"""
+                SELECT
+                    s.system_id,
+                    s.system_name,
+                    s.source_url,
+                    s.event_count,
+                    s.fetched_at,
+                    s.last_status,
+                    s.last_error,
+                    {current_columns}
+                FROM sovereignty.dotlan_system_sync s
+                {current_join}
+                WHERE s.system_id = %s
+                """,
+                (system_id,),
+            )
+            row = cur.fetchone()
+            if row:
+                selected = {
+                    "system_id": int(row[0]),
+                    "system_name": row[1],
+                    "source_url": row[2],
+                    "event_count": int(row[3] or 0),
+                    "fetched_at": row[4],
+                    "last_status": row[5],
+                    "last_error": row[6],
+                    "current_alliance_id": row[7],
+                    "current_corporation_id": row[8],
+                    "current_faction_id": row[9],
+                    "current_observed_at": row[10],
+                }
+
+        if selected and events_table:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT
+                        event_at,
+                        action,
+                        action_raw,
+                        alliance_name,
+                        corporation_name,
+                        ownership_model,
+                        source_url,
+                        row_position
+                    FROM sovereignty.dotlan_events
+                    WHERE system_id = %s
+                    ORDER BY event_at DESC, row_position ASC, action ASC
+                    LIMIT 1000
+                """, (system_id,))
+                dotlan_events = [
+                    {
+                        "event_at": row[0],
+                        "action": row[1],
+                        "action_raw": row[2],
+                        "alliance_name": row[3],
+                        "corporation_name": row[4],
+                        "ownership_model": row[5],
+                        "source_url": row[6],
+                    }
+                    for row in cur.fetchall()
+                ]
+
+        if selected and changes_table:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT
+                        change_type,
+                        old_alliance_id,
+                        old_corporation_id,
+                        old_faction_id,
+                        new_alliance_id,
+                        new_corporation_id,
+                        new_faction_id,
+                        source_observed_at,
+                        detected_at
+                    FROM sovereignty.map_changes
+                    WHERE system_id = %s
+                    ORDER BY source_observed_at DESC, change_id DESC
+                    LIMIT 500
+                """, (system_id,))
+                esi_changes = [
+                    {
+                        "change_type": row[0],
+                        "old_alliance_id": row[1],
+                        "old_corporation_id": row[2],
+                        "old_faction_id": row[3],
+                        "new_alliance_id": row[4],
+                        "new_corporation_id": row[5],
+                        "new_faction_id": row[6],
+                        "source_observed_at": row[7],
+                        "detected_at": row[8],
+                    }
+                    for row in cur.fetchall()
+                ]
+
+    return {
+        "systems": systems,
+        "selected": selected,
+        "dotlan_events": dotlan_events,
+        "esi_changes": esi_changes,
+    }
 
 
 def _redirect(code, kind="error"):
@@ -41,9 +232,12 @@ def admin_debug(request: Request):
         active_module="admin",
         active_menu_key="admin.debug",
     )
+    inspection = _sovereignty_debug_inspection(
+        request.query_params.get("system_id")
+    )
     context.update({
-        "debug": get_debug_status(include_history=True),
         "sovereignty_debug": get_sovereignty_debug_status(),
+        "sovereignty_inspection": inspection,
         "can_run": "admin.jobs.run" in user.get("permissions", set()),
         "error": request.query_params.get("error"),
         "success": request.query_params.get("success"),
