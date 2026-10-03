@@ -53,7 +53,7 @@ def admin_update_pipeline_status(request: Request):
     redirect = require_permission_or_redirect(user, "admin.jobs.view")
     if redirect:
         return redirect
-    return JSONResponse(get_pipeline_status(include_history=True))
+    return JSONResponse(get_pipeline_status(include_history=True, include_next_plan=False))
 
 
 @router.get("/admin/update-pipeline/api/log")
