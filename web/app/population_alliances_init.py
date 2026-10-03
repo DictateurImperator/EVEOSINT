@@ -423,6 +423,29 @@ def load_sync_by_id(conn, alliance_id):
     }
 
 
+def alliance_has_population_rows(conn, alliance_id):
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT EXISTS (
+                SELECT 1
+                FROM population.alliance_daily
+                WHERE alliance_id = %s
+            )
+            """,
+            (int(alliance_id),),
+        )
+        return bool(cur.fetchone()[0])
+
+
+def sync_is_complete_with_rows(conn, sync):
+    return bool(
+        sync
+        and sync.get("initialization_done")
+        and alliance_has_population_rows(conn, sync["alliance_id"])
+    )
+
+
 def get_alliance_history_initialization_state(alliance_id):
     """Return the persisted DOTLAN population-history initialization state."""
     conn = db()
@@ -456,9 +479,11 @@ def get_alliance_history_initialization_state(alliance_id):
         def iso(value):
             return value.isoformat() if value is not None else None
 
+        has_rows = alliance_has_population_rows(conn, alliance_id)
+
         return {
             "known": True,
-            "initialization_done": bool(row[0]),
+            "initialization_done": bool(row[0]) and has_rows,
             "first_available_date": iso(row[1]),
             "oldest_synced_date": iso(row[2]),
             "last_synced_date": iso(row[3]),
@@ -698,7 +723,7 @@ def initialize_alliance(
         sync = load_sync_by_id(conn, expected_alliance_id)
     else:
         sync = load_sync_by_slug(conn, alliance["slug"])
-    if sync and sync["initialization_done"]:
+    if sync_is_complete_with_rows(conn, sync):
         print(
             f"[{index}/{total}] SKIP {alliance['name']} already initialized "
             f"alliance_id={sync['alliance_id']}",
@@ -708,9 +733,10 @@ def initialize_alliance(
 
     today = date.today()
     alliance_id = sync["alliance_id"] if sync else None
-    first_available_date = sync["first_available_date"] if sync else None
+    has_existing_rows = bool(alliance_id is not None and alliance_has_population_rows(conn, alliance_id))
+    first_available_date = sync["first_available_date"] if sync and has_existing_rows else None
 
-    if sync and sync["oldest_synced_date"]:
+    if sync and has_existing_rows and sync["oldest_synced_date"]:
         window_end = sync["oldest_synced_date"] - timedelta(days=1)
     else:
         window_end = today
@@ -867,7 +893,7 @@ def initialize_alliance_on_demand(alliance_id, alliance_name):
     try:
         ensure_tables(conn)
         sync = load_sync_by_id(conn, alliance_id)
-        if sync and sync["initialization_done"]:
+        if sync_is_complete_with_rows(conn, sync):
             return "skipped"
 
         # Prevent two web requests/workers from backfilling the same alliance at once.
@@ -879,7 +905,7 @@ def initialize_alliance_on_demand(alliance_id, alliance_name):
 
         # Re-check after obtaining the lock: another request may just have completed.
         sync = load_sync_by_id(conn, alliance_id)
-        if sync and sync["initialization_done"]:
+        if sync_is_complete_with_rows(conn, sync):
             return "skipped"
 
         client = DotlanClient()
