@@ -423,6 +423,9 @@
     {% endif %}
 
     <div class="eve-map-toolbar">
+      {% if map_payload.scope == 'universe' %}
+        <a class="btn btn-sm btn-outline-primary" href="/map/eve-2d">2D EVE Map</a>
+      {% endif %}
       <button class="btn btn-sm btn-outline-secondary" type="button" id="mapZoomOut">−</button>
       <button class="btn btn-sm btn-outline-secondary" type="button" id="mapFit">Fit</button>
       <button class="btn btn-sm btn-outline-secondary" type="button" id="mapZoomIn">+</button>
