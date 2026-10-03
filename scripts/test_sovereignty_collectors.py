@@ -2,7 +2,7 @@
 """Offline smoke tests for sovereignty collectors; no HTTP or DB access."""
 import unittest
 
-from scripts.sync_sovereignty_esi import normalize
+from scripts.sync_sovereignty_esi import build_changes, normalize
 from scripts.import_sovereignty_dotlan import classification, ownership_model, parse_events
 from scripts.sovereignty_scope import claimable_sov_systems_from_rows
 
@@ -23,6 +23,45 @@ class EsiSnapshotTests(unittest.TestCase):
         ]):
             with self.subTest(payload=payload), self.assertRaises(ValueError):
                 normalize(payload)
+
+
+class EsiDeltaTests(unittest.TestCase):
+    def test_only_real_changes_are_emitted(self):
+        from datetime import datetime, timezone
+
+        observed = datetime(2026, 10, 3, 12, 0, tzinfo=timezone.utc)
+        previous = {
+            30000001: (1001, None, None),
+            30000002: (1002, None, None),
+            30000003: (1003, None, None),
+        }
+        current = {
+            30000001: (1001, None, None),
+            30000002: (2002, None, None),
+            30000004: (1004, None, None),
+        }
+
+        changes = build_changes(previous, current, observed)
+        by_system = {row[0]: row for row in changes}
+
+        self.assertEqual(set(by_system), {30000002, 30000003, 30000004})
+        self.assertEqual(by_system[30000002][1], "TRANSFER")
+        self.assertEqual(by_system[30000002][2:8], (1002, None, None, 2002, None, None))
+        self.assertEqual(by_system[30000003][1], "LOST")
+        self.assertEqual(by_system[30000003][2:8], (1003, None, None, None, None, None))
+        self.assertEqual(by_system[30000004][1], "GAIN")
+        self.assertEqual(by_system[30000004][2:8], (None, None, None, 1004, None, None))
+        self.assertTrue(all(row[8] == observed for row in changes))
+
+    def test_unchanged_map_produces_no_history(self):
+        from datetime import datetime, timezone
+
+        observed = datetime(2026, 10, 3, 12, 0, tzinfo=timezone.utc)
+        state = {
+            30000001: (1001, None, None),
+            30000002: (None, None, 500001),
+        }
+        self.assertEqual(build_changes(state, dict(state), observed), [])
 
 
 class SovereigntyScopeTests(unittest.TestCase):
