@@ -32,6 +32,23 @@ def _position(data):
     }
 
 
+def _position_2d(data):
+    pos = data.get("position2D") or {}
+    if isinstance(pos, dict) and ("x" in pos or "y" in pos):
+        scale = 1_000_000_000_000_000.0
+        return {
+            "x": float(pos.get("x") or 0.0) / scale,
+            "y": float(pos.get("y") or 0.0) / scale,
+        }
+
+    # Fallback for older SDE data: top-down universe projection.
+    position = _position(data)
+    return {
+        "x": position["x"],
+        "y": position["z"],
+    }
+
+
 def _int(value):
     if value is None or value == "":
         return None
@@ -107,6 +124,7 @@ def _topology():
             "id": system_id,
             "name": _name(data, f"System {system_id}"),
             "position": _position(data),
+            "position_2d": _position_2d(data),
             "constellation_id": _int(data.get("constellationID")),
             "region_id": _int(data.get("regionID")),
             "security": data.get("securityStatus"),
@@ -342,6 +360,54 @@ def get_universe_map():
         "groups": [],
         "side_title": "Regions",
         "side_items": side_items,
+    }
+
+
+def get_eve_2d_map():
+    topology = _topology()
+
+    # CCP's in-game New Eden map uses this solar-system ID range.
+    visible_system_ids = {
+        system_id
+        for system_id in topology["systems"]
+        if 30_000_000 <= int(system_id) <= 30_999_999
+    }
+
+    nodes = []
+    for system_id in sorted(visible_system_ids):
+        system = topology["systems"][system_id]
+        region = topology["regions"].get(system.get("region_id")) or {}
+        constellation = topology["constellations"].get(system.get("constellation_id")) or {}
+        pos = system.get("position_2d") or {}
+        nodes.append({
+            "id": system_id,
+            "name": system["name"],
+            "x": float(pos.get("x") or 0.0),
+            "y": float(pos.get("y") or 0.0),
+            "security": system.get("security"),
+            "region_id": system.get("region_id"),
+            "region_name": region.get("name"),
+            "constellation_id": system.get("constellation_id"),
+            "constellation_name": constellation.get("name"),
+            "url": f"/map/system/{system_id}",
+        })
+
+    edges = [
+        {"source": source_id, "target": target_id}
+        for source_id, target_id in sorted(topology["system_edges"])
+        if source_id in visible_system_ids and target_id in visible_system_ids
+    ]
+
+    return {
+        "scope": "eve_2d",
+        "title": "New Eden · 2D EVE Map",
+        "subtitle": f"{len(nodes)} systems · {len(edges)} stargate connections",
+        "nodes": nodes,
+        "edges": edges,
+        "breadcrumbs": [
+            {"label": "New Eden", "url": "/map"},
+            {"label": "2D EVE Map", "url": "/map/eve-2d"},
+        ],
     }
 
 
