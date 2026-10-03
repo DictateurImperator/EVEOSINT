@@ -169,6 +169,84 @@ def entity_cell(cells, prefix, action_pos):
     return None, None
 
 
+def _event_owner(event):
+    if not event:
+        return None
+    values = (
+        event.get("alliance_name"),
+        event.get("alliance_url"),
+        event.get("corporation_name"),
+        event.get("corporation_url"),
+    )
+    return values if any(value is not None for value in values) else None
+
+
+def _with_owner(event, owner):
+    item = dict(event)
+    if owner is None:
+        item["alliance_name"] = None
+        item["alliance_url"] = None
+        item["corporation_name"] = None
+        item["corporation_url"] = None
+    else:
+        (
+            item["alliance_name"],
+            item["alliance_url"],
+            item["corporation_name"],
+            item["corporation_url"],
+        ) = owner
+    return item
+
+
+def expand_transfers(events):
+    """Normalize DOTLAN Transfer rows into LOST + GAIN semantic events."""
+    expanded = []
+    current_owner = None
+
+    for event in sorted(
+        events,
+        key=lambda item: (item["event_at"], -int(item.get("row_position") or 0)),
+    ):
+        action = event["action"]
+        owner = _event_owner(event)
+
+        if action == "TRANSFER":
+            lost = _with_owner(event, current_owner)
+            lost["action"] = "LOST"
+            lost["event_hash"] = hashlib.sha256(
+                (event["event_hash"] + ":LOST").encode("utf-8")
+            ).hexdigest()
+
+            gain = dict(event)
+            gain["action"] = "GAIN"
+            gain["event_hash"] = hashlib.sha256(
+                (event["event_hash"] + ":GAIN").encode("utf-8")
+            ).hexdigest()
+
+            expanded.extend((lost, gain))
+            current_owner = owner
+            continue
+
+        expanded.append(dict(event))
+        if action == "GAIN":
+            current_owner = owner
+        elif action == "LOST":
+            current_owner = None
+        elif action == "LEVEL_CHANGE" and owner is not None:
+            # Level changes do not alter ownership, but DOTLAN displays the
+            # owner on those rows and this can recover context for a later
+            # Transfer if an older explicit Gain is outside the visible range.
+            current_owner = owner
+
+    return sorted(
+        expanded,
+        key=lambda item: (
+            int(item.get("row_position") or 0),
+            0 if item["action"] == "LOST" else 1,
+        ),
+    )
+
+
 def parse_events(html, system_id, url):
     parser = TableParser()
     parser.feed(html)
@@ -247,7 +325,7 @@ def parse_events(html, system_id, url):
             "DOTLAN source event-count mismatch: expected %s parsed %s"
             % (declared.group(1), len(events))
         )
-    return events
+    return expand_transfers(events)
 
 
 def connect():
@@ -257,6 +335,40 @@ def connect():
         dbname=cfg["db_name"], user=cfg["db_user"],
         password=cfg["db_password"], host=cfg["db_host"], port=cfg["db_port"],
     )
+
+
+def migrate_legacy_transfer_rows(conn):
+    """Remove legacy normalized TRANSFER rows without inventing old owners."""
+    with conn.cursor() as cur:
+        cur.execute("""
+            SELECT
+                system_id, event_hash, event_at, action, action_raw,
+                ownership_model, alliance_name, alliance_url,
+                corporation_name, corporation_url, raw_cells,
+                row_position, source_url, fetched_at
+            FROM sovereignty.dotlan_events
+            WHERE action = 'TRANSFER'
+            ORDER BY system_id, event_at, row_position
+        """)
+        transfer_rows = cur.fetchall()
+
+    if not transfer_rows:
+        return 0
+
+    system_ids = sorted({int(row[0]) for row in transfer_rows})
+    with conn.cursor() as cur:
+        cur.execute("""
+            DELETE FROM sovereignty.dotlan_events
+            WHERE system_id = ANY(%s)
+        """, (system_ids,))
+        cur.execute("""
+            UPDATE sovereignty.dotlan_system_sync
+            SET last_status = 'pending',
+                last_error = 'Re-fetch required: legacy TRANSFER normalization changed'
+            WHERE system_id = ANY(%s)
+        """, (system_ids,))
+    conn.commit()
+    return len(system_ids)
 
 
 def ensure_tables(conn):
@@ -323,6 +435,12 @@ def ensure_tables(conn):
             )
         """)
     conn.commit()
+    migrated = migrate_legacy_transfer_rows(conn)
+    if migrated:
+        LOG.info(
+            "SOV_DOTLAN transfer_migration systems_reset=%d",
+            migrated,
+        )
 
 
 def system_names(conn, scope, selected, claimable=None):
