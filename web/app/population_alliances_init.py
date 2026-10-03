@@ -200,6 +200,12 @@ def resolve_alliance_href_by_id(client, alliance_id):
             f"dotlan_alliance_id_mismatch:expected={alliance_id} got={parsed_id}"
         )
 
+    plain = " ".join(re.sub(r"<[^>]*>", " ", html).split())
+    founded_match = re.search(r"\bFounded\s+(\d{4}-\d{2}-\d{2})\b", plain, flags=re.I)
+    closed_match = re.search(r"\bClosed\s+(\d{4}-\d{2}-\d{2})\b", plain, flags=re.I)
+    founded_date = _parse_iso_date(founded_match.group(1)) if founded_match else None
+    closed_date = _parse_iso_date(closed_match.group(1)) if closed_match else None
+
     stats_link = re.search(
         r"""href=["']([^"']*/alliance/[^"']+/stats)["']""",
         html,
@@ -218,7 +224,7 @@ def resolve_alliance_href_by_id(client, alliance_id):
     slug = href[len("/alliance/"):] if href.startswith("/alliance/") else ""
     if not slug:
         raise ValueError("dotlan_alliance_canonical_slug_missing")
-    return href, slug
+    return href, slug, founded_date, closed_date
 
 
 def _parse_iso_date(value):
@@ -345,12 +351,19 @@ def ensure_tables(conn):
                 oldest_synced_date date,
                 last_synced_date date,
                 initialization_done boolean NOT NULL DEFAULT false,
+                history_unavailable boolean NOT NULL DEFAULT false,
                 last_attempt_at timestamptz,
                 last_success_at timestamptz,
                 last_error text,
                 created_at timestamptz NOT NULL DEFAULT now(),
                 updated_at timestamptz NOT NULL DEFAULT now()
             )
+            """
+        )
+        cur.execute(
+            """
+            ALTER TABLE population.alliance_sync
+            ADD COLUMN IF NOT EXISTS history_unavailable boolean NOT NULL DEFAULT false
             """
         )
         cur.execute(
@@ -373,7 +386,7 @@ def load_sync_by_slug(conn, slug):
         cur.execute(
             """
             SELECT alliance_id, first_available_date, oldest_synced_date,
-                   last_synced_date, initialization_done
+                   last_synced_date, initialization_done, history_unavailable
             FROM population.alliance_sync
             WHERE dotlan_slug = %s
             ORDER BY updated_at DESC
@@ -392,6 +405,7 @@ def load_sync_by_slug(conn, slug):
         "oldest_synced_date": row[2],
         "last_synced_date": row[3],
         "initialization_done": row[4],
+        "history_unavailable": bool(row[5]),
     }
 
 
@@ -400,7 +414,8 @@ def load_sync_by_id(conn, alliance_id):
         cur.execute(
             """
             SELECT alliance_id, first_available_date, oldest_synced_date,
-                   last_synced_date, initialization_done, dotlan_slug, alliance_name
+                   last_synced_date, initialization_done, dotlan_slug, alliance_name,
+                   history_unavailable
             FROM population.alliance_sync
             WHERE alliance_id = %s
             LIMIT 1
@@ -420,6 +435,7 @@ def load_sync_by_id(conn, alliance_id):
         "initialization_done": row[4],
         "dotlan_slug": row[5],
         "alliance_name": row[6],
+        "history_unavailable": bool(row[7]),
     }
 
 
@@ -438,11 +454,14 @@ def alliance_has_population_rows(conn, alliance_id):
         return bool(cur.fetchone()[0])
 
 
-def sync_is_complete_with_rows(conn, sync):
+def sync_is_terminal(conn, sync):
     return bool(
         sync
         and sync.get("initialization_done")
-        and alliance_has_population_rows(conn, sync["alliance_id"])
+        and (
+            sync.get("history_unavailable")
+            or alliance_has_population_rows(conn, sync["alliance_id"])
+        )
     )
 
 
@@ -455,7 +474,8 @@ def get_alliance_history_initialization_state(alliance_id):
             cur.execute(
                 """
                 SELECT initialization_done, first_available_date, oldest_synced_date,
-                       last_synced_date, last_attempt_at, last_success_at, last_error
+                       last_synced_date, last_attempt_at, last_success_at, last_error,
+                       history_unavailable
                 FROM population.alliance_sync
                 WHERE alliance_id = %s
                 LIMIT 1
@@ -474,6 +494,7 @@ def get_alliance_history_initialization_state(alliance_id):
                 "last_attempt_at": None,
                 "last_success_at": None,
                 "last_error": None,
+                "history_available": None,
             }
 
         def iso(value):
@@ -481,9 +502,12 @@ def get_alliance_history_initialization_state(alliance_id):
 
         has_rows = alliance_has_population_rows(conn, alliance_id)
 
+        history_unavailable = bool(row[7])
+
         return {
             "known": True,
-            "initialization_done": bool(row[0]) and has_rows,
+            "initialization_done": bool(row[0]) and (has_rows or history_unavailable),
+            "history_available": False if history_unavailable else (True if has_rows else None),
             "first_available_date": iso(row[1]),
             "oldest_synced_date": iso(row[2]),
             "last_synced_date": iso(row[3]),
@@ -511,6 +535,8 @@ def _ensure_sync_placeholder(conn, alliance_id, alliance_name, slug):
             ON CONFLICT (alliance_id) DO UPDATE SET
                 alliance_name = COALESCE(EXCLUDED.alliance_name, population.alliance_sync.alliance_name),
                 dotlan_slug = EXCLUDED.dotlan_slug,
+                initialization_done = false,
+                history_unavailable = false,
                 last_attempt_at = now(),
                 last_error = NULL,
                 updated_at = now()
@@ -583,12 +609,13 @@ def upsert_sync_success(
                 oldest_synced_date,
                 last_synced_date,
                 initialization_done,
+                history_unavailable,
                 last_attempt_at,
                 last_success_at,
                 last_error,
                 updated_at
             )
-            VALUES (%s, %s, %s, %s, %s, %s, %s, now(), now(), NULL, now())
+            VALUES (%s, %s, %s, %s, %s, %s, %s, false, now(), now(), NULL, now())
             ON CONFLICT (alliance_id) DO UPDATE SET
                 alliance_name = EXCLUDED.alliance_name,
                 dotlan_slug = EXCLUDED.dotlan_slug,
@@ -607,6 +634,7 @@ def upsert_sync_success(
                     ELSE GREATEST(population.alliance_sync.last_synced_date, EXCLUDED.last_synced_date)
                 END,
                 initialization_done = population.alliance_sync.initialization_done OR EXCLUDED.initialization_done,
+                history_unavailable = false,
                 last_attempt_at = now(),
                 last_success_at = now(),
                 last_error = NULL,
@@ -621,6 +649,31 @@ def upsert_sync_success(
                 latest,
                 initialization_done,
             ),
+        )
+    conn.commit()
+
+
+def mark_no_population_history(conn, alliance_id, alliance_name, slug):
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO population.alliance_sync (
+                alliance_id, alliance_name, dotlan_slug,
+                initialization_done, history_unavailable,
+                last_attempt_at, last_success_at, last_error, updated_at
+            )
+            VALUES (%s, %s, %s, true, true, now(), now(), NULL, now())
+            ON CONFLICT (alliance_id) DO UPDATE SET
+                alliance_name = EXCLUDED.alliance_name,
+                dotlan_slug = EXCLUDED.dotlan_slug,
+                initialization_done = true,
+                history_unavailable = true,
+                last_attempt_at = now(),
+                last_success_at = now(),
+                last_error = NULL,
+                updated_at = now()
+            """,
+            (int(alliance_id), alliance_name, slug),
         )
     conn.commit()
 
@@ -723,7 +776,7 @@ def initialize_alliance(
         sync = load_sync_by_id(conn, expected_alliance_id)
     else:
         sync = load_sync_by_slug(conn, alliance["slug"])
-    if sync_is_complete_with_rows(conn, sync):
+    if sync_is_terminal(conn, sync):
         print(
             f"[{index}/{total}] SKIP {alliance['name']} already initialized "
             f"alliance_id={sync['alliance_id']}",
@@ -732,6 +785,8 @@ def initialize_alliance(
         return "skipped"
 
     today = date.today()
+    founded_date = alliance.get("founded_date")
+    closed_date = alliance.get("closed_date")
     alliance_id = sync["alliance_id"] if sync else None
     has_existing_rows = bool(alliance_id is not None and alliance_has_population_rows(conn, alliance_id))
     first_available_date = sync["first_available_date"] if sync and has_existing_rows else None
@@ -739,7 +794,7 @@ def initialize_alliance(
     if sync and has_existing_rows and sync["oldest_synced_date"]:
         window_end = sync["oldest_synced_date"] - timedelta(days=1)
     else:
-        window_end = today
+        window_end = min(today, closed_date) if closed_date else today
 
     if first_available_date and window_end < first_available_date:
         with conn.cursor() as cur:
@@ -766,8 +821,9 @@ def initialize_alliance(
 
     while True:
         window_start = window_end - timedelta(days=MAX_WINDOW_DAYS)
-        if first_available_date and window_start < first_available_date:
-            window_start = first_available_date
+        history_floor = first_available_date or founded_date
+        if history_floor and window_start < history_floor:
+            window_start = history_floor
 
         path = f"{alliance['href']}/stats/{window_start.isoformat()}:{window_end.isoformat()}"
         print(
@@ -778,6 +834,58 @@ def initialize_alliance(
         try:
             html = client.get(path)
             parsed = parse_stats_page(html)
+        except ValueError as exc:
+            error_code = str(exc)
+            missing_series = error_code in {"dotlan_statutil_missing", "dotlan_members_series_missing"}
+            reached_lifetime_start = bool(founded_date and window_start <= founded_date)
+
+            if missing_series and closed_date:
+                if reached_lifetime_start:
+                    if has_existing_rows:
+                        with conn.cursor() as cur:
+                            cur.execute(
+                                """
+                                UPDATE population.alliance_sync
+                                SET initialization_done = true,
+                                    history_unavailable = false,
+                                    last_attempt_at = now(),
+                                    last_success_at = now(),
+                                    last_error = NULL,
+                                    updated_at = now()
+                                WHERE alliance_id = %s
+                                """,
+                                (alliance_id,),
+                            )
+                        conn.commit()
+                        return "completed"
+
+                    mark_no_population_history(
+                        conn,
+                        alliance_id,
+                        alliance["name"],
+                        alliance["slug"],
+                    )
+                    print(
+                        f"[{index}/{total}] DONE {alliance['name']} alliance_id={alliance_id} "
+                        "DOTLAN has no population series for this alliance lifetime",
+                        flush=True,
+                    )
+                    return "completed"
+
+                print(
+                    f"[{index}/{total}] GAP {alliance['name']} no DOTLAN population series "
+                    f"{window_start}->{window_end}; continuing backwards",
+                    flush=True,
+                )
+                window_end = window_start - timedelta(days=1)
+                continue
+
+            mark_sync_error(conn, alliance_id, error_code)
+            print(
+                f"[{index}/{total}] ERROR {alliance['name']}: {error_code}",
+                flush=True,
+            )
+            return "error"
         except Exception as exc:
             mark_sync_error(conn, alliance_id, str(exc))
             print(
@@ -816,7 +924,8 @@ def initialize_alliance(
         ):
             _apply_current_snapshot(rows, alliance, today)
 
-        reached_beginning = window_start <= first_available_date
+        history_floor = first_available_date or founded_date
+        reached_beginning = bool(history_floor and window_start <= history_floor)
 
         if not rows:
             # Old alliances can contain real holes in DOTLAN history. An empty
@@ -893,7 +1002,7 @@ def initialize_alliance_on_demand(alliance_id, alliance_name):
     try:
         ensure_tables(conn)
         sync = load_sync_by_id(conn, alliance_id)
-        if sync_is_complete_with_rows(conn, sync):
+        if sync_is_terminal(conn, sync):
             return "skipped"
 
         # Prevent two web requests/workers from backfilling the same alliance at once.
@@ -905,7 +1014,7 @@ def initialize_alliance_on_demand(alliance_id, alliance_name):
 
         # Re-check after obtaining the lock: another request may just have completed.
         sync = load_sync_by_id(conn, alliance_id)
-        if sync_is_complete_with_rows(conn, sync):
+        if sync_is_terminal(conn, sync):
             return "skipped"
 
         client = DotlanClient()
@@ -913,7 +1022,7 @@ def initialize_alliance_on_demand(alliance_id, alliance_name):
         # Resolve the canonical DOTLAN page from the numeric AllianceID itself.
         # The alliance name is never used for identity or URL construction.
         try:
-            canonical_href, canonical_slug = resolve_alliance_href_by_id(client, alliance_id)
+            canonical_href, canonical_slug, founded_date, closed_date = resolve_alliance_href_by_id(client, alliance_id)
         except Exception as exc:
             _ensure_sync_placeholder(conn, alliance_id, alliance_name, str(alliance_id))
             mark_sync_error(conn, alliance_id, str(exc))
@@ -925,6 +1034,8 @@ def initialize_alliance_on_demand(alliance_id, alliance_name):
             "name": alliance_name,
             "slug": canonical_slug,
             "href": canonical_href,
+            "founded_date": founded_date,
+            "closed_date": closed_date,
         }
         return initialize_alliance(
             conn,
