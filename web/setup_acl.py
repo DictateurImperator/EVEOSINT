@@ -123,6 +123,7 @@ def main():
                 ('entities.coalition.admin', 'Admin Coalition', 'Create and manage coalition entities and membership rules'),
 
                 ('admin.system.view', 'View System', 'View system status'),
+                ('admin.nginx.manage', 'Manage Nginx', 'View and edit the EVEOSINT Nginx site configuration'),
                 ('admin.jobs.view', 'View Jobs', 'View whitelisted jobs and logs'),
                 ('admin.jobs.run', 'Run Jobs', 'Run whitelisted jobs'),
                 ('admin.mer.view', 'View MER', 'View Monthly Economic Reports administration'),
@@ -138,6 +139,7 @@ def main():
             FROM {t('roles')} r
             CROSS JOIN {t('permissions')} p
             WHERE r.role_key = 'admin'
+              AND p.permission_key <> 'admin.nginx.manage'
             ON CONFLICT DO NOTHING;
             """)
 
@@ -263,6 +265,7 @@ def main():
             admin_child_items = [
                 ('admin.users', 'Users', '/admin', '◎', 'admin.users.view', 10),
                 ('admin.system', 'System', '/admin/system', '▣', 'admin.system.view', 20),
+                ('admin.nginx', 'Nginx', '/admin/nginx', '⇄', 'admin.nginx.manage', 25),
                 ('admin.jobs', 'Jobs', '/admin/jobs', '▶', 'admin.jobs.view', 30),
                 ('admin.update_pipeline', 'Update Pipeline', '/admin/update-pipeline', '⟳', 'admin.jobs.view', 35),
                 ('admin.mer', 'MER', '/admin/mer', '▤', 'admin.mer.view', 40),
