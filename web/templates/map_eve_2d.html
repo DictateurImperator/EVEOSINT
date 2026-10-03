@@ -137,6 +137,25 @@
     font-size:.72rem;
     color:#8ea0b7;
   }
+  .eve2d-influence-grouping {
+    display:grid;
+    grid-template-columns:1fr 1fr;
+    gap:6px;
+    margin-bottom:9px;
+  }
+  .eve2d-group-option {
+    border:1px solid rgba(111,137,173,.22);
+    border-radius:6px;
+    padding:6px 7px;
+    background:rgba(255,255,255,.025);
+    color:#aebed2;
+    font-size:.72rem;
+  }
+  .eve2d-group-option.active {
+    border-color:rgba(91,157,255,.62);
+    background:rgba(70,130,210,.16);
+    color:#fff;
+  }
   .eve2d-influence-status {
     min-height:16px;
     margin-top:6px;
@@ -182,6 +201,11 @@
         <button class="eve2d-mode-option" type="button" data-eve2d-mode="influence">Influence</button>
       </div>
       <div class="eve2d-influence-controls" id="eve2dInfluenceControls" hidden>
+        <label>Grouping</label>
+        <div class="eve2d-influence-grouping">
+          <button class="eve2d-group-option" type="button" data-influence-group="alliance">Alliance</button>
+          <button class="eve2d-group-option active" type="button" data-influence-group="coalition">Coalition</button>
+        </div>
         <label for="eve2dInfluenceDate">Date</label>
         <input class="form-control form-control-sm" type="date" id="eve2dInfluenceDate">
         <div class="eve2d-influence-status" id="eve2dInfluenceStatus"></div>
@@ -204,6 +228,7 @@
   const influenceDate = document.getElementById("eve2dInfluenceDate");
   const influenceStatus = document.getElementById("eve2dInfluenceStatus");
   const modeButtons = Array.from(document.querySelectorAll("[data-eve2d-mode]"));
+  const groupingButtons = Array.from(document.querySelectorAll("[data-influence-group]"));
   if (!dataEl || !shell || !canvas) return;
 
   const payload = JSON.parse(dataEl.textContent || "{}");
@@ -257,7 +282,9 @@
   let activeMode = "systems";
   let influenceGroups = [];
   let influenceBySystem = new Map();
+  let influenceSurface = null;
   let influenceRequestToken = 0;
+  let activeGrouping = "coalition";
 
   function resizeCanvas() {
     const rect = shell.getBoundingClientRect();
@@ -316,69 +343,141 @@
     ctx.stroke();
   }
 
-  function drawInfluence() {
-    if (activeMode !== "influence" || !influenceGroups.length) return;
+  function hslToRgb(color) {
+    const match = String(color || "").match(/^hsl\(\s*([\d.]+)\s+([\d.]+)%\s+([\d.]+)%\s*\)$/i);
+    if (!match) return [130, 148, 170];
 
-    const baseRadius = Math.max(13, 22 * scale);
-    const baseWidth = Math.max(24, 42 * scale);
+    let h = (Number(match[1]) % 360 + 360) % 360;
+    const s = Math.max(0, Math.min(1, Number(match[2]) / 100));
+    const l = Math.max(0, Math.min(1, Number(match[3]) / 100));
+    const c = (1 - Math.abs(2 * l - 1)) * s;
+    const hp = h / 60;
+    const x = c * (1 - Math.abs((hp % 2) - 1));
+    let r = 0, g = 0, b = 0;
+    if (hp < 1) [r, g, b] = [c, x, 0];
+    else if (hp < 2) [r, g, b] = [x, c, 0];
+    else if (hp < 3) [r, g, b] = [0, c, x];
+    else if (hp < 4) [r, g, b] = [0, x, c];
+    else if (hp < 5) [r, g, b] = [x, 0, c];
+    else [r, g, b] = [c, 0, x];
+    const m = l - c / 2;
+    return [
+      Math.round((r + m) * 255),
+      Math.round((g + m) * 255),
+      Math.round((b + m) * 255),
+    ];
+  }
 
-    influenceGroups.forEach(group => {
-      const color = group.color || "#8294aa";
-      const systemIds = Array.isArray(group.system_ids) ? group.system_ids : [];
-      if (!systemIds.length) return;
+  function buildInfluenceSurface() {
+    influenceSurface = null;
+    if (!influenceGroups.length) return;
 
-      ctx.save();
-      ctx.strokeStyle = color;
-      ctx.fillStyle = color;
-      ctx.lineCap = "round";
-      ctx.lineJoin = "round";
+    const surfaceWidth = 560;
+    const surfaceHeight = Math.max(260, Math.round(surfaceWidth * WORLD_HEIGHT / WORLD_WIDTH));
+    const count = surfaceWidth * surfaceHeight;
+    const bestGroup = new Int32Array(count);
+    bestGroup.fill(-1);
+    const bestDist = new Float32Array(count);
+    const secondDist = new Float32Array(count);
+    bestDist.fill(Infinity);
+    secondDist.fill(Infinity);
 
-      ctx.globalAlpha = .08;
-      ctx.lineWidth = baseWidth * 1.55;
-      ctx.beginPath();
-      edgePairs.forEach(([source, target]) => {
-        const sourceGroup = influenceBySystem.get(String(source.id));
-        const targetGroup = influenceBySystem.get(String(target.id));
-        if (sourceGroup !== group || targetGroup !== group) return;
-        const a = worldToScreen(source);
-        const b = worldToScreen(target);
-        ctx.moveTo(a.x, a.y);
-        ctx.lineTo(b.x, b.y);
-      });
-      ctx.stroke();
-      systemIds.forEach(systemId => {
+    // Influence is based ONLY on system positions. Stargates are deliberately
+    // excluded from this calculation.
+    const radiusWorld = 52;
+    const radiusPx = radiusWorld * surfaceWidth / WORLD_WIDTH;
+    const radiusSq = radiusPx * radiusPx;
+    const radiusCells = Math.ceil(radiusPx);
+
+    influenceGroups.forEach((group, groupIndex) => {
+      (group.system_ids || []).forEach(systemId => {
         const node = nodeById.get(String(systemId));
         if (!node) return;
-        const p = worldToScreen(node);
-        ctx.beginPath();
-        ctx.arc(p.x, p.y, baseRadius * 1.55, 0, Math.PI * 2);
-        ctx.fill();
-      });
+        const gx = node._x * (surfaceWidth - 1) / WORLD_WIDTH;
+        const gy = node._y * (surfaceHeight - 1) / WORLD_HEIGHT;
+        const minGX = Math.max(0, Math.floor(gx - radiusCells));
+        const maxGX = Math.min(surfaceWidth - 1, Math.ceil(gx + radiusCells));
+        const minGY = Math.max(0, Math.floor(gy - radiusCells));
+        const maxGY = Math.min(surfaceHeight - 1, Math.ceil(gy + radiusCells));
 
-      ctx.globalAlpha = .22;
-      ctx.lineWidth = baseWidth;
-      ctx.beginPath();
-      edgePairs.forEach(([source, target]) => {
-        const sourceGroup = influenceBySystem.get(String(source.id));
-        const targetGroup = influenceBySystem.get(String(target.id));
-        if (sourceGroup !== group || targetGroup !== group) return;
-        const a = worldToScreen(source);
-        const b = worldToScreen(target);
-        ctx.moveTo(a.x, a.y);
-        ctx.lineTo(b.x, b.y);
-      });
-      ctx.stroke();
-      systemIds.forEach(systemId => {
-        const node = nodeById.get(String(systemId));
-        if (!node) return;
-        const p = worldToScreen(node);
-        ctx.beginPath();
-        ctx.arc(p.x, p.y, baseRadius, 0, Math.PI * 2);
-        ctx.fill();
-      });
+        for (let y = minGY; y <= maxGY; y++) {
+          const dy = y - gy;
+          for (let x = minGX; x <= maxGX; x++) {
+            const dx = x - gx;
+            const distanceSq = dx * dx + dy * dy;
+            if (distanceSq > radiusSq) continue;
 
-      ctx.restore();
+            const index = y * surfaceWidth + x;
+            const currentGroup = bestGroup[index];
+            if (currentGroup === groupIndex) {
+              if (distanceSq < bestDist[index]) bestDist[index] = distanceSq;
+              continue;
+            }
+
+            if (distanceSq < bestDist[index]) {
+              secondDist[index] = bestDist[index];
+              bestDist[index] = distanceSq;
+              bestGroup[index] = groupIndex;
+            } else if (distanceSq < secondDist[index]) {
+              secondDist[index] = distanceSq;
+            }
+          }
+        }
+      });
     });
+
+    const surface = document.createElement("canvas");
+    surface.width = surfaceWidth;
+    surface.height = surfaceHeight;
+    const surfaceCtx = surface.getContext("2d");
+    const image = surfaceCtx.createImageData(surfaceWidth, surfaceHeight);
+    const colors = influenceGroups.map(group => hslToRgb(group.color));
+    const boundaryWidth = 2.4;
+    const edgeFadeWidth = 2.8;
+
+    for (let index = 0; index < count; index++) {
+      const groupIndex = bestGroup[index];
+      if (groupIndex < 0) continue;
+
+      const nearest = Math.sqrt(bestDist[index]);
+      const second = Math.sqrt(secondDist[index]);
+      const contested = Number.isFinite(second) && (second - nearest) < boundaryWidth;
+      if (contested) continue;
+
+      const edgeDistance = radiusPx - nearest;
+      const fade = Math.max(0, Math.min(1, edgeDistance / edgeFadeWidth));
+      if (fade <= 0) continue;
+
+      const [r, g, b] = colors[groupIndex];
+      const offset = index * 4;
+      image.data[offset] = r;
+      image.data[offset + 1] = g;
+      image.data[offset + 2] = b;
+      image.data[offset + 3] = Math.round(92 * fade);
+    }
+
+    surfaceCtx.putImageData(image, 0, 0);
+    influenceSurface = surface;
+  }
+
+  function drawInfluence() {
+    if (activeMode !== "influence" || !influenceSurface) return;
+
+    const drawWidth = WORLD_WIDTH * scale;
+    const drawHeight = WORLD_HEIGHT * scale;
+
+    ctx.save();
+    ctx.imageSmoothingEnabled = true;
+    ctx.globalAlpha = .52;
+    ctx.filter = "blur(9px)";
+    ctx.drawImage(influenceSurface, offsetX, offsetY, drawWidth, drawHeight);
+    ctx.restore();
+
+    ctx.save();
+    ctx.imageSmoothingEnabled = true;
+    ctx.globalAlpha = 1;
+    ctx.drawImage(influenceSurface, offsetX, offsetY, drawWidth, drawHeight);
+    ctx.restore();
   }
 
   function draw() {
@@ -502,9 +601,11 @@
       influenceDate.min = payload.min_date || "";
       influenceDate.max = payload.max_date || "";
     }
+    buildInfluenceSurface();
     if (influenceStatus) {
+      const label = payload.grouping === "alliance" ? "alliance groups" : "coalition groups";
       influenceStatus.textContent = influenceGroups.length
-        ? influenceGroups.length + " influence groups"
+        ? influenceGroups.length + " " + label
         : "No sovereignty influence for this date";
     }
     draw();
@@ -513,7 +614,10 @@
   async function loadInfluence(dateValue) {
     const token = ++influenceRequestToken;
     if (influenceStatus) influenceStatus.textContent = "Loading…";
-    const query = dateValue ? "?date=" + encodeURIComponent(dateValue) : "";
+    const params = new URLSearchParams();
+    if (dateValue) params.set("date", dateValue);
+    params.set("group", activeGrouping);
+    const query = "?" + params.toString();
     try {
       const response = await fetch("/api/map/eve-2d/influence" + query, {
         headers: {"Accept": "application/json"},
@@ -529,6 +633,7 @@
       if (token !== influenceRequestToken) return;
       influenceGroups = [];
       influenceBySystem = new Map();
+      influenceSurface = null;
       if (influenceStatus) influenceStatus.textContent = String(error.message || error);
       draw();
     }
@@ -551,6 +656,18 @@
 
   modeButtons.forEach(button => {
     button.addEventListener("click", () => setMode(button.dataset.eve2dMode));
+  });
+
+  groupingButtons.forEach(button => {
+    button.addEventListener("click", () => {
+      activeGrouping = button.dataset.influenceGroup === "alliance" ? "alliance" : "coalition";
+      groupingButtons.forEach(item => {
+        item.classList.toggle("active", item.dataset.influenceGroup === activeGrouping);
+      });
+      if (activeMode === "influence") {
+        loadInfluence(influenceDate && influenceDate.value ? influenceDate.value : null);
+      }
+    });
   });
 
   if (influenceDate) {
