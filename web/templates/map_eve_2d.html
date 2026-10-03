@@ -508,14 +508,12 @@
       ownerGrid[index] = bestOwner[index];
     }
 
-    assignNeighbourAwareColors(ownerGrid, surfaceWidth, surfaceHeight);
-
     const surface = document.createElement("canvas");
     surface.width = surfaceWidth;
     surface.height = surfaceHeight;
     const surfaceCtx = surface.getContext("2d");
     const image = surfaceCtx.createImageData(surfaceWidth, surfaceHeight);
-    const colors = influenceGroups.map(group => hslToRgb(group._displayColor || group.color));
+    const colors = influenceGroups.map(group => hslToRgb(group.color));
 
     for (let y = 0; y < surfaceHeight; y++) {
       for (let x = 0; x < surfaceWidth; x++) {
@@ -572,6 +570,60 @@
     ctx.restore();
   }
 
+  function drawInfluenceLabels() {
+    if (activeMode !== "influence" || !influenceGroups.length) return;
+
+    ctx.save();
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.lineJoin = "round";
+
+    influenceGroups.forEach(group => {
+      const ownedNodes = (group.system_ids || [])
+        .map(systemId => nodeById.get(String(systemId)))
+        .filter(Boolean);
+      if (!ownedNodes.length) return;
+
+      let meanX = 0;
+      let meanY = 0;
+      ownedNodes.forEach(node => {
+        meanX += node._x;
+        meanY += node._y;
+      });
+      meanX /= ownedNodes.length;
+      meanY /= ownedNodes.length;
+
+      // Anchor the label on an actually-owned system nearest the group's centroid,
+      // so labels do not drift into neutral space.
+      let anchor = ownedNodes[0];
+      let bestDistance = Infinity;
+      ownedNodes.forEach(node => {
+        const dx = node._x - meanX;
+        const dy = node._y - meanY;
+        const distance = dx * dx + dy * dy;
+        if (distance < bestDistance) {
+          bestDistance = distance;
+          anchor = node;
+        }
+      });
+
+      const p = worldToScreen(anchor);
+      if (p.x < -180 || p.x > cssWidth + 180 || p.y < -60 || p.y > cssHeight + 60) return;
+
+      const size = Math.max(11, Math.min(24, 10 + Math.sqrt(ownedNodes.length) * 1.35));
+      ctx.font = `700 ${size}px system-ui, sans-serif`;
+      ctx.lineWidth = Math.max(2.5, size * .22);
+      ctx.strokeStyle = "rgba(2,6,12,.82)";
+      ctx.fillStyle = group.id === "coalition:none"
+        ? "rgba(255,255,255,.96)"
+        : "rgba(245,249,255,.94)";
+      ctx.strokeText(group.name || "", p.x, p.y);
+      ctx.fillText(group.name || "", p.x, p.y);
+    });
+
+    ctx.restore();
+  }
+
   function draw() {
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, cssWidth, cssHeight);
@@ -600,6 +652,8 @@
       ctx.fillStyle = node === hovered ? "#ffffff" : securityColor(node.security);
       ctx.fill();
     });
+
+    drawInfluenceLabels();
 
     if (scale >= 3.2) {
       ctx.font = "10px system-ui, sans-serif";
