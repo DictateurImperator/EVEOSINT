@@ -1,291 +1,236 @@
 {% extends "base.html" %}
 {% block content %}
 <style>
-  .debug-grid { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:10px; }
-  .debug-stat { border:1px solid rgba(148,163,184,.15); border-radius:12px; background:rgba(15,23,42,.52); padding:12px; }
-  .debug-stat .value { font-size:1.06rem; font-weight:800; color:#f8fafc; }
-  .debug-phase { display:grid; grid-template-columns:42px minmax(0,1fr) 130px; gap:12px; align-items:start; border-top:1px solid rgba(148,163,184,.10); padding:11px 0; }
-  .debug-phase:first-child { border-top:0; }
-  .phase-index { width:34px; height:34px; display:grid; place-items:center; border-radius:10px; background:rgba(59,130,246,.12); color:#bfdbfe; font-weight:800; }
-  .phase-title { font-weight:700; }
-  .phase-meta { color:#94a3b8; font-size:.78rem; margin-top:2px; }
-  .phase-metrics { display:flex; flex-wrap:wrap; gap:6px; margin-top:7px; }
-  .debug-pill { display:inline-flex; gap:5px; align-items:center; padding:3px 7px; border-radius:999px; background:rgba(95,170,255,.08); border:1px solid rgba(95,170,255,.16); color:#b9c6d8; font-size:.72rem; }
-  .debug-pill strong { color:#f1f5f9; }
-  .log-viewer { max-height:440px; min-height:220px; overflow:auto; background:#05080d; border:1px solid rgba(148,163,184,.16); border-radius:12px; padding:12px; color:#cbd5e1; font-size:.75rem; white-space:pre-wrap; }
-  .bench-note { border-left:3px solid #3b82f6; padding:8px 12px; background:rgba(59,130,246,.07); border-radius:0 10px 10px 0; }
-  .bulk-progress { height:7px; background:rgba(148,163,184,.13); border-radius:999px; overflow:hidden; }
-  .bulk-progress > div { height:100%; background:#60a5fa; width:0; transition:width .25s ease; }
-  @media (max-width:1000px){ .debug-grid{grid-template-columns:repeat(2,minmax(0,1fr));} }
-  @media (max-width:640px){ .debug-grid{grid-template-columns:1fr;} .debug-phase{grid-template-columns:36px minmax(0,1fr);} .debug-phase-status{grid-column:2;} }
+  .sov-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px; }
+  .sov-stat { border:1px solid rgba(148,163,184,.15); border-radius:10px; padding:10px 12px; background:rgba(15,23,42,.45); }
+  .sov-stat .value { font-weight:700; }
+  .history-table td, .history-table th { white-space:nowrap; vertical-align:middle; }
+  .history-table td.wrap { white-space:normal; min-width:180px; }
+  @media (max-width:900px){ .sov-grid{grid-template-columns:1fr;} }
 </style>
 
 <div class="d-flex flex-wrap justify-content-between align-items-start gap-3 mb-4">
   <div>
-    <h1 class="h3 fw-bold mb-1">Debug</h1>
-    <div class="muted-line">Admin workspace for standalone collectors and isolated pipeline benchmarks.</div>
+    <h1 class="h3 fw-bold mb-1">Debug · Sovereignty</h1>
+    <div class="muted-line">DOTLAN import, current ESI state and SQL history inspection.</div>
   </div>
-  {% if can_run and debug.running %}
-  <form method="post" action="/admin/debug/stop">
-    <button class="btn btn-outline-danger" type="submit">Stop debug run</button>
-  </form>
-  {% endif %}
 </div>
 
 {% if error %}
 <div class="alert alert-danger py-2">
-  {% if error == 'already_running' %}A debug run is already running.
-  {% elif error == 'cleanup_failed' %}Debug cleanup failed.
-  {% elif error == 'stop_failed' %}Could not stop the debug run.
-  {% elif error == 'sov_start_failed' %}Sovereignty collector could not be started. Check the deployed scripts and run logs.
+  {% if error == 'sov_start_failed' %}Sovereignty collector could not be started. Check the deployed scripts and run logs.
   {% elif error == 'sov_stop_failed' %}Could not stop the sovereignty collector.
-  {% else %}Debug run could not be started.{% endif %}
+  {% elif error == 'already_running' %}A sovereignty collector is already running.
+  {% else %}Sovereignty debug operation failed.{% endif %}
 </div>
 {% endif %}
+
 {% if success %}
 <div class="alert alert-success py-2">
-  {% if success == 'cleaned' %}Debug tables cleaned.
-  {% elif success == 'stop_requested' %}Stop requested.
-  {% elif success == 'sov_esi_started' %}CCP ESI sovereignty collector launched.
+  {% if success == 'sov_esi_started' %}CCP ESI sovereignty collector launched.
   {% elif success == 'sov_dotlan_started' %}DOTLAN sovereignty history collector launched.
   {% elif success == 'sov_stop_requested' %}Sovereignty collector stop requested.
-  {% else %}Debug run started.{% endif %}
+  {% endif %}
 </div>
 {% endif %}
 
-
-<section class="content-card p-3 p-md-4 mb-4" id="sovereignty-debug-section">
-  <div class="d-flex flex-wrap justify-content-between align-items-start gap-2 mb-3">
+<section class="content-card p-3 p-md-4 mb-4">
+  <div class="d-flex flex-wrap justify-content-between align-items-start gap-3 mb-3">
     <div>
-      <h2 class="h5 fw-bold mb-1">Sovereignty collectors</h2>
-      <div class="muted-line small">Run either collector on demand. Both write to real <code>sovereignty.*</code> tables; they are not simulated benchmarks.</div>
+      <h2 class="h5 fw-bold mb-1">Collectors</h2>
+      <div class="muted-line small">Keep both collectors launchable here. DOTLAN remains the main debug workflow.</div>
     </div>
-    <button class="btn btn-sm btn-outline-light" id="sovRefreshLogs" type="button">Refresh logs</button>
+    <button class="btn btn-sm btn-outline-light" id="sovRefreshLogs" type="button">Refresh log</button>
   </div>
-  <div class="row g-3">
-    <div class="col-lg-6">
-      <div class="border border-secondary-subtle rounded-3 p-3 h-100">
-        <div class="d-flex justify-content-between gap-2 align-items-start mb-2">
-          <div>
-            <h3 class="h6 fw-bold mb-1">Current map · CCP ESI</h3>
-            <div class="muted-line small">One global public ESI snapshot stored as-is. SQL history records only GAIN / LOST deltas. Respects ESI Expires and ETag; leaves existing data intact on failure.</div>
-          </div>
-          <span class="badge text-bg-secondary" id="sovEsiStatus">{{ sovereignty_debug.esi.status }}</span>
-        </div>
-        {% if can_run %}
-        <div class="d-flex flex-wrap gap-2 my-3">
-          <form method="post" action="/admin/debug/sovereignty/run/esi">
-            <button class="btn btn-primary" type="submit" id="sovEsiRun" {% if sovereignty_debug.esi.running %}disabled{% endif %}>Run ESI snapshot</button>
-          </form>
-          <form method="post" action="/admin/debug/sovereignty/stop/esi">
-            <button class="btn btn-outline-danger" type="submit" id="sovEsiStop" {% if not sovereignty_debug.esi.running %}disabled{% endif %}>Stop</button>
-          </form>
-        </div>
-        {% endif %}
-        <div class="muted-line small mb-2" id="sovEsiMeta">No ESI run yet.</div>
-        <pre class="log-viewer" style="min-height:160px;max-height:320px;" id="sovEsiLog">Loading…</pre>
+
+  <div class="border border-secondary-subtle rounded-3 p-3 mb-3">
+    <div class="d-flex flex-wrap justify-content-between align-items-center gap-2">
+      <div>
+        <div class="fw-bold">Current map · CCP ESI</div>
+        <div class="muted-line small">Global snapshot used as current SQL state.</div>
       </div>
-    </div>
-    <div class="col-lg-6">
-      <div class="border border-secondary-subtle rounded-3 p-3 h-100">
-        <div class="d-flex justify-content-between gap-2 align-items-start mb-2">
-          <div>
-            <h3 class="h6 fw-bold mb-1">Historical events · DOTLAN</h3>
-            <div class="muted-line small">Resumable per-system import with EVEOSINT's global DOTLAN throttle. Run the ESI snapshot first for the Current SOV scope.</div>
-          </div>
-          <span class="badge text-bg-secondary" id="sovDotlanStatus">{{ sovereignty_debug.dotlan.status }}</span>
-        </div>
+      <div class="d-flex flex-wrap align-items-center gap-2">
+        <span class="badge text-bg-secondary" id="sovEsiStatus">{{ sovereignty_debug.esi.status }}</span>
         {% if can_run %}
-        <form method="post" action="/admin/debug/sovereignty/run/dotlan" class="row g-2 mt-2 mb-3">
-          <div class="col-md-6">
-            <label class="form-label small" for="sovDotlanScope">Scope</label>
-            <select class="form-select form-select-sm" name="scope" id="sovDotlanScope">
-              <option value="current">Current conquerable SOV systems</option>
-              <option value="all-nullsec">All conquerable nullsec (including former/unclaimed SOV)</option>
-            </select>
-          </div>
-          <div class="col-md-6">
-            <label class="form-label small" for="sovDotlanLimit">Systems per run</label>
-            <input class="form-control form-control-sm" type="number" name="limit" id="sovDotlanLimit" min="0" max="500" value="25" required>
-          </div>
-          <div class="col-12">
-            <label class="form-label small" for="sovDotlanSystem">Single system (optional: name or ID)</label>
-            <input class="form-control form-control-sm" type="text" name="system" id="sovDotlanSystem" maxlength="100" placeholder="e.g. 1DQ1-A">
-          </div>
-          <div class="col-12 d-flex flex-wrap gap-3 align-items-center">
-            <label class="form-check mb-0">
-              <input class="form-check-input" type="checkbox" name="refresh" id="sovDotlanRefresh">
-              <span class="form-check-label small">Refresh completed systems</span>
-            </label>
-            <span class="muted-line small">0 = all pending (long crawl)</span>
-          </div>
-          <div class="col-12 d-flex flex-wrap gap-2 mt-2">
-            <button class="btn btn-primary" type="submit" id="sovDotlanRun" {% if sovereignty_debug.dotlan.running %}disabled{% endif %}>Run DOTLAN import</button>
-          </div>
+        <form method="post" action="/admin/debug/sovereignty/run/esi" class="m-0">
+          <button class="btn btn-sm btn-primary" type="submit" id="sovEsiRun" {% if sovereignty_debug.esi.running %}disabled{% endif %}>Run ESI snapshot</button>
         </form>
-        <form method="post" action="/admin/debug/sovereignty/stop/dotlan" class="mb-3">
-          <button class="btn btn-outline-danger" type="submit" id="sovDotlanStop" {% if not sovereignty_debug.dotlan.running %}disabled{% endif %}>Stop DOTLAN import</button>
+        <form method="post" action="/admin/debug/sovereignty/stop/esi" class="m-0">
+          <button class="btn btn-sm btn-outline-danger" type="submit" id="sovEsiStop" {% if not sovereignty_debug.esi.running %}disabled{% endif %}>Stop</button>
         </form>
         {% endif %}
-        <div class="muted-line small mb-2" id="sovDotlanMeta">No DOTLAN run yet.</div>
-        <pre class="log-viewer" style="min-height:160px;max-height:320px;" id="sovDotlanLog">Loading…</pre>
       </div>
     </div>
+    <div class="muted-line small mt-2" id="sovEsiMeta">No ESI run yet.</div>
+  </div>
+
+  <div class="border border-secondary-subtle rounded-3 p-3">
+    <div class="d-flex flex-wrap justify-content-between align-items-start gap-2 mb-2">
+      <div>
+        <h3 class="h6 fw-bold mb-1">Historical events · DOTLAN</h3>
+        <div class="muted-line small">Resumable per-system import with EVEOSINT's global DOTLAN throttle.</div>
+      </div>
+      <span class="badge text-bg-secondary" id="sovDotlanStatus">{{ sovereignty_debug.dotlan.status }}</span>
+    </div>
+
+    {% if can_run %}
+    <form method="post" action="/admin/debug/sovereignty/run/dotlan" class="row g-2 mt-2 mb-3">
+      <div class="col-md-6">
+        <label class="form-label small" for="sovDotlanScope">Scope</label>
+        <select class="form-select form-select-sm" name="scope" id="sovDotlanScope">
+          <option value="current">Current conquerable SOV systems</option>
+          <option value="all-nullsec">All conquerable nullsec (including former/unclaimed SOV)</option>
+        </select>
+      </div>
+      <div class="col-md-6">
+        <label class="form-label small" for="sovDotlanLimit">Systems per run</label>
+        <input class="form-control form-control-sm" type="number" name="limit" id="sovDotlanLimit" min="0" max="500" value="25" required>
+      </div>
+      <div class="col-12">
+        <label class="form-label small" for="sovDotlanSystem">Single system (optional: name or ID)</label>
+        <input class="form-control form-control-sm" type="text" name="system" id="sovDotlanSystem" maxlength="100" placeholder="e.g. 1DQ1-A">
+      </div>
+      <div class="col-12 d-flex flex-wrap gap-3 align-items-center">
+        <label class="form-check mb-0">
+          <input class="form-check-input" type="checkbox" name="refresh" id="sovDotlanRefresh">
+          <span class="form-check-label small">Refresh completed systems</span>
+        </label>
+        <span class="muted-line small">0 = all pending (long crawl)</span>
+      </div>
+      <div class="col-12 d-flex flex-wrap gap-2 mt-2">
+        <button class="btn btn-primary" type="submit" id="sovDotlanRun" {% if sovereignty_debug.dotlan.running %}disabled{% endif %}>Run DOTLAN import</button>
+      </div>
+    </form>
+
+    <form method="post" action="/admin/debug/sovereignty/stop/dotlan" class="mb-3">
+      <button class="btn btn-outline-danger" type="submit" id="sovDotlanStop" {% if not sovereignty_debug.dotlan.running %}disabled{% endif %}>Stop DOTLAN import</button>
+    </form>
+    {% endif %}
+
+    <div class="muted-line small mb-2" id="sovDotlanMeta">No DOTLAN run yet.</div>
+    <pre class="log-viewer" style="min-height:150px;max-height:300px;" id="sovDotlanLog">Loading…</pre>
   </div>
 </section>
 
 <section class="content-card p-3 p-md-4 mb-4">
-  <div class="d-flex justify-content-between gap-3 align-items-start mb-3">
+  <div class="d-flex flex-wrap justify-content-between align-items-start gap-3 mb-3">
     <div>
-      <h2 class="h5 mb-1">Affiliation benchmark · Steps 1 → 4</h2>
-      <div class="muted-line small">Target hypothesis: one-pass SQL preparation + streamed parallel bulk calls.</div>
+      <h2 class="h5 fw-bold mb-1">Sovereignty SQL inspector</h2>
+      <div class="muted-line small">Select a system already entered by the DOTLAN importer and inspect exactly what is stored in SQL.</div>
     </div>
-    <span class="badge text-bg-info">isolated</span>
+    <span class="badge text-bg-secondary">{{ sovereignty_inspection.systems|length }} systems</span>
   </div>
 
-  <div class="bench-note small mb-4">
-    This module reads production source/history/current tables, but writes only to <code>entities.esi_affiliation_debug_*</code>.
-    With <strong>Store ESI payload</strong> enabled, each bulk also applies the production-like DEBUG plumbing: result upsert,
-    batch status update, character mismatch queue, simulated current-affiliation update, unique corporation collapse and alliance-mismatch queue.
-    It does <strong>not</strong> call character/corporation histories and never modifies production current/history/queue tables.
-  </div>
-
-  {% if can_run %}
-  <form method="post" action="/admin/debug/run/affiliation-1-4" class="row g-3">
-    <div class="col-md-4">
-      <label class="form-label small">Source table</label>
-      <input class="form-control" name="source_table" value="entities.recent_killmail_pilots">
+  <form method="get" action="/admin/debug" class="row g-2 mb-4">
+    <div class="col-lg-10">
+      <label class="form-label small" for="inspectSystem">Imported system</label>
+      <select class="form-select" id="inspectSystem" name="system_id">
+        <option value="">Choose a system…</option>
+        {% for system in sovereignty_inspection.systems %}
+        <option value="{{ system.system_id }}" {% if sovereignty_inspection.selected and sovereignty_inspection.selected.system_id == system.system_id %}selected{% endif %}>
+          {{ system.system_name }} · {{ system.system_id }} · {{ system.last_status }} · {{ system.event_count }} events
+        </option>
+        {% endfor %}
+      </select>
     </div>
-    <div class="col-md-2">
-      <label class="form-label small">Column</label>
-      <input class="form-control" name="source_column" value="character_id">
-    </div>
-    <div class="col-md-2">
-      <label class="form-label small">Limit</label>
-      <input class="form-control" name="limit" placeholder="empty = full">
-    </div>
-    <div class="col-md-1">
-      <label class="form-label small">Workers</label>
-      <input class="form-control" type="number" min="1" max="16" name="workers" value="4">
-    </div>
-    <div class="col-md-1">
-      <label class="form-label small">Batch</label>
-      <input class="form-control" type="number" min="1" max="999" name="batch_size" value="999">
-    </div>
-    <div class="col-md-2">
-      <label class="form-label small">ESI calls / min</label>
-      <input class="form-control" type="number" min="1" max="300" name="rate_limit" value="280">
-    </div>
-    <div class="col-12 d-flex flex-wrap gap-4 align-items-center">
-      <label class="form-check mb-0"><input class="form-check-input" type="checkbox" name="store_results" checked> <span class="form-check-label">Store ESI payload + full isolated DB treatment</span></label>
-      <label class="form-check mb-0"><input class="form-check-input" type="checkbox" name="use_etag_cache"> <span class="form-check-label">Read existing batch ETag cache</span></label>
-      <label class="form-check mb-0"><input class="form-check-input" type="checkbox" name="skip_bulk"> <span class="form-check-label">Preparation only</span></label>
-    </div>
-    <div class="col-12 d-flex flex-wrap gap-2">
-      <button class="btn btn-primary" type="submit" {% if debug.running %}disabled{% endif %}>Run optimized Steps 1 → 4</button>
+    <div class="col-lg-2 d-flex align-items-end">
+      <button class="btn btn-primary w-100" type="submit">Inspect SQL</button>
     </div>
   </form>
+
+  {% if sovereignty_inspection.selected %}
+  {% set selected = sovereignty_inspection.selected %}
+
+  <div class="sov-grid mb-4">
+    <div class="sov-stat">
+      <div class="muted-line small">System</div>
+      <div class="value">{{ selected.system_name }} · {{ selected.system_id }}</div>
+      <div class="muted-line small mt-1">DOTLAN status: {{ selected.last_status }} · {{ selected.event_count }} stored events</div>
+      <div class="muted-line small">Last fetch: {{ selected.fetched_at or '—' }}</div>
+      {% if selected.last_error %}<div class="text-danger small mt-1">{{ selected.last_error }}</div>{% endif %}
+    </div>
+    <div class="sov-stat">
+      <div class="muted-line small">Current CCP ESI row</div>
+      {% if selected.current_alliance_id or selected.current_corporation_id or selected.current_faction_id %}
+      <div class="value">Alliance {{ selected.current_alliance_id or '—' }}</div>
+      <div class="small">Corporation {{ selected.current_corporation_id or '—' }} · Faction {{ selected.current_faction_id or '—' }}</div>
+      <div class="muted-line small mt-1">Observed: {{ selected.current_observed_at or '—' }}</div>
+      {% else %}
+      <div class="value">No current ESI sovereignty entry</div>
+      {% endif %}
+    </div>
+  </div>
+
+  <h3 class="h6 fw-bold mb-2">DOTLAN history stored in <code>sovereignty.dotlan_events</code></h3>
+  <div class="table-responsive mb-4">
+    <table class="table table-dark table-hover table-sm history-table align-middle mb-0">
+      <thead>
+        <tr>
+          <th>Date</th>
+          <th>Normalized</th>
+          <th>Raw action</th>
+          <th>Alliance</th>
+          <th>Corporation</th>
+          <th>Ownership model</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in sovereignty_inspection.dotlan_events %}
+        <tr>
+          <td>{{ row.event_at }}</td>
+          <td><span class="badge {% if row.action == 'GAIN' %}text-bg-success{% elif row.action == 'LOST' %}text-bg-danger{% else %}text-bg-secondary{% endif %}">{{ row.action }}</span></td>
+          <td>{{ row.action_raw }}</td>
+          <td class="wrap">{{ row.alliance_name or '—' }}</td>
+          <td class="wrap">{{ row.corporation_name or '—' }}</td>
+          <td>{{ row.ownership_model }}</td>
+        </tr>
+        {% else %}
+        <tr><td colspan="6" class="muted-line">No DOTLAN event stored for this system.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  <h3 class="h6 fw-bold mb-2">ESI deltas stored in <code>sovereignty.map_changes</code></h3>
+  <div class="table-responsive">
+    <table class="table table-dark table-hover table-sm history-table align-middle mb-0">
+      <thead>
+        <tr>
+          <th>Observed</th>
+          <th>Change</th>
+          <th>Old alliance</th>
+          <th>New alliance</th>
+          <th>Old corp</th>
+          <th>New corp</th>
+          <th>Old faction</th>
+          <th>New faction</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in sovereignty_inspection.esi_changes %}
+        <tr>
+          <td>{{ row.source_observed_at }}</td>
+          <td><span class="badge {% if row.change_type == 'GAIN' %}text-bg-success{% else %}text-bg-danger{% endif %}">{{ row.change_type }}</span></td>
+          <td>{{ row.old_alliance_id or '—' }}</td>
+          <td>{{ row.new_alliance_id or '—' }}</td>
+          <td>{{ row.old_corporation_id or '—' }}</td>
+          <td>{{ row.new_corporation_id or '—' }}</td>
+          <td>{{ row.old_faction_id or '—' }}</td>
+          <td>{{ row.new_faction_id or '—' }}</td>
+        </tr>
+        {% else %}
+        <tr><td colspan="8" class="muted-line">No ESI delta stored for this system yet.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <div class="muted-line">Choose an imported system to inspect its current state and history.</div>
   {% endif %}
 </section>
 
-<section class="content-card p-3 p-md-4 mb-4">
-  <div class="d-flex flex-wrap justify-content-between align-items-start gap-2 mb-3">
-    <div>
-      <h2 class="h5 mb-1">Current / latest benchmark</h2>
-      <div id="runMeta" class="muted-line small">{{ debug.run_id or 'No debug run yet' }}</div>
-    </div>
-    <div class="text-end">
-      <div id="runStatus" class="fw-bold">{{ debug.status or 'idle' }}</div>
-      <div id="runDuration" class="muted-line small"></div>
-    </div>
-  </div>
-
-  <div class="debug-grid mb-3">
-    <div class="debug-stat"><div class="muted-line small">Source pilots</div><div id="mSource" class="value">-</div></div>
-    <div class="debug-stat"><div class="muted-line small">Bulk candidates</div><div id="mCandidates" class="value">-</div></div>
-    <div class="debug-stat"><div class="muted-line small">Deleted excluded</div><div id="mDeleted" class="value">-</div></div>
-    <div class="debug-stat"><div class="muted-line small">Initial history debt</div><div id="mHistoryDebt" class="value">-</div></div>
-  </div>
-
-  <div class="debug-grid mb-3">
-    <div class="debug-stat"><div class="muted-line small">Bulk progress</div><div id="mBulkProgress" class="value">-</div><div class="bulk-progress mt-2"><div id="bulkBar"></div></div></div>
-    <div class="debug-stat"><div class="muted-line small">Observed calls/min</div><div id="mCpm" class="value">-</div></div>
-    <div class="debug-stat"><div class="muted-line small">Avg total / HTTP</div><div id="mLatency" class="value">-</div></div>
-    <div class="debug-stat"><div class="muted-line small">p50 / p95 total</div><div id="mPct" class="value">-</div></div>
-  </div>
-
-  <div class="debug-grid mb-3">
-    <div class="debug-stat"><div class="muted-line small">Avg DB apply / batch</div><div id="mDbApply" class="value">-</div></div>
-    <div class="debug-stat"><div class="muted-line small">Character mismatches</div><div id="mCharMismatch" class="value">-</div></div>
-    <div class="debug-stat"><div class="muted-line small">Distinct corporations</div><div id="mDistinctCorp" class="value">-</div></div>
-    <div class="debug-stat"><div class="muted-line small">Corp histories queued</div><div id="mCorpQueued" class="value">-</div></div>
-  </div>
-
-  <div id="phaseList"></div>
-</section>
-
-<section class="content-card p-3 p-md-4 mb-4">
-  <div class="d-flex justify-content-between align-items-center mb-2">
-    <div>
-      <h2 class="h5 mb-1">Debug log</h2>
-      <div class="muted-line small">Live log for this isolated benchmark.</div>
-    </div>
-    <button class="btn btn-sm btn-outline-light" type="button" id="refreshLog">Refresh</button>
-  </div>
-  <pre class="log-viewer" id="logViewer">Loading…</pre>
-</section>
-
-<section class="content-card p-3 p-md-4">
-  <div class="d-flex justify-content-between align-items-center mb-3">
-    <h2 class="h5 mb-0">Recent debug runs</h2>
-    {% if can_run %}
-    <form method="post" action="/admin/debug/cleanup" onsubmit="return confirm('Clean isolated debug work/result rows?');">
-      <button class="btn btn-sm btn-outline-secondary" type="submit" {% if debug.running %}disabled{% endif %}>Clean debug tables</button>
-    </form>
-    {% endif %}
-  </div>
-  <div class="table-responsive">
-    <table class="table table-dark table-hover align-middle mb-0">
-      <thead><tr><th>Run</th><th>Status</th><th>Started</th><th>Total</th><th>Source</th><th>Candidates</th><th>Bulk c/m</th><th>p95</th></tr></thead>
-      <tbody id="historyBody"></tbody>
-    </table>
-  </div>
-</section>
-
 <script>
-let state = {{ debug | tojson }};
 function esc(v){return String(v ?? '').replace(/[&<>'"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]));}
-function num(v){const n=Number(v); return Number.isFinite(n)?new Intl.NumberFormat('en-US').format(n):'-';}
-function dur(v){const n=Number(v); if(!Number.isFinite(n))return '-'; if(n<60)return `${n.toFixed(1)}s`; const h=Math.floor(n/3600),m=Math.floor((n%3600)/60),s=Math.round(n%60); return h?`${h}h ${m}m ${s}s`:`${m}m ${s}s`;}
-function metricPills(metrics){return Object.entries(metrics||{}).filter(([k,v])=>v!==null&&v!==undefined).map(([k,v])=>`<span class="debug-pill"><span>${esc(k.replaceAll('_',' '))}</span><strong>${typeof v==='number'?num(v):esc(v)}</strong></span>`).join('');}
-function badge(status){const map={done:'success',running:'warning',failed:'danger',stopped:'secondary'}; return `<span class="badge text-bg-${map[status]||'secondary'}">${esc(status||'waiting')}</span>`;}
-function render(s){
-  state=s;
-  const m=s.metrics||{}, b=s.bulk||{};
-  document.getElementById('runMeta').textContent=s.run_id?`${s.run_id} · ${s.variant||''} · ${s.source_table||''}`:'No debug run yet';
-  document.getElementById('runStatus').innerHTML=badge(s.status);
-  document.getElementById('runDuration').textContent=dur(s.duration_seconds);
-  document.getElementById('mSource').textContent=num(m.source_ids);
-  document.getElementById('mCandidates').textContent=num(m.affiliation_candidates);
-  document.getElementById('mDeleted').textContent=num(m.deleted);
-  document.getElementById('mHistoryDebt').textContent=num(m.without_history);
-  const done=Number(b.batches_done||0), total=Number(b.batches_total||0), pct=total?Math.min(100,done/total*100):0;
-  document.getElementById('mBulkProgress').textContent=total?`${num(done)} / ${num(total)}`:'-';
-  document.getElementById('bulkBar').style.width=`${pct}%`;
-  document.getElementById('mCpm').textContent=b.calls_per_minute!==undefined?`${Number(b.calls_per_minute||0).toFixed(1)} / min`:'-';
-  document.getElementById('mLatency').textContent=`${Number(b.avg_total_ms||0).toFixed(0)} / ${Number(b.avg_http_ms||0).toFixed(0)} ms`;
-  document.getElementById('mPct').textContent=`${Number(b.p50_total_ms||0).toFixed(0)} / ${Number(b.p95_total_ms||0).toFixed(0)} ms`;
-  document.getElementById('mDbApply').textContent=`${Number(b.avg_db_apply_ms||0).toFixed(0)} ms`;
-  document.getElementById('mCharMismatch').textContent=num(m.character_mismatches);
-  document.getElementById('mDistinctCorp').textContent=num(m.distinct_corporations);
-  document.getElementById('mCorpQueued').textContent=num(m.corporation_history_queued);
-  const phases=s.phases||[];
-  document.getElementById('phaseList').innerHTML=phases.length?phases.map((p,i)=>`<div class="debug-phase"><div class="phase-index">${i+1}</div><div><div class="phase-title">${esc(p.label)}</div><div class="phase-meta">${esc(p.group||'')} · ${p.duration_seconds!=null?dur(p.duration_seconds):'running'}</div><div class="phase-metrics">${metricPills(p.metrics)}</div>${p.error?`<div class="text-danger small mt-2">${esc(p.error)}</div>`:''}</div><div class="debug-phase-status text-end">${badge(p.status)}</div></div>`).join(''):'<div class="muted-line">No phase yet.</div>';
-  const history=s.history||[];
-  document.getElementById('historyBody').innerHTML=history.length?history.map(h=>`<tr><td><code>${esc(h.run_id)}</code></td><td>${badge(h.status)}</td><td>${esc(h.started_at||'-')}</td><td>${dur(h.duration_seconds)}</td><td>${num((h.metrics||{}).source_ids)}</td><td>${num((h.metrics||{}).affiliation_candidates)}</td><td>${Number((h.bulk||{}).calls_per_minute||0).toFixed(1)}</td><td>${Number((h.bulk||{}).p95_total_ms||0).toFixed(0)} ms</td></tr>`).join(''):'<tr><td colspan="8" class="muted-line">No history.</td></tr>';
-}
-async function refreshStatus(){try{const r=await fetch('/admin/debug/api/status',{cache:'no-store'}); if(r.ok)render(await r.json());}catch(e){}}
-async function refreshLog(){try{const r=await fetch('/admin/debug/api/log?lines=700',{cache:'no-store'}); if(r.ok){const t=await r.text(); const el=document.getElementById('logViewer'); const atBottom=(el.scrollTop+el.clientHeight+50>=el.scrollHeight); el.textContent=t||'No log yet.'; if(atBottom)el.scrollTop=el.scrollHeight;}}catch(e){}}
 
 let sovState = {{ sovereignty_debug | tojson }};
 function renderSov(s){
@@ -307,29 +252,29 @@ function renderSov(s){
     if(stop) stop.disabled=!value.running;
   });
 }
+
 async function refreshSovStatus(){
   try{
     const r=await fetch('/admin/debug/api/sovereignty/status',{cache:'no-store'});
     if(r.ok)renderSov(await r.json());
   }catch(e){}
 }
-async function refreshSovLogs(){
-  await Promise.all(['esi','dotlan'].map(async function(key){
-    try{
-      const r=await fetch('/admin/debug/api/sovereignty/log?job='+key+'&lines=350',{cache:'no-store'});
-      if(!r.ok)return;
-      const target=document.getElementById(key==='esi'?'sovEsiLog':'sovDotlanLog');
-      const atBottom=target.scrollTop+target.clientHeight+50>=target.scrollHeight;
-      target.textContent=(await r.text())||'No log yet.';
-      if(atBottom)target.scrollTop=target.scrollHeight;
-    }catch(e){}
-  }));
+
+async function refreshDotlanLog(){
+  try{
+    const r=await fetch('/admin/debug/api/sovereignty/log?job=dotlan&lines=350',{cache:'no-store'});
+    if(!r.ok)return;
+    const target=document.getElementById('sovDotlanLog');
+    const atBottom=target.scrollTop+target.clientHeight+50>=target.scrollHeight;
+    target.textContent=(await r.text())||'No log yet.';
+    if(atBottom)target.scrollTop=target.scrollHeight;
+  }catch(e){}
 }
-document.getElementById('sovRefreshLogs').addEventListener('click',refreshSovLogs);
-renderSov(sovState); refreshSovLogs();
-setInterval(refreshSovStatus,2500); setInterval(refreshSovLogs,4000);
-document.getElementById('refreshLog').addEventListener('click',refreshLog);
-render(state); refreshLog();
-setInterval(refreshStatus,2000); setInterval(refreshLog,3000);
+
+document.getElementById('sovRefreshLogs').addEventListener('click',refreshDotlanLog);
+renderSov(sovState);
+refreshDotlanLog();
+setInterval(refreshSovStatus,2500);
+setInterval(refreshDotlanLog,4000);
 </script>
 {% endblock %}
