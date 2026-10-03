@@ -57,7 +57,7 @@
         return;
       }
       if (state.last_error && startedHere) {
-        text.textContent = "Erreur 500";
+        text.textContent = 'DOTLAN population history could not be loaded.';
         hideSpinner();
         return;
       }
@@ -1295,7 +1295,21 @@
         .then(function(payload){
           officialPayload=payload;
           officialRows=Array.isArray(payload.rows)?payload.rows:[];
-          if(!officialRows.length){loadingEl.hidden=true;errorEl.hidden=false;errorEl.textContent='Population history is not available for this {{ profile.entity_type }} yet.';renderStatus(payload);return;}
+          if(!officialRows.length){
+            renderStatus(payload);
+            if(payload && payload.initialization_done === false && !payload.last_error){
+              loadingEl.hidden=false;
+              loadingEl.textContent='Loading population history from DOTLAN…';
+              errorEl.hidden=true;
+              return;
+            }
+            loadingEl.hidden=true;
+            errorEl.hidden=false;
+            errorEl.textContent=payload && payload.last_error
+              ? 'DOTLAN population history could not be loaded.'
+              : 'Population history is not available for this {{ profile.entity_type }} yet.';
+            return;
+          }
           officialByDate=new Map(officialRows.map(function(row){return [row.date,row];}));
           loadingEl.hidden=true;contentEl.hidden=false;renderStatus(payload);renderOverview();
           const first=officialRows[0].date,last=officialRows[officialRows.length-1].date;
