@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 
-REPO_ROOT = Path.home() / "eveosint"
+REPO_ROOT = Path("/home/ubuntu/eveosint")
 RUN_DIR = REPO_ROOT / "data" / "run" / "nginx_config"
 REQUEST_FILE = RUN_DIR / "request.json"
 STATUS_FILE = RUN_DIR / "status.json"
