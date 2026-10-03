@@ -3,7 +3,7 @@
 import unittest
 
 from scripts.sync_sovereignty_esi import build_changes, normalize
-from scripts.import_sovereignty_dotlan import classification, ownership_model, parse_events
+from scripts.import_sovereignty_dotlan import alliance_id_from_url, classification, ownership_model, parse_dotlan_alliance_id, parse_events
 from scripts.sovereignty_scope import claimable_sov_systems_from_rows
 
 
@@ -149,6 +149,25 @@ class SovereigntyScopeTests(unittest.TestCase):
         ]
         result = claimable_sov_systems_from_rows(systems, constellations, regions)
         self.assertEqual(set(result), {30000001})
+
+
+class DotlanAllianceIdentityTests(unittest.TestCase):
+    def test_numeric_alliance_link_is_identity(self):
+        self.assertEqual(
+            alliance_id_from_url("https://evemaps.dotlan.net/alliance/1260824812"),
+            1260824812,
+        )
+
+    def test_named_alliance_link_never_becomes_an_id(self):
+        self.assertIsNone(
+            alliance_id_from_url("https://evemaps.dotlan.net/alliance/Goonswarm_Federation")
+        )
+
+    def test_alliance_id_is_read_from_linked_dotlan_page(self):
+        html = """
+        <table><tr><td>AllianceID</td><td>1354830081</td></tr></table>
+        """
+        self.assertEqual(parse_dotlan_alliance_id(html), 1354830081)
 
 
 class OwnershipConventionTests(unittest.TestCase):
