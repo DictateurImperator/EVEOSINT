@@ -442,6 +442,18 @@ def ensure_tables(conn):
             migrated,
         )
 
+    with conn.cursor() as cur:
+        cur.execute("""
+            ALTER TABLE sovereignty.dotlan_events
+            DROP CONSTRAINT IF EXISTS dotlan_events_action_check
+        """)
+        cur.execute("""
+            ALTER TABLE sovereignty.dotlan_events
+            ADD CONSTRAINT dotlan_events_action_check
+            CHECK (action IN ('GAIN', 'LOST', 'LEVEL_CHANGE', 'OTHER'))
+        """)
+    conn.commit()
+
 
 def system_names(conn, scope, selected, claimable=None):
     claimable = claimable or load_claimable_sov_systems(conn)
