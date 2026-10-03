@@ -46,7 +46,7 @@ from .entities import (
 from .db import db
 from .coalitions import coalition_logo_url, get_coalition, list_coalitions, list_coalition_overviews, list_memberships
 from .layout import app_context
-from .map_data import MapDataError, get_constellation_map, get_location_preview, get_region_map, get_system_map, get_universe_map
+from .map_data import MapDataError, get_constellation_map, get_eve_2d_map, get_location_preview, get_region_map, get_system_map, get_universe_map
 from .main_objects import templates
 from .population_intelligence import (
     get_alliance_population_history,
@@ -203,7 +203,13 @@ def _map_response(request: Request, user, payload):
     })
     return templates.TemplateResponse(
         request=request,
-        name="system_map.html" if payload.get("scope") == "system" else "map.html",
+        name=(
+            "system_map.html"
+            if payload.get("scope") == "system"
+            else "map_eve_2d.html"
+            if payload.get("scope") == "eve_2d"
+            else "map.html"
+        ),
         context=context,
     )
 
@@ -215,6 +221,15 @@ def map_universe(request: Request):
     if redirect:
         return redirect
     return _map_response(request, user, get_universe_map())
+
+
+@router.get("/map/eve-2d", response_class=HTMLResponse)
+def map_eve_2d(request: Request):
+    user = require_login(request)
+    redirect = require_permission_or_redirect(user, "entities.view")
+    if redirect:
+        return redirect
+    return _map_response(request, user, get_eve_2d_map())
 
 
 @router.get("/map/region/{region_id}", response_class=HTMLResponse)
