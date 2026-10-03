@@ -140,46 +140,20 @@
 
     <div class="changelog-grid">
       <section class="changelog-group">
-        <h3>Sovereignty Intelligence</h3>
+        <h3>Improved graphs</h3>
         <ul>
-          <li>Added the CCP ESI current sovereignty collector using the current sovereignty systems endpoint.</li>
-          <li>Current sovereignty now stores the complete K-space snapshot returned by CCP, including explicit unclaimed systems.</li>
-          <li>Added a resumable, globally throttled DOTLAN sovereignty-history importer for conquerable nullsec systems.</li>
-          <li>Historical ownership is reconstructed across legacy SOV, IHub and SovHub eras.</li>
-          <li>Ownership changes are normalized as <strong>LOST</strong> + <strong>GAIN</strong>; no direct transfer is inferred from snapshot polling.</li>
+          <li>SuperIntel Evolution graphs are now interactive, with hover details and zoom.</li>
+          <li>Ship Analysis graphs are now interactive, with hover details and zoom.</li>
+          <li>Coalition Population timelines have improved interaction and navigation.</li>
         </ul>
       </section>
 
       <section class="changelog-group">
-        <h3>System History</h3>
+        <h3>History</h3>
         <ul>
-          <li>Added a History view to solar-system profiles, based on the existing Player History interface.</li>
-          <li>System sovereignty history displays Alliance and historical root Coalition periods.</li>
-          <li>Unclaimed periods are displayed explicitly.</li>
-          <li>Each period calculates total kills in the system and its share of the system's recorded kill activity.</li>
-          <li>System pages now link directly between Map, Killboard and History views.</li>
-        </ul>
-      </section>
-
-      <section class="changelog-group">
-        <h3>Entity History & Analysis</h3>
-        <ul>
-          <li>Added historical Coalition segmentation to Character, Corporation and Alliance histories.</li>
-          <li>Nested coalitions resolve to their effective root coalition, with INCLUDE / EXCLUDE history respected.</li>
-          <li>Coalition logos are now shown in affiliation history when available.</li>
-          <li>Affiliation timelines are interactive.</li>
-          <li>SuperIntel Evolution and Ship Analysis charts are now interactive.</li>
-        </ul>
-      </section>
-
-      <section class="changelog-group">
-        <h3>Admin, Debug & Reliability</h3>
-        <ul>
-          <li>Added Admin Debug launch, stop, status and live-log controls for ESI and DOTLAN sovereignty collectors.</li>
-          <li>Added sovereignty SQL inspection, direct current ESI snapshot inspection and copy-to-clipboard controls for collector logs.</li>
-          <li>Added an independent systemd job/timer for current sovereignty collection.</li>
-          <li>Added cache / ETag / Expires handling, incomplete-snapshot guards and DOTLAN Retry-After protection.</li>
-          <li>Added offline sovereignty collector tests and migration handling for the new CCP sovereignty endpoint.</li>
+          <li>Coalition logos are now displayed in affiliation histories when available.</li>
+          <li>Solar systems now have a SOV History view showing historical Alliance / Coalition ownership periods.</li>
+          <li>System SOV History also shows total kills in the system for each period and the corresponding share of recorded kill activity.</li>
         </ul>
       </section>
     </div>
