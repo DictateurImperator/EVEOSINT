@@ -233,16 +233,24 @@ def map_eve_2d(request: Request):
 
 
 @router.get("/api/map/eve-2d/influence")
-def map_eve_2d_influence(request: Request, date_value: str | None = Query(None, alias="date")):
+def map_eve_2d_influence(
+    request: Request,
+    date_value: str | None = Query(None, alias="date"),
+    grouping: str = Query("coalition", alias="group"),
+):
     user = require_login(request)
     redirect = require_permission_or_redirect(user, "entities.view")
     if redirect:
         return redirect
     try:
-        payload = get_eve_2d_influence(date_value)
+        payload = get_eve_2d_influence(date_value, grouping)
     except MapDataError as exc:
         code = str(exc)
-        status = 400 if code in {"influence_date_invalid", "influence_date_before_history"} else 503
+        status = 400 if code in {
+            "influence_date_invalid",
+            "influence_date_before_history",
+            "influence_grouping_invalid",
+        } else 503
         return JSONResponse({"error": code}, status_code=status)
     return JSONResponse(payload)
 
