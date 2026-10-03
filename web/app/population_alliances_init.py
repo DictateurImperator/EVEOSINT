@@ -3,7 +3,7 @@ import re
 import time
 from datetime import date, datetime, timedelta, timezone
 from html.parser import HTMLParser
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlparse
 
 import requests
 from psycopg2.extras import execute_values
@@ -129,7 +129,7 @@ class DotlanClient:
     def _wait_for_slot(self):
         wait_for_dotlan_slot()
 
-    def get(self, path):
+    def get_with_url(self, path):
         url = urljoin(DOTLAN_BASE, path)
         last_error = None
 
@@ -147,7 +147,7 @@ class DotlanClient:
                 raise RuntimeError(last_error) from exc
 
             if response.status_code == 200:
-                return response.text
+                return response.text, response.url
 
             if response.status_code == 429:
                 retry_after = response.headers.get("Retry-After")
@@ -172,6 +172,54 @@ class DotlanClient:
 
         raise RuntimeError(last_error or f"request_failed:{url}")
 
+    def get(self, path):
+        html, _ = self.get_with_url(path)
+        return html
+
+
+def parse_alliance_page_id(html):
+    match = re.search(r"link-16159-(\d+)", html)
+    if not match:
+        match = re.search(
+            r"<td>\s*<b>AllianceID</b>\s*</td>\s*<td>\s*(\d+)\s*</td>",
+            html,
+            flags=re.IGNORECASE | re.DOTALL,
+        )
+    if not match:
+        raise ValueError("dotlan_alliance_id_missing")
+    return int(match.group(1))
+
+
+def resolve_alliance_href_by_id(client, alliance_id):
+    """Resolve the exact DOTLAN alliance page from AllianceID only."""
+    alliance_id = int(alliance_id)
+    html, final_url = client.get_with_url(f"/alliance/{alliance_id}")
+    parsed_id = parse_alliance_page_id(html)
+    if parsed_id != alliance_id:
+        raise ValueError(
+            f"dotlan_alliance_id_mismatch:expected={alliance_id} got={parsed_id}"
+        )
+
+    stats_link = re.search(
+        r"""href=["']([^"']*/alliance/[^"']+/stats)["']""",
+        html,
+        flags=re.IGNORECASE,
+    )
+    if stats_link:
+        stats_url = urljoin(DOTLAN_BASE, stats_link.group(1))
+        path = urlparse(stats_url).path
+        href = path.rsplit("/stats", 1)[0]
+    else:
+        path = urlparse(final_url).path.rstrip("/")
+        if not path.startswith("/alliance/"):
+            raise ValueError("dotlan_alliance_canonical_url_missing")
+        href = path
+
+    slug = href[len("/alliance/"):] if href.startswith("/alliance/") else ""
+    if not slug:
+        raise ValueError("dotlan_alliance_canonical_slug_missing")
+    return href, slug
+
 
 def _parse_iso_date(value):
     return datetime.strptime(value, "%Y-%m-%d").date()
@@ -188,17 +236,7 @@ def _to_int(value):
 
 
 def parse_stats_page(html):
-    alliance_id_match = re.search(r"link-16159-(\d+)", html)
-    if not alliance_id_match:
-        alliance_id_match = re.search(
-            r"<td>\s*<b>AllianceID</b>\s*</td>\s*<td>\s*(\d+)\s*</td>",
-            html,
-            flags=re.IGNORECASE | re.DOTALL,
-        )
-    if not alliance_id_match:
-        raise ValueError("dotlan_alliance_id_missing")
-
-    alliance_id = int(alliance_id_match.group(1))
+    alliance_id = parse_alliance_page_id(html)
 
     # Do not parse the first StatUtil.init() argument (the DOTLAN path).
     # Alliance names can contain apostrophes/quotes and DOTLAN may serialize
@@ -656,9 +694,10 @@ def initialize_alliance(
     apply_current_snapshot=True,
     expected_alliance_id=None,
 ):
-    sync = load_sync_by_slug(conn, alliance["slug"])
-    if sync is None and expected_alliance_id is not None:
+    if expected_alliance_id is not None:
         sync = load_sync_by_id(conn, expected_alliance_id)
+    else:
+        sync = load_sync_by_slug(conn, alliance["slug"])
     if sync and sync["initialization_done"]:
         print(
             f"[{index}/{total}] SKIP {alliance['name']} already initialized "
@@ -831,10 +870,6 @@ def initialize_alliance_on_demand(alliance_id, alliance_name):
         if sync and sync["initialization_done"]:
             return "skipped"
 
-        # DOTLAN accepts /alliance/<AllianceID> and redirects to the canonical
-        # alliance page. Never build this identity from the alliance name.
-        dotlan_ref = str(alliance_id)
-
         # Prevent two web requests/workers from backfilling the same alliance at once.
         with conn.cursor() as cur:
             cur.execute("SELECT pg_try_advisory_lock(%s)", (alliance_id,))
@@ -847,14 +882,23 @@ def initialize_alliance_on_demand(alliance_id, alliance_name):
         if sync and sync["initialization_done"]:
             return "skipped"
 
-        # Replace any legacy name-derived slug from a previous failed attempt.
-        _ensure_sync_placeholder(conn, alliance_id, alliance_name, dotlan_ref)
-
         client = DotlanClient()
+
+        # Resolve the canonical DOTLAN page from the numeric AllianceID itself.
+        # The alliance name is never used for identity or URL construction.
+        try:
+            canonical_href, canonical_slug = resolve_alliance_href_by_id(client, alliance_id)
+        except Exception as exc:
+            _ensure_sync_placeholder(conn, alliance_id, alliance_name, str(alliance_id))
+            mark_sync_error(conn, alliance_id, str(exc))
+            return "error"
+
+        _ensure_sync_placeholder(conn, alliance_id, alliance_name, canonical_slug)
+
         alliance = {
             "name": alliance_name,
-            "slug": dotlan_ref,
-            "href": f"/alliance/{alliance_id}",
+            "slug": canonical_slug,
+            "href": canonical_href,
         }
         return initialize_alliance(
             conn,
