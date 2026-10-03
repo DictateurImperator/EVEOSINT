@@ -432,12 +432,12 @@ def get_eve_2d_influence(target_date=None):
             if current_table is None or changes_table is None:
                 raise MapDataError("sovereignty_history_unavailable")
 
-            cur.execute("SELECT MAX(observed_at)::date FROM sovereignty.current_map")
+            cur.execute("SELECT MAX((observed_at AT TIME ZONE 'UTC')::date) FROM sovereignty.current_map")
             latest_date = cur.fetchone()[0]
             if latest_date is None:
                 raise MapDataError("sovereignty_history_unavailable")
 
-            cur.execute("SELECT MIN(source_observed_at)::date FROM sovereignty.map_changes")
+            cur.execute("SELECT MIN((source_observed_at AT TIME ZONE 'UTC')::date) FROM sovereignty.map_changes")
             earliest_change_date = cur.fetchone()[0]
 
             if target_date is None:
@@ -479,7 +479,7 @@ def get_eve_2d_influence(target_date=None):
                     new_corporation_id,
                     new_faction_id
                 FROM sovereignty.map_changes
-                WHERE source_observed_at::date > %s
+                WHERE (source_observed_at AT TIME ZONE 'UTC')::date > %s
                 ORDER BY source_observed_at DESC, change_id DESC
             """, (selected_date,))
 
