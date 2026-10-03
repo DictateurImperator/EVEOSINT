@@ -443,129 +443,117 @@
     const surfaceWidth = 560;
     const surfaceHeight = Math.max(260, Math.round(surfaceWidth * WORLD_HEIGHT / WORLD_WIDTH));
     const count = surfaceWidth * surfaceHeight;
-    const ownerGrid = new Int32Array(count);
-    ownerGrid.fill(-1);
-    const bestDist = new Float32Array(count);
-    bestDist.fill(Infinity);
 
-    // Influence is based ONLY on solar-system positions.
-    // Stargates are never consulted here.
+    const NO_OWNER = -1;
+    const NEUTRAL_OWNER = -2;
+
+    const bestOwner = new Int32Array(count);
+    const secondOwner = new Int32Array(count);
+    bestOwner.fill(NO_OWNER);
+    secondOwner.fill(NO_OWNER);
+
+    const bestDist = new Float32Array(count);
+    const secondDist = new Float32Array(count);
+    bestDist.fill(Infinity);
+    secondDist.fill(Infinity);
+
+    const groupIndexById = new Map(
+      influenceGroups.map((group, index) => [String(group.id), index])
+    );
+
+    // Every solar system projects the same limited-radius circle.
+    // Owned systems project their camp colour.
+    // Neutral systems project an invisible circle that cannot be painted over.
+    // Stargates are NEVER used in this calculation.
     const radiusWorld = 52;
     const radiusPx = radiusWorld * surfaceWidth / WORLD_WIDTH;
     const radiusSq = radiusPx * radiusPx;
     const radiusCells = Math.ceil(radiusPx);
 
-    influenceGroups.forEach((group, groupIndex) => {
-      (group.system_ids || []).forEach(systemId => {
-        const node = nodeById.get(String(systemId));
-        if (!node) return;
-
-        const gx = node._x * (surfaceWidth - 1) / WORLD_WIDTH;
-        const gy = node._y * (surfaceHeight - 1) / WORLD_HEIGHT;
-        const minGX = Math.max(0, Math.floor(gx - radiusCells));
-        const maxGX = Math.min(surfaceWidth - 1, Math.ceil(gx + radiusCells));
-        const minGY = Math.max(0, Math.floor(gy - radiusCells));
-        const maxGY = Math.min(surfaceHeight - 1, Math.ceil(gy + radiusCells));
-
-        for (let y = minGY; y <= maxGY; y++) {
-          const dy = y - gy;
-          for (let x = minGX; x <= maxGX; x++) {
-            const dx = x - gx;
-            const distanceSq = dx * dx + dy * dy;
-            if (distanceSq > radiusSq) continue;
-
-            const index = y * surfaceWidth + x;
-            if (distanceSq < bestDist[index]) {
-              bestDist[index] = distanceSq;
-              ownerGrid[index] = groupIndex;
-            }
-          }
-        }
-      });
-    });
-
-    // Bridge only small gaps between territories belonging to the SAME camp.
-    // A bridge is refused when another camp is present close to the candidate gap.
-    const bridgeReach = 5;
-    const enemyGuard = 3;
-    const directions = [
-      [[-1, 0], [1, 0]],
-      [[0, -1], [0, 1]],
-      [[-1, -1], [1, 1]],
-      [[1, -1], [-1, 1]],
-    ];
-
-    function firstOwnerInDirection(grid, x, y, dx, dy) {
-      for (let step = 1; step <= bridgeReach; step++) {
-        const nx = x + dx * step;
-        const ny = y + dy * step;
-        if (nx < 0 || nx >= surfaceWidth || ny < 0 || ny >= surfaceHeight) return -1;
-        const owner = grid[ny * surfaceWidth + nx];
-        if (owner >= 0) return owner;
+    function recordCandidate(index, sourceOwner, distanceSq) {
+      if (sourceOwner === bestOwner[index]) {
+        if (distanceSq < bestDist[index]) bestDist[index] = distanceSq;
+        return;
       }
-      return -1;
+
+      if (sourceOwner === secondOwner[index]) {
+        if (distanceSq < secondDist[index]) secondDist[index] = distanceSq;
+        return;
+      }
+
+      if (distanceSq < bestDist[index]) {
+        secondOwner[index] = bestOwner[index];
+        secondDist[index] = bestDist[index];
+        bestOwner[index] = sourceOwner;
+        bestDist[index] = distanceSq;
+        return;
+      }
+
+      if (distanceSq < secondDist[index]) {
+        secondOwner[index] = sourceOwner;
+        secondDist[index] = distanceSq;
+      }
     }
 
-    for (let pass = 0; pass < 2; pass++) {
-      const next = new Int32Array(ownerGrid);
-      for (let y = bridgeReach; y < surfaceHeight - bridgeReach; y++) {
-        for (let x = bridgeReach; x < surfaceWidth - bridgeReach; x++) {
-          const index = y * surfaceWidth + x;
-          if (ownerGrid[index] >= 0) continue;
+    nodes.forEach(node => {
+      const group = influenceBySystem.get(String(node.id));
+      const sourceOwner = group
+        ? (groupIndexById.get(String(group.id)) ?? NEUTRAL_OWNER)
+        : NEUTRAL_OWNER;
 
-          let candidate = -1;
-          for (const pair of directions) {
-            const left = firstOwnerInDirection(ownerGrid, x, y, pair[0][0], pair[0][1]);
-            const right = firstOwnerInDirection(ownerGrid, x, y, pair[1][0], pair[1][1]);
-            if (left >= 0 && left === right) {
-              candidate = left;
-              break;
-            }
-          }
-          if (candidate < 0) continue;
+      const gx = node._x * (surfaceWidth - 1) / WORLD_WIDTH;
+      const gy = node._y * (surfaceHeight - 1) / WORLD_HEIGHT;
+      const minGX = Math.max(0, Math.floor(gx - radiusCells));
+      const maxGX = Math.min(surfaceWidth - 1, Math.ceil(gx + radiusCells));
+      const minGY = Math.max(0, Math.floor(gy - radiusCells));
+      const maxGY = Math.min(surfaceHeight - 1, Math.ceil(gy + radiusCells));
 
-          let enemyNearby = false;
-          for (let oy = -enemyGuard; oy <= enemyGuard && !enemyNearby; oy++) {
-            for (let ox = -enemyGuard; ox <= enemyGuard; ox++) {
-              if (ox === 0 && oy === 0) continue;
-              const owner = ownerGrid[(y + oy) * surfaceWidth + (x + ox)];
-              if (owner >= 0 && owner !== candidate) {
-                enemyNearby = true;
-                break;
-              }
-            }
-          }
-
-          if (!enemyNearby) next[index] = candidate;
+      for (let y = minGY; y <= maxGY; y++) {
+        const dy = y - gy;
+        for (let x = minGX; x <= maxGX; x++) {
+          const dx = x - gx;
+          const distanceSq = dx * dx + dy * dy;
+          if (distanceSq > radiusSq) continue;
+          recordCandidate(y * surfaceWidth + x, sourceOwner, distanceSq);
         }
       }
-      ownerGrid.set(next);
+    });
+
+    // Build the territorial owner grid directly from the circles:
+    // same camp + same camp => continuous territory;
+    // different camps => frontier at the meeting point;
+    // neutral => invisible territory that blocks colour.
+    const ownerGrid = new Int32Array(count);
+    ownerGrid.fill(NO_OWNER);
+    const boundaryWidth = 0.9;
+
+    for (let index = 0; index < count; index++) {
+      const owner = bestOwner[index];
+      if (owner === NO_OWNER || !Number.isFinite(bestDist[index])) continue;
+
+      if (owner === NEUTRAL_OWNER) {
+        ownerGrid[index] = NEUTRAL_OWNER;
+        continue;
+      }
+
+      const rival = secondOwner[index];
+      if (
+        rival !== NO_OWNER
+        && rival !== owner
+        && Number.isFinite(secondDist[index])
+      ) {
+        const nearestDistance = Math.sqrt(bestDist[index]);
+        const rivalDistance = Math.sqrt(secondDist[index]);
+        if ((rivalDistance - nearestDistance) <= boundaryWidth) {
+          ownerGrid[index] = NEUTRAL_OWNER;
+          continue;
+        }
+      }
+
+      ownerGrid[index] = owner;
     }
 
     assignNeighbourAwareColors(ownerGrid, surfaceWidth, surfaceHeight);
-
-    // Create a visible no-man's-land wherever two different camps meet.
-    const demarcationRadius = 2;
-    const finalOwner = new Int32Array(ownerGrid);
-    for (let y = demarcationRadius; y < surfaceHeight - demarcationRadius; y++) {
-      for (let x = demarcationRadius; x < surfaceWidth - demarcationRadius; x++) {
-        const index = y * surfaceWidth + x;
-        const owner = ownerGrid[index];
-        if (owner < 0) continue;
-
-        let border = false;
-        for (let oy = -demarcationRadius; oy <= demarcationRadius && !border; oy++) {
-          for (let ox = -demarcationRadius; ox <= demarcationRadius; ox++) {
-            const other = ownerGrid[(y + oy) * surfaceWidth + (x + ox)];
-            if (other >= 0 && other !== owner) {
-              border = true;
-              break;
-            }
-          }
-        }
-        if (border) finalOwner[index] = -1;
-      }
-    }
 
     const surface = document.createElement("canvas");
     surface.width = surfaceWidth;
@@ -577,7 +565,7 @@
     for (let y = 0; y < surfaceHeight; y++) {
       for (let x = 0; x < surfaceWidth; x++) {
         const index = y * surfaceWidth + x;
-        const groupIndex = finalOwner[index];
+        const groupIndex = ownerGrid[index];
         if (groupIndex < 0) continue;
 
         let edge = false;
@@ -589,7 +577,7 @@
               edge = true;
               break;
             }
-            if (finalOwner[ny * surfaceWidth + nx] !== groupIndex) {
+            if (ownerGrid[ny * surfaceWidth + nx] !== groupIndex) {
               edge = true;
               break;
             }
@@ -601,7 +589,7 @@
         image.data[offset] = r;
         image.data[offset + 1] = g;
         image.data[offset + 2] = b;
-        image.data[offset + 3] = edge ? 58 : 94;
+        image.data[offset + 3] = edge ? 64 : 96;
       }
     }
 
