@@ -147,6 +147,7 @@
       <div class="value">{{ selected.system_name }} · {{ selected.system_id }}</div>
       <div class="muted-line small mt-1">DOTLAN status: {{ selected.last_status }} · {{ selected.event_count }} stored events</div>
       <div class="muted-line small">Last fetch: {{ selected.fetched_at or '—' }}</div>
+      {% if selected.source_url %}<div class="small mt-1"><a href="{{ selected.source_url }}" target="_blank" rel="noopener">Open DOTLAN source</a></div>{% endif %}
       {% if selected.last_error %}<div class="text-danger small mt-1">{{ selected.last_error }}</div>{% endif %}
     </div>
     <div class="sov-stat">
