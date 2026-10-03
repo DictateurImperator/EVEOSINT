@@ -678,7 +678,12 @@ def main():
     parser = argparse.ArgumentParser(description="EVEOSINT scheduled update orchestrator.")
     parser.add_argument("--mode", choices=["scheduled", "weekly"], default="scheduled")
     parser.add_argument("--trigger", default="manual")
+    parser.add_argument("--print-plan-json", action="store_true")
     args = parser.parse_args()
+
+    if args.print_plan_json:
+        print(json.dumps({"steps": weekly_steps()}, ensure_ascii=False))
+        return
 
     if not PYTHON_BIN.is_file():
         raise SystemExit(f"missing_python:{PYTHON_BIN}")
