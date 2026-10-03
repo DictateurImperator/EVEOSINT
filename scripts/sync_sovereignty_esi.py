@@ -87,7 +87,7 @@ def ensure_tables(conn):
             CREATE TABLE IF NOT EXISTS sovereignty.map_changes (
                 change_id BIGSERIAL PRIMARY KEY,
                 system_id BIGINT NOT NULL,
-                change_type TEXT NOT NULL CHECK (change_type IN ('GAIN', 'LOST', 'TRANSFER')),
+                change_type TEXT NOT NULL CHECK (change_type IN ('GAIN', 'LOST')),
                 old_alliance_id BIGINT,
                 old_corporation_id BIGINT,
                 old_faction_id BIGINT,
@@ -99,6 +99,58 @@ def ensure_tables(conn):
                 source TEXT NOT NULL DEFAULT 'esi'
             )
         """)
+        cur.execute("""
+            SELECT pg_get_constraintdef(oid)
+            FROM pg_constraint
+            WHERE conrelid = 'sovereignty.map_changes'::regclass
+              AND conname = 'map_changes_change_type_check'
+        """)
+        constraint_row = cur.fetchone()
+        constraint_def = constraint_row[0] if constraint_row else None
+        if constraint_def is None or "TRANSFER" in constraint_def:
+            cur.execute("""
+                INSERT INTO sovereignty.map_changes (
+                    system_id, change_type,
+                    old_alliance_id, old_corporation_id, old_faction_id,
+                    new_alliance_id, new_corporation_id, new_faction_id,
+                    source_observed_at, detected_at, source
+                )
+                SELECT
+                    system_id, 'LOST',
+                    old_alliance_id, old_corporation_id, old_faction_id,
+                    NULL, NULL, NULL,
+                    source_observed_at, detected_at, source
+                FROM sovereignty.map_changes
+                WHERE change_type = 'TRANSFER'
+            """)
+            cur.execute("""
+                INSERT INTO sovereignty.map_changes (
+                    system_id, change_type,
+                    old_alliance_id, old_corporation_id, old_faction_id,
+                    new_alliance_id, new_corporation_id, new_faction_id,
+                    source_observed_at, detected_at, source
+                )
+                SELECT
+                    system_id, 'GAIN',
+                    NULL, NULL, NULL,
+                    new_alliance_id, new_corporation_id, new_faction_id,
+                    source_observed_at, detected_at, source
+                FROM sovereignty.map_changes
+                WHERE change_type = 'TRANSFER'
+            """)
+            cur.execute("""
+                DELETE FROM sovereignty.map_changes
+                WHERE change_type = 'TRANSFER'
+            """)
+            cur.execute("""
+                ALTER TABLE sovereignty.map_changes
+                DROP CONSTRAINT IF EXISTS map_changes_change_type_check
+            """)
+            cur.execute("""
+                ALTER TABLE sovereignty.map_changes
+                ADD CONSTRAINT map_changes_change_type_check
+                CHECK (change_type IN ('GAIN', 'LOST'))
+            """)
         cur.execute("""
             CREATE INDEX IF NOT EXISTS sov_map_changes_system_date_idx
             ON sovereignty.map_changes (system_id, source_observed_at DESC)
@@ -205,10 +257,21 @@ def build_changes(previous, current, source_observed_at):
         new_owner = current[system_id]
         if old_owner == new_owner:
             continue
+
+        # A snapshot only proves "old owner was present before" and "new owner
+        # is present now". It cannot prove a direct transfer happened between
+        # the two polls, so record the two observable facts instead.
         changes.append((
             system_id,
-            "TRANSFER",
+            "LOST",
             old_owner[0], old_owner[1], old_owner[2],
+            None, None, None,
+            source_observed_at,
+        ))
+        changes.append((
+            system_id,
+            "GAIN",
+            None, None, None,
             new_owner[0], new_owner[1], new_owner[2],
             source_observed_at,
         ))
