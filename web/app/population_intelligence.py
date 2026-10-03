@@ -113,6 +113,24 @@ def _table_exists(conn, schema_name, table_name):
     return bool(row and row[0])
 
 
+def _column_exists(conn, schema_name, table_name, column_name):
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT EXISTS (
+                SELECT 1
+                FROM information_schema.columns
+                WHERE table_schema = %s
+                  AND table_name = %s
+                  AND column_name = %s
+            )
+            """,
+            (schema_name, table_name, column_name),
+        )
+        row = cur.fetchone()
+    return bool(row and row[0])
+
+
 def _format_count(value):
     if value is None:
         return None
@@ -230,7 +248,14 @@ def get_alliance_population_history(alliance_id):
             }
 
         sync_row = None
+        has_history_unavailable = False
         if _table_exists(conn, "population", "alliance_sync"):
+            has_history_unavailable = _column_exists(
+                conn,
+                "population",
+                "alliance_sync",
+                "history_unavailable",
+            )
             with conn.cursor() as cur:
                 cur.execute(
                     """
@@ -240,10 +265,13 @@ def get_alliance_population_history(alliance_id):
                         last_synced_date,
                         initialization_done,
                         last_error
+                        {history_column}
                     FROM population.alliance_sync
                     WHERE alliance_id = %s
                     LIMIT 1
-                    """,
+                    """.format(
+                        history_column=", history_unavailable" if has_history_unavailable else ""
+                    ),
                     (alliance_id,),
                 )
                 sync_row = cur.fetchone()
@@ -278,9 +306,12 @@ def get_alliance_population_history(alliance_id):
     oldest_synced_date = sync_row[1].isoformat() if sync_row and sync_row[1] else (rows[0]["date"] if rows else None)
     last_synced_date = sync_row[2].isoformat() if sync_row and sync_row[2] else (rows[-1]["date"] if rows else None)
 
+    history_unavailable = bool(sync_row[5]) if sync_row and has_history_unavailable else False
+
     return {
         "alliance_id": alliance_id,
         "available": bool(rows),
+        "history_available": False if history_unavailable else (True if rows else None),
         "source": "dotlan",
         "initialization_done": bool(sync_row[3]) if sync_row else False,
         "first_available_date": first_available_date,
