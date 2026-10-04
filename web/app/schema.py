@@ -9,26 +9,50 @@ def ensure_tables():
             cur.execute("CREATE SCHEMA IF NOT EXISTS sovereignty;")
 
             cur.execute("""
+            SELECT to_regclass('sovereignty.reconciled_map');
+            """)
+            reconciled_table = cur.fetchone()[0]
+            if reconciled_table is not None:
+                cur.execute("""
+                SELECT EXISTS (
+                    SELECT 1
+                    FROM information_schema.columns
+                    WHERE table_schema = 'sovereignty'
+                      AND table_name = 'reconciled_map'
+                      AND column_name = 'action'
+                );
+                """)
+                if not cur.fetchone()[0]:
+                    cur.execute("DROP TABLE sovereignty.reconciled_map;")
+
+            cur.execute("""
             CREATE TABLE IF NOT EXISTS sovereignty.reconciled_map (
-                day DATE NOT NULL,
+                event_id BIGSERIAL PRIMARY KEY,
                 system_id BIGINT NOT NULL,
+                event_at TIMESTAMPTZ NOT NULL,
+                action TEXT NOT NULL CHECK (action IN ('GAIN', 'LOST')),
                 alliance_id BIGINT,
                 corporation_id BIGINT,
                 faction_id BIGINT,
                 source TEXT NOT NULL CHECK (source IN ('dotlan', 'esi')),
-                observed_at TIMESTAMPTZ NOT NULL,
-                PRIMARY KEY (day, system_id)
+                ownership_model TEXT,
+                observed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                UNIQUE (system_id, event_at, action, source)
             );
             """)
 
             cur.execute("""
-            CREATE INDEX IF NOT EXISTS sov_reconciled_map_system_day_idx
-            ON sovereignty.reconciled_map (system_id, day DESC);
+            CREATE INDEX IF NOT EXISTS sov_reconciled_map_system_event_idx
+            ON sovereignty.reconciled_map (
+                system_id,
+                event_at DESC,
+                event_id DESC
+            );
             """)
 
             cur.execute("""
-            CREATE INDEX IF NOT EXISTS sov_reconciled_map_day_idx
-            ON sovereignty.reconciled_map (day);
+            CREATE INDEX IF NOT EXISTS sov_reconciled_map_event_idx
+            ON sovereignty.reconciled_map (event_at DESC);
             """)
 
             cur.execute("""

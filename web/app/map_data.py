@@ -968,12 +968,17 @@ def get_eve_2d_influence(target_date=None, grouping="coalition"):
                 raise MapDataError("sovereignty_history_unavailable")
 
             cur.execute("""
-                SELECT MIN(day), MAX(day)
+                SELECT MIN((event_at AT TIME ZONE 'UTC')::date)
                 FROM sovereignty.reconciled_map
             """)
-            earliest_date, latest_date = cur.fetchone()
-            if latest_date is None:
+            earliest_date = cur.fetchone()[0]
+            if earliest_date is None:
                 raise MapDataError("sovereignty_history_unavailable")
+
+            # The table stores changes only, not one snapshot per day.
+            # The latest known state remains valid through today until another
+            # GAIN/LOST event supersedes it.
+            latest_date = date.today()
 
             if target_date is None:
                 selected_date = latest_date
@@ -987,27 +992,39 @@ def get_eve_2d_influence(target_date=None, grouping="coalition"):
 
             if selected_date > latest_date:
                 selected_date = latest_date
-            if earliest_date is not None and selected_date < earliest_date:
+            if selected_date < earliest_date:
                 raise MapDataError("influence_date_before_history")
 
             cur.execute("""
                 SELECT DISTINCT ON (system_id)
                     system_id,
+                    action,
                     alliance_id,
                     corporation_id,
                     faction_id
                 FROM sovereignty.reconciled_map
-                WHERE day <= %s
-                ORDER BY system_id, day DESC
+                WHERE (event_at AT TIME ZONE 'UTC')::date <= %s
+                ORDER BY
+                    system_id,
+                    event_at DESC,
+                    event_id DESC
             """, (selected_date,))
-            owners = {
-                int(system_id): (
-                    int(alliance_id) if alliance_id is not None else None,
-                    int(corporation_id) if corporation_id is not None else None,
-                    int(faction_id) if faction_id is not None else None,
-                )
-                for system_id, alliance_id, corporation_id, faction_id in cur.fetchall()
-            }
+            owners = {}
+            for (
+                system_id,
+                action,
+                alliance_id,
+                corporation_id,
+                faction_id,
+            ) in cur.fetchall():
+                if action == "GAIN":
+                    owners[int(system_id)] = (
+                        int(alliance_id) if alliance_id is not None else None,
+                        int(corporation_id) if corporation_id is not None else None,
+                        int(faction_id) if faction_id is not None else None,
+                    )
+                else:
+                    owners[int(system_id)] = (None, None, None)
 
             alliance_ids = sorted({
                 owner[0]

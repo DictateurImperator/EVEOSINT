@@ -89,9 +89,13 @@ def _load_color_rows():
                     WITH latest_system_state AS (
                         SELECT DISTINCT ON (system_id)
                             system_id,
+                            action,
                             alliance_id
                         FROM sovereignty.reconciled_map
-                        ORDER BY system_id, day DESC
+                        ORDER BY
+                            system_id,
+                            event_at DESC,
+                            event_id DESC
                     )
                     SELECT DISTINCT
                         a.alliance_id,
@@ -99,7 +103,8 @@ def _load_color_rows():
                     FROM latest_system_state s
                     JOIN entities.alliances a
                       ON a.alliance_id = s.alliance_id
-                    WHERE s.alliance_id IS NOT NULL
+                    WHERE s.action = 'GAIN'
+                      AND s.alliance_id IS NOT NULL
                     ORDER BY lower(a.name), a.alliance_id
                 """)
                 alliance_rows = cur.fetchall()

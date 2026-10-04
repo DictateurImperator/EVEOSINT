@@ -1,10 +1,15 @@
 #!/usr/bin/env python3
 """One-shot reconciliation of existing DOTLAN history with existing ESI SOV data.
 
-Run once after DOTLAN history and the first ESI sovereignty snapshot already exist.
-DOTLAN contributes only GAIN / LOST ownership checkpoints. Existing ESI history
-then overrides DOTLAN, and the current ESI map is written as the latest snapshot.
-After this one-shot, sync_sovereignty_esi.py keeps the table updated daily.
+Run once after DOTLAN history and the first ESI sovereignty snapshot already
+exist. The reconciled table contains only ownership-change events:
+GAIN at date X, LOST at date Y.
+
+DOTLAN is imported once. Existing ESI GAIN/LOST changes are appended after the
+DOTLAN hand-off point. The current ESI map is used only to correct the final
+state when needed; it is never copied as daily snapshots.
+
+After this one-shot, sync_sovereignty_esi.py appends future ESI GAIN/LOST events.
 """
 import argparse
 import json
@@ -13,6 +18,7 @@ import sys
 from pathlib import Path
 
 import psycopg2
+from psycopg2.extras import execute_values
 
 ROOT = Path(__file__).resolve().parents[1]
 CONFIG_PATH = ROOT / "config" / "db.json"
@@ -31,30 +37,86 @@ def connect():
     )
 
 
+def _has_owner(owner):
+    return owner is not None and any(value is not None for value in owner)
+
+
 def ensure_table(conn):
     with conn.cursor() as cur:
         cur.execute("CREATE SCHEMA IF NOT EXISTS sovereignty")
+
+        cur.execute("SELECT to_regclass('sovereignty.reconciled_map')")
+        table_exists = cur.fetchone()[0] is not None
+        if table_exists:
+            cur.execute("""
+                SELECT EXISTS (
+                    SELECT 1
+                    FROM information_schema.columns
+                    WHERE table_schema = 'sovereignty'
+                      AND table_name = 'reconciled_map'
+                      AND column_name = 'action'
+                )
+            """)
+            if not cur.fetchone()[0]:
+                # _018 briefly used a snapshot-shaped reconciled table.
+                # Its content is fully reproducible from DOTLAN + ESI sources.
+                cur.execute("DROP TABLE sovereignty.reconciled_map")
+
         cur.execute("""
             CREATE TABLE IF NOT EXISTS sovereignty.reconciled_map (
-                day DATE NOT NULL,
+                event_id BIGSERIAL PRIMARY KEY,
                 system_id BIGINT NOT NULL,
+                event_at TIMESTAMPTZ NOT NULL,
+                action TEXT NOT NULL CHECK (action IN ('GAIN', 'LOST')),
                 alliance_id BIGINT,
                 corporation_id BIGINT,
                 faction_id BIGINT,
                 source TEXT NOT NULL CHECK (source IN ('dotlan', 'esi')),
-                observed_at TIMESTAMPTZ NOT NULL,
-                PRIMARY KEY (day, system_id)
+                ownership_model TEXT,
+                observed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                UNIQUE (system_id, event_at, action, source)
             )
         """)
         cur.execute("""
-            CREATE INDEX IF NOT EXISTS sov_reconciled_map_system_day_idx
-            ON sovereignty.reconciled_map (system_id, day DESC)
+            CREATE INDEX IF NOT EXISTS sov_reconciled_map_system_event_idx
+            ON sovereignty.reconciled_map (
+                system_id,
+                event_at DESC,
+                event_id DESC
+            )
         """)
         cur.execute("""
-            CREATE INDEX IF NOT EXISTS sov_reconciled_map_day_idx
-            ON sovereignty.reconciled_map (day)
+            CREATE INDEX IF NOT EXISTS sov_reconciled_map_event_idx
+            ON sovereignty.reconciled_map (event_at DESC)
         """)
     conn.commit()
+
+
+def _load_latest_reconciled_state(conn):
+    with conn.cursor() as cur:
+        cur.execute("""
+            SELECT DISTINCT ON (system_id)
+                system_id,
+                action,
+                alliance_id,
+                corporation_id,
+                faction_id
+            FROM sovereignty.reconciled_map
+            ORDER BY system_id, event_at DESC, event_id DESC
+        """)
+        rows = cur.fetchall()
+
+    state = {}
+    for system_id, action, alliance_id, corporation_id, faction_id in rows:
+        if action == "GAIN":
+            state[int(system_id)] = (
+                alliance_id,
+                corporation_id,
+                faction_id,
+            )
+        else:
+            state[int(system_id)] = (None, None, None)
+    return state
 
 
 def reconcile(conn, force=False):
@@ -87,157 +149,221 @@ def reconcile(conn, force=False):
             raise RuntimeError("sovereignty.current_map is empty")
 
         if force:
-            cur.execute("TRUNCATE sovereignty.reconciled_map")
+            cur.execute("TRUNCATE sovereignty.reconciled_map RESTART IDENTITY")
 
-        # DOTLAN is imported ONCE. Only ownership changes matter:
-        # GAIN => owner becomes alliance, LOST => system becomes unclaimed.
-        # If multiple ownership events happen on the same day, keep the last one.
+        # ONE SHOT DOTLAN import. Keep only actual ownership changes.
         cur.execute("""
             INSERT INTO sovereignty.reconciled_map (
-                day,
                 system_id,
+                event_at,
+                action,
                 alliance_id,
                 corporation_id,
                 faction_id,
                 source,
+                ownership_model,
                 observed_at
             )
             SELECT
-                event_at::date,
                 system_id,
-                CASE WHEN action = 'GAIN' THEN alliance_id ELSE NULL END,
+                event_at AT TIME ZONE 'UTC',
+                action,
+                alliance_id,
                 NULL,
                 NULL,
                 'dotlan',
-                event_at AT TIME ZONE 'UTC'
-            FROM (
-                SELECT DISTINCT ON (system_id, event_at::date)
+                ownership_model,
+                fetched_at
+            FROM sovereignty.dotlan_events
+            WHERE action IN ('GAIN', 'LOST')
+              AND (action = 'LOST' OR alliance_id IS NOT NULL)
+            ORDER BY
+                system_id,
+                event_at,
+                CASE action WHEN 'LOST' THEN 0 ELSE 1 END,
+                row_position DESC
+            ON CONFLICT (system_id, event_at, action, source) DO UPDATE SET
+                alliance_id = EXCLUDED.alliance_id,
+                ownership_model = EXCLUDED.ownership_model,
+                observed_at = EXCLUDED.observed_at
+        """)
+        dotlan_rows = cur.rowcount
+
+        # Existing ESI changes collected after each system's DOTLAN crawl are
+        # the hand-off from the historical one-shot to the live ESI stream.
+        cur.execute("SELECT to_regclass('sovereignty.map_changes')")
+        changes_exists = cur.fetchone()[0] is not None
+        esi_change_rows = 0
+
+        if changes_exists:
+            cur.execute("""
+                INSERT INTO sovereignty.reconciled_map (
                     system_id,
                     event_at,
                     action,
                     alliance_id,
-                    row_position
-                FROM sovereignty.dotlan_events
-                WHERE action IN ('GAIN', 'LOST')
-                  AND (action = 'LOST' OR alliance_id IS NOT NULL)
-                ORDER BY
-                    system_id,
-                    event_at::date,
-                    event_at DESC,
-                    CASE WHEN action = 'GAIN' THEN 1 ELSE 0 END DESC,
-                    row_position DESC
-            ) final_event
-            ORDER BY system_id, event_at
-            ON CONFLICT (day, system_id) DO NOTHING
-        """)
-        dotlan_rows = cur.rowcount
-
-        # Preserve any ESI change history already collected before this one-shot.
-        cur.execute("SELECT to_regclass('sovereignty.map_changes')")
-        changes_exists = cur.fetchone()[0] is not None
-        esi_change_rows = 0
-        if changes_exists:
-            cur.execute("""
-                INSERT INTO sovereignty.reconciled_map (
-                    day,
-                    system_id,
-                    alliance_id,
                     corporation_id,
                     faction_id,
                     source,
+                    ownership_model,
                     observed_at
                 )
                 SELECT
-                    (source_observed_at AT TIME ZONE 'UTC')::date,
-                    system_id,
-                    CASE WHEN change_type = 'GAIN' THEN new_alliance_id ELSE NULL END,
-                    CASE WHEN change_type = 'GAIN' THEN new_corporation_id ELSE NULL END,
-                    CASE WHEN change_type = 'GAIN' THEN new_faction_id ELSE NULL END,
+                    mc.system_id,
+                    mc.source_observed_at,
+                    mc.change_type,
+                    CASE
+                        WHEN mc.change_type = 'GAIN' THEN mc.new_alliance_id
+                        ELSE mc.old_alliance_id
+                    END,
+                    CASE
+                        WHEN mc.change_type = 'GAIN' THEN mc.new_corporation_id
+                        ELSE mc.old_corporation_id
+                    END,
+                    CASE
+                        WHEN mc.change_type = 'GAIN' THEN mc.new_faction_id
+                        ELSE mc.old_faction_id
+                    END,
                     'esi',
-                    source_observed_at
-                FROM (
-                    SELECT DISTINCT ON (
-                        system_id,
-                        (source_observed_at AT TIME ZONE 'UTC')::date
-                    )
-                        change_id,
-                        system_id,
-                        change_type,
-                        new_alliance_id,
-                        new_corporation_id,
-                        new_faction_id,
-                        source_observed_at
-                    FROM sovereignty.map_changes
-                    WHERE change_type IN ('GAIN', 'LOST')
-                    ORDER BY
-                        system_id,
-                        (source_observed_at AT TIME ZONE 'UTC')::date,
-                        source_observed_at DESC,
-                        change_id DESC
-                ) final_change
-                ON CONFLICT (day, system_id) DO UPDATE SET
+                    'sovhub',
+                    mc.detected_at
+                FROM sovereignty.map_changes mc
+                LEFT JOIN sovereignty.dotlan_system_sync ds
+                  ON ds.system_id = mc.system_id
+                WHERE mc.change_type IN ('GAIN', 'LOST')
+                  AND (
+                      ds.fetched_at IS NULL
+                      OR mc.source_observed_at > ds.fetched_at
+                  )
+                ORDER BY mc.source_observed_at, mc.change_id
+                ON CONFLICT (system_id, event_at, action, source) DO UPDATE SET
                     alliance_id = EXCLUDED.alliance_id,
                     corporation_id = EXCLUDED.corporation_id,
                     faction_id = EXCLUDED.faction_id,
-                    source = 'esi',
+                    ownership_model = EXCLUDED.ownership_model,
                     observed_at = EXCLUDED.observed_at
             """)
             esi_change_rows = cur.rowcount
 
-        # The already-existing ESI current map is the hand-off point.
-        # ESI wins on any same-day conflict with DOTLAN.
+    conn.commit()
+
+    # Use current_map only as a final reconciliation check. We emit corrections
+    # only when the event replay does not match the first/current ESI snapshot.
+    reconciled_state = _load_latest_reconciled_state(conn)
+
+    with conn.cursor() as cur:
         cur.execute("""
-            INSERT INTO sovereignty.reconciled_map (
-                day,
-                system_id,
-                alliance_id,
-                corporation_id,
-                faction_id,
-                source,
-                observed_at
-            )
             SELECT
-                (observed_at AT TIME ZONE 'UTC')::date,
                 system_id,
                 alliance_id,
                 corporation_id,
                 faction_id,
-                'esi',
                 observed_at
             FROM sovereignty.current_map
-            ON CONFLICT (day, system_id) DO UPDATE SET
-                alliance_id = EXCLUDED.alliance_id,
-                corporation_id = EXCLUDED.corporation_id,
-                faction_id = EXCLUDED.faction_id,
-                source = 'esi',
-                observed_at = EXCLUDED.observed_at
+            ORDER BY system_id
         """)
-        esi_snapshot_rows = cur.rowcount
+        current_rows = cur.fetchall()
 
+    corrections = []
+    for (
+        system_id,
+        alliance_id,
+        corporation_id,
+        faction_id,
+        observed_at,
+    ) in current_rows:
+        system_id = int(system_id)
+        old_owner = reconciled_state.get(system_id, (None, None, None))
+        new_owner = (alliance_id, corporation_id, faction_id)
+
+        if old_owner == new_owner:
+            continue
+
+        if _has_owner(old_owner):
+            corrections.append((
+                system_id,
+                observed_at,
+                "LOST",
+                old_owner[0],
+                old_owner[1],
+                old_owner[2],
+                "esi",
+                "sovhub",
+                observed_at,
+            ))
+
+        if _has_owner(new_owner):
+            corrections.append((
+                system_id,
+                observed_at,
+                "GAIN",
+                new_owner[0],
+                new_owner[1],
+                new_owner[2],
+                "esi",
+                "sovhub",
+                observed_at,
+            ))
+
+    if corrections:
+        with conn.cursor() as cur:
+            execute_values(cur, """
+                INSERT INTO sovereignty.reconciled_map (
+                    system_id,
+                    event_at,
+                    action,
+                    alliance_id,
+                    corporation_id,
+                    faction_id,
+                    source,
+                    ownership_model,
+                    observed_at
+                )
+                VALUES %s
+                ON CONFLICT (system_id, event_at, action, source) DO UPDATE SET
+                    alliance_id = EXCLUDED.alliance_id,
+                    corporation_id = EXCLUDED.corporation_id,
+                    faction_id = EXCLUDED.faction_id,
+                    ownership_model = EXCLUDED.ownership_model,
+                    observed_at = EXCLUDED.observed_at
+            """, corrections, page_size=1000)
+        conn.commit()
+
+    with conn.cursor() as cur:
         cur.execute("""
             SELECT
                 COUNT(*),
-                MIN(day),
-                MAX(day),
+                MIN(event_at),
+                MAX(event_at),
                 COUNT(*) FILTER (WHERE source = 'dotlan'),
-                COUNT(*) FILTER (WHERE source = 'esi')
+                COUNT(*) FILTER (WHERE source = 'esi'),
+                COUNT(*) FILTER (WHERE action = 'GAIN'),
+                COUNT(*) FILTER (WHERE action = 'LOST')
             FROM sovereignty.reconciled_map
         """)
-        total, min_day, max_day, dotlan_total, esi_total = cur.fetchone()
-
-    conn.commit()
+        (
+            total,
+            min_event,
+            max_event,
+            dotlan_total,
+            esi_total,
+            gain_total,
+            lost_total,
+        ) = cur.fetchone()
 
     LOG.info(
         "SOV_RECONCILE done rows=%d range=%s..%s dotlan=%d esi=%d "
-        "inserted_dotlan=%d merged_esi_changes=%d current_esi=%d",
+        "gain=%d lost=%d imported_dotlan=%d imported_esi=%d corrections=%d",
         total,
-        min_day,
-        max_day,
+        min_event,
+        max_event,
         dotlan_total,
         esi_total,
+        gain_total,
+        lost_total,
         dotlan_rows,
         esi_change_rows,
-        esi_snapshot_rows,
+        len(corrections),
     )
 
 
@@ -246,7 +372,7 @@ def main():
     parser.add_argument(
         "--force",
         action="store_true",
-        help="Rebuild reconciled_map even if it already contains rows.",
+        help="Rebuild reconciled_map even if DOTLAN was already imported.",
     )
     args = parser.parse_args()
 
@@ -261,6 +387,7 @@ def main():
             if not cur.fetchone()[0]:
                 LOG.error("Another sovereignty reconciliation job is already active")
                 return 1
+
         try:
             reconcile(conn, force=args.force)
             return 0

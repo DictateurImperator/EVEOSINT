@@ -143,21 +143,24 @@ CREATE TABLE IF NOT EXISTS rawkm.killmail_import_days (
 CREATE SCHEMA IF NOT EXISTS sovereignty;
 
 CREATE TABLE IF NOT EXISTS sovereignty.reconciled_map (
-    day DATE NOT NULL,
+    event_id BIGSERIAL PRIMARY KEY,
     system_id BIGINT NOT NULL,
+    event_at TIMESTAMPTZ NOT NULL,
+    action TEXT NOT NULL CHECK (action IN ('GAIN', 'LOST')),
     alliance_id BIGINT,
     corporation_id BIGINT,
     faction_id BIGINT,
     source TEXT NOT NULL CHECK (source IN ('dotlan', 'esi')),
-    observed_at TIMESTAMPTZ NOT NULL,
-    PRIMARY KEY (day, system_id)
+    ownership_model TEXT,
+    observed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (system_id, event_at, action, source)
 );
 
-CREATE INDEX IF NOT EXISTS sov_reconciled_map_system_day_idx
-ON sovereignty.reconciled_map (system_id, day DESC);
+CREATE INDEX IF NOT EXISTS sov_reconciled_map_system_event_idx
+ON sovereignty.reconciled_map (system_id, event_at DESC, event_id DESC);
 
-CREATE INDEX IF NOT EXISTS sov_reconciled_map_day_idx
-ON sovereignty.reconciled_map (day);
+CREATE INDEX IF NOT EXISTS sov_reconciled_map_event_idx
+ON sovereignty.reconciled_map (event_at DESC);
 
 CREATE TABLE IF NOT EXISTS sovereignty.influence_color_assignments (
     assignment_id BIGSERIAL PRIMARY KEY,

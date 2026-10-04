@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Refresh the complete current sovereignty map from CCP ESI.
 
-One cached public endpoint, one atomic current-state replacement. The SQL
-history stores only changes detected between two complete ESI responses.
+One cached public endpoint, one atomic current-state replacement. The
+reconciled sovereignty history stores only GAIN/LOST changes detected between
+two complete ESI responses.
 """
 import argparse
 import json
@@ -70,24 +71,44 @@ def ensure_tables(conn):
     with conn.cursor() as cur:
         cur.execute("CREATE SCHEMA IF NOT EXISTS sovereignty")
         cur.execute("""
+            SELECT to_regclass('sovereignty.reconciled_map')
+        """)
+        reconciled_table = cur.fetchone()[0]
+        if reconciled_table is not None:
+            cur.execute("""
+                SELECT EXISTS (
+                    SELECT 1
+                    FROM information_schema.columns
+                    WHERE table_schema = 'sovereignty'
+                      AND table_name = 'reconciled_map'
+                      AND column_name = 'action'
+                )
+            """)
+            if not cur.fetchone()[0]:
+                cur.execute("DROP TABLE sovereignty.reconciled_map")
+
+        cur.execute("""
             CREATE TABLE IF NOT EXISTS sovereignty.reconciled_map (
-                day DATE NOT NULL,
+                event_id BIGSERIAL PRIMARY KEY,
                 system_id BIGINT NOT NULL,
+                event_at TIMESTAMPTZ NOT NULL,
+                action TEXT NOT NULL CHECK (action IN ('GAIN', 'LOST')),
                 alliance_id BIGINT,
                 corporation_id BIGINT,
                 faction_id BIGINT,
                 source TEXT NOT NULL CHECK (source IN ('dotlan', 'esi')),
-                observed_at TIMESTAMPTZ NOT NULL,
-                PRIMARY KEY (day, system_id)
+                ownership_model TEXT,
+                observed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                UNIQUE (system_id, event_at, action, source)
             )
         """)
         cur.execute("""
-            CREATE INDEX IF NOT EXISTS sov_reconciled_map_system_day_idx
-            ON sovereignty.reconciled_map (system_id, day DESC)
+            CREATE INDEX IF NOT EXISTS sov_reconciled_map_system_event_idx
+            ON sovereignty.reconciled_map (system_id, event_at DESC, event_id DESC)
         """)
         cur.execute("""
-            CREATE INDEX IF NOT EXISTS sov_reconciled_map_day_idx
-            ON sovereignty.reconciled_map (day)
+            CREATE INDEX IF NOT EXISTS sov_reconciled_map_event_idx
+            ON sovereignty.reconciled_map (event_at DESC)
         """)
         cur.execute("""
             CREATE TABLE IF NOT EXISTS sovereignty.current_map (
@@ -295,48 +316,6 @@ def load_current_map(conn):
         }
 
 
-def upsert_reconciled_esi_snapshot(conn, rows, observed_at=None):
-    if not rows:
-        return 0
-
-    observed_at = observed_at or utcnow()
-    snapshot_day = utcnow().date()
-    values = [
-        (
-            snapshot_day,
-            int(system_id),
-            owner[0],
-            owner[1],
-            owner[2],
-            "esi",
-            observed_at,
-        )
-        for system_id, owner in rows.items()
-    ]
-
-    with conn.cursor() as cur:
-        execute_values(cur, """
-            INSERT INTO sovereignty.reconciled_map (
-                day,
-                system_id,
-                alliance_id,
-                corporation_id,
-                faction_id,
-                source,
-                observed_at
-            )
-            VALUES %s
-            ON CONFLICT (day, system_id) DO UPDATE SET
-                alliance_id = EXCLUDED.alliance_id,
-                corporation_id = EXCLUDED.corporation_id,
-                faction_id = EXCLUDED.faction_id,
-                source = 'esi',
-                observed_at = EXCLUDED.observed_at
-        """, values, page_size=1000)
-
-    return len(values)
-
-
 def get_state(conn):
     with conn.cursor() as cur:
         cur.execute("""
@@ -453,36 +432,60 @@ def replace_map(conn, rows, response, previous, record_history):
             VALUES %s
         """, values, page_size=1000)
 
-        reconciled_values = [
-            (
-                utcnow().date(),
+        if changes:
+            reconciled_values = []
+            for (
                 system_id,
-                owner[0],
-                owner[1],
-                owner[2],
-                "esi",
-                observed,
-            )
-            for system_id, owner in rows.items()
-        ]
-        execute_values(cur, """
-            INSERT INTO sovereignty.reconciled_map (
-                day,
-                system_id,
-                alliance_id,
-                corporation_id,
-                faction_id,
-                source,
-                observed_at
-            )
-            VALUES %s
-            ON CONFLICT (day, system_id) DO UPDATE SET
-                alliance_id = EXCLUDED.alliance_id,
-                corporation_id = EXCLUDED.corporation_id,
-                faction_id = EXCLUDED.faction_id,
-                source = 'esi',
-                observed_at = EXCLUDED.observed_at
-        """, reconciled_values, page_size=1000)
+                action,
+                old_alliance_id,
+                old_corporation_id,
+                old_faction_id,
+                new_alliance_id,
+                new_corporation_id,
+                new_faction_id,
+                source_observed_at,
+            ) in changes:
+                if action == "GAIN":
+                    alliance_id = new_alliance_id
+                    corporation_id = new_corporation_id
+                    faction_id = new_faction_id
+                else:
+                    alliance_id = old_alliance_id
+                    corporation_id = old_corporation_id
+                    faction_id = old_faction_id
+
+                reconciled_values.append((
+                    system_id,
+                    source_observed_at,
+                    action,
+                    alliance_id,
+                    corporation_id,
+                    faction_id,
+                    "esi",
+                    "sovhub",
+                    utcnow(),
+                ))
+
+            execute_values(cur, """
+                INSERT INTO sovereignty.reconciled_map (
+                    system_id,
+                    event_at,
+                    action,
+                    alliance_id,
+                    corporation_id,
+                    faction_id,
+                    source,
+                    ownership_model,
+                    observed_at
+                )
+                VALUES %s
+                ON CONFLICT (system_id, event_at, action, source) DO UPDATE SET
+                    alliance_id = EXCLUDED.alliance_id,
+                    corporation_id = EXCLUDED.corporation_id,
+                    faction_id = EXCLUDED.faction_id,
+                    ownership_model = EXCLUDED.ownership_model,
+                    observed_at = EXCLUDED.observed_at
+            """, reconciled_values, page_size=1000)
 
         cur.execute("""
             INSERT INTO sovereignty.esi_map_state (
@@ -620,17 +623,9 @@ def main():
                 and expires_at
                 and utcnow() < expires_at
             ):
-                cached_rows = load_current_map(conn)
-                reconciled_count = upsert_reconciled_esi_snapshot(
-                    conn,
-                    cached_rows,
-                    observed_at=utcnow(),
-                )
-                conn.commit()
                 LOG.info(
-                    "SOV_ESI status=cached systems=%d reconciled=%d scope=%s next_fetch=%s",
+                    "SOV_ESI status=cached systems=%d scope=%s next_fetch=%s",
                     existing,
-                    reconciled_count,
                     map_scope or "legacy",
                     expires_at.isoformat(),
                 )
@@ -656,16 +651,9 @@ def main():
                         response.headers.get("ETag") or etag,
                         response,
                     )
-                    reconciled_count = upsert_reconciled_esi_snapshot(
-                        conn,
-                        previous,
-                        observed_at=http_date(response.headers.get("Last-Modified")) or utcnow(),
-                    )
-                    conn.commit()
                     LOG.info(
-                        "SOV_ESI status=not_modified systems=%d reconciled=%d scope=global_systems_2026",
+                        "SOV_ESI status=not_modified systems=%d scope=global_systems_2026",
                         existing,
-                        reconciled_count,
                     )
                     return 0
 
