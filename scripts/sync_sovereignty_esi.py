@@ -180,6 +180,39 @@ def ensure_tables(conn):
             ALTER TABLE sovereignty.esi_map_state
             ADD COLUMN IF NOT EXISTS map_scope TEXT
         """)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS sovereignty.influence_color_assignments (
+                assignment_id BIGSERIAL PRIMARY KEY,
+                entity_type TEXT NOT NULL CHECK (entity_type IN ('alliance', 'coalition')),
+                entity_id BIGINT NOT NULL,
+                color TEXT NOT NULL,
+                color_hue DOUBLE PRECISION NOT NULL,
+                color_saturation DOUBLE PRECISION NOT NULL,
+                color_lightness DOUBLE PRECISION NOT NULL,
+                valid_from DATE NOT NULL,
+                valid_to DATE,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                CHECK (valid_to IS NULL OR valid_to >= valid_from)
+            )
+        """)
+        cur.execute("""
+            CREATE UNIQUE INDEX IF NOT EXISTS sov_influence_color_active_entity_idx
+            ON sovereignty.influence_color_assignments (entity_type, entity_id)
+            WHERE valid_to IS NULL
+        """)
+        cur.execute("""
+            CREATE INDEX IF NOT EXISTS sov_influence_color_history_idx
+            ON sovereignty.influence_color_assignments (
+                entity_type, entity_id, valid_from, valid_to
+            )
+        """)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS sovereignty.influence_color_state (
+                entity_type TEXT PRIMARY KEY
+                    CHECK (entity_type IN ('alliance', 'coalition')),
+                initialized_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )
+        """)
     conn.commit()
 
 
