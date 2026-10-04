@@ -944,6 +944,7 @@ def _apply_persistent_influence_colors(
         conn.commit()
 
     for entity_id, group in entity_groups.items():
+        group["color_override"] = entity_id in overrides
         if entity_id in overrides:
             group["color"] = overrides[entity_id]
             continue

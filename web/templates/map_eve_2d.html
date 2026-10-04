@@ -1569,7 +1569,11 @@
       const groups = Array.isArray(payload && payload.groups) ? payload.groups : [];
       groups.forEach(group => {
         const groupId = String(group && group.id || "");
-        if (groupId && previousColors.has(groupId)) {
+        if (
+          groupId
+          && previousColors.has(groupId)
+          && group.color_override !== true
+        ) {
           group.color = previousColors.get(groupId);
         }
         if (groupId && group.color) {
