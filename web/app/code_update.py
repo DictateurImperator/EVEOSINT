@@ -24,13 +24,6 @@ SYSTEMCTL = "/usr/bin/systemctl"
 DEFAULT_BRANCH = "main"
 HEALTH_URL = "http://127.0.0.1:8000/login"
 
-# Test-server overlay: these two tracked files contain the Admin > Git test wiring.
-# They are allowed locally during the test, but every other tracked change still blocks updates.
-TEST_ALLOWED_TRACKED_CHANGES = {
-    "web/app/main.py",
-    "web/app/menus.py",
-}
-
 
 class CodeUpdateError(RuntimeError):
     pass
@@ -349,76 +342,15 @@ def _tracked_changed_paths():
 
 
 def _tracked_change_state():
-    changed = _tracked_changed_paths()
-    test_overlay = changed & TEST_ALLOWED_TRACKED_CHANGES
-    blocking = changed - TEST_ALLOWED_TRACKED_CHANGES
+    changed = sorted(_tracked_changed_paths())
     return {
-        "changed": sorted(changed),
-        "test_overlay": sorted(test_overlay),
-        "blocking": sorted(blocking),
+        "changed": changed,
+        "blocking": [],
     }
 
 
 def _tracked_dirty():
-    return bool(_tracked_change_state()["blocking"])
-
-
-def _capture_test_overlay(paths):
-    overlay = {}
-    for relative_path in paths:
-        path = REPO_ROOT / relative_path
-        if path.exists() and path.is_file():
-            overlay[relative_path] = {
-                "exists": True,
-                "content": path.read_bytes(),
-                "mode": path.stat().st_mode & 0o777,
-            }
-        else:
-            overlay[relative_path] = {"exists": False, "content": b"", "mode": None}
-    return overlay
-
-
-def _restore_test_overlay(overlay):
-    for relative_path, item in overlay.items():
-        path = REPO_ROOT / relative_path
-        if item["exists"]:
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_bytes(item["content"])
-            if item.get("mode") is not None:
-                os.chmod(path, item["mode"])
-        elif path.exists():
-            path.unlink()
-
-
-def _git_blob_bytes(sha, relative_path):
-    result = _git(["show", f"{sha}:{relative_path}"], check=False)
-    if result.returncode != 0:
-        return None
-    return result.stdout.encode("utf-8")
-
-
-def _overlay_restore_plan(from_sha, to_sha, overlay):
-    if not overlay or from_sha == to_sha:
-        return overlay, []
-
-    paths = sorted(overlay)
-    result = _git(["diff", "--name-only", f"{from_sha}..{to_sha}", "--", *paths])
-    changed_by_target = {line.strip() for line in result.stdout.splitlines() if line.strip()}
-
-    restore_overlay = {}
-    conflicts = []
-    for relative_path, item in overlay.items():
-        if relative_path not in changed_by_target:
-            restore_overlay[relative_path] = item
-            continue
-
-        target_bytes = _git_blob_bytes(to_sha, relative_path)
-        local_bytes = item["content"] if item.get("exists") else None
-        if target_bytes == local_bytes:
-            continue
-        conflicts.append(relative_path)
-
-    return restore_overlay, sorted(conflicts)
+    return False
 
 
 def _commit_exists(sha):
@@ -530,8 +462,6 @@ def get_code_update_snapshot(refresh=False):
         "rollback_targets": [],
         "dirty": False,
         "tracked_changes": [],
-        "test_overlay_active": False,
-        "test_overlay_files": [],
         "blocking_tracked_files": [],
         "worker_running": False,
         "deployment_active": status.get("phase") in {"queued", "running"},
@@ -572,10 +502,8 @@ def get_code_update_snapshot(refresh=False):
         snapshot["origin"] = _sanitize_remote_url(_configured_origin())
         tracked_state = _tracked_change_state()
         snapshot["tracked_changes"] = tracked_state["changed"]
-        snapshot["test_overlay_files"] = tracked_state["test_overlay"]
-        snapshot["test_overlay_active"] = bool(tracked_state["test_overlay"])
-        snapshot["blocking_tracked_files"] = tracked_state["blocking"]
-        snapshot["dirty"] = bool(tracked_state["blocking"])
+        snapshot["blocking_tracked_files"] = []
+        snapshot["dirty"] = False
 
         if refresh:
             snapshot["remote_sha"] = refresh_remote()
@@ -620,12 +548,10 @@ def get_code_update_snapshot(refresh=False):
 
         snapshot["update_allowed"] = (
             bool(snapshot["update_targets"])
-            and not snapshot["dirty"]
             and not deployment_active
         )
         snapshot["rollback_allowed"] = (
             bool(snapshot["rollback_targets"])
-            and not snapshot["dirty"]
             and not deployment_active
         )
         return snapshot
@@ -738,10 +664,8 @@ def _run_post_checkout_steps():
         )
 
 
-def _rollback_to(sha, test_overlay=None):
+def _rollback_to(sha):
     _git(["reset", "--hard", sha], timeout=60)
-    if test_overlay:
-        _restore_test_overlay(test_overlay)
     _run_post_checkout_steps()
     _restart_web_service()
     _health_check()
@@ -751,11 +675,6 @@ def _perform_action(action, target_ref):
     if not _is_git_repo():
         raise CodeUpdateError("git_repository_not_initialized")
 
-    tracked_state = _tracked_change_state()
-    if tracked_state["blocking"]:
-        raise CodeUpdateError("tracked_local_changes")
-
-    test_overlay = _capture_test_overlay(tracked_state["test_overlay"])
     previous_sha = _current_sha()
     status_before = _read_json(STATUS_FILE, {})
 
@@ -772,14 +691,6 @@ def _perform_action(action, target_ref):
     else:
         raise CodeUpdateError("invalid_action")
 
-    restore_overlay, overlay_conflicts = _overlay_restore_plan(
-        previous_sha,
-        target_sha,
-        test_overlay,
-    )
-    if overlay_conflicts:
-        raise CodeUpdateError("test_overlay_conflicts_remote")
-
     _write_status(
         phase="running",
         action=action,
@@ -795,15 +706,13 @@ def _perform_action(action, target_ref):
     try:
         _git(["reset", "--hard", target_sha], timeout=60)
         changed_checkout = True
-        if restore_overlay:
-            _restore_test_overlay(restore_overlay)
         _run_post_checkout_steps()
         _restart_web_service()
         _health_check()
     except Exception as exc:
         if changed_checkout:
             try:
-                _rollback_to(previous_sha, test_overlay=test_overlay)
+                _rollback_to(previous_sha)
             except Exception:
                 _write_status(
                     phase="failed",
@@ -919,7 +828,7 @@ def self_test():
             checks.append(("branch", True, _current_branch()))
             origin = _configured_origin()
             checks.append(("origin", bool(origin), _sanitize_remote_url(origin) or "missing"))
-            checks.append(("tracked_tree_clean", not _tracked_dirty(), "clean required for real update"))
+            checks.append(("tracked_local_changes_overwritable", True, "tracked changes are replaced by selected Git target"))
         except CodeUpdateError:
             checks.append(("git_status", False, "failed"))
 
