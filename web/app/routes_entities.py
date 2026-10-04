@@ -817,15 +817,54 @@ def global_killboard_search(
         return JSONResponse({"results": results[:limit]})
 
     if kind == "heat_entity":
-        alliance_results = [
-            item for item in search_entities(query, limit=min(limit, 12))
-            if item.get("entity_type") == "alliance"
-        ]
-
+        alliance_results = []
         coalition_results = []
         with db() as conn:
             with conn.cursor() as cur:
                 needle = f"%{query}%"
+
+                if query.isdigit():
+                    cur.execute(
+                        """
+                        SELECT alliance_id, name, ticker
+                        FROM entities.alliances
+                        WHERE alliance_id = %s
+                           OR name ILIKE %s
+                           OR COALESCE(ticker, '') ILIKE %s
+                        ORDER BY lower(name), alliance_id
+                        LIMIT %s
+                        """,
+                        (int(query), needle, needle, limit),
+                    )
+                else:
+                    cur.execute(
+                        """
+                        SELECT alliance_id, name, ticker
+                        FROM entities.alliances
+                        WHERE name ILIKE %s
+                           OR COALESCE(ticker, '') ILIKE %s
+                        ORDER BY lower(name), alliance_id
+                        LIMIT %s
+                        """,
+                        (needle, needle, limit),
+                    )
+                for alliance_id, name, ticker in cur.fetchall():
+                    alliance_results.append({
+                        "entity_type": "alliance",
+                        "entity_id": int(alliance_id),
+                        "name": name or f"Alliance {alliance_id}",
+                        "label": name or f"Alliance {alliance_id}",
+                        "subtitle": (
+                            f"Alliance · {ticker}"
+                            if ticker
+                            else "Alliance"
+                        ),
+                        "image_url": (
+                            f"https://images.evetech.net/alliances/"
+                            f"{int(alliance_id)}/logo?size=32"
+                        ),
+                    })
+
                 if query.isdigit():
                     cur.execute(
                         """
