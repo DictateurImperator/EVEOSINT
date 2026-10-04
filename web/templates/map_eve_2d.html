@@ -1782,6 +1782,404 @@
     }
   }
 
+  function heatInputDate(value) {
+    const match = String(value || "").match(
+      /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/
+    );
+    if (!match) return null;
+    return new Date(Date.UTC(
+      Number(match[1]),
+      Number(match[2]) - 1,
+      Number(match[3]),
+      Number(match[4]),
+      Number(match[5])
+    ));
+  }
+
+  function heatInputValue(value) {
+    if (!value) return "";
+    const parsed = new Date(value);
+    if (!Number.isFinite(parsed.getTime())) return "";
+    return parsed.toISOString().slice(0, 16);
+  }
+
+  function stopHeatEvolution() {
+    heatEvolutionPlaying = false;
+    ++heatEvolutionRunToken;
+    if (heatPlay) heatPlay.textContent = "Play";
+  }
+
+  function appendHeatFilterParams(params) {
+    heatFilters.ship.forEach(term => {
+      params.append(
+        term.sign > 0 ? "ship_include" : "ship_exclude",
+        (term.role || "both") + ":" + term.entity_id
+      );
+    });
+    heatFilters.entity.forEach(term => {
+      params.append(
+        term.sign > 0 ? "entity_include" : "entity_exclude",
+        (term.role || "both") + ":" + term.entity_type + ":" + term.entity_id
+      );
+    });
+  }
+
+  async function fetchHeatPayload(fromValue, toValue) {
+    const params = new URLSearchParams();
+    params.set("source", heatSource);
+    params.set("metric", heatMetric);
+    if (fromValue) params.set("from", fromValue);
+    if (toValue) params.set("to", toValue);
+    appendHeatFilterParams(params);
+
+    const response = await fetch("/api/map/eve-2d/heat?" + params.toString(), {
+      headers:{"Accept":"application/json"},
+      cache:"no-store",
+    });
+    const payload = await response.json();
+    if (!response.ok) {
+      throw new Error(payload.error || "Fight heat map loading failed");
+    }
+    return payload;
+  }
+
+  function heatStatusText(payload) {
+    const systems = Number(payload.systems_count || 0);
+    const maxValue = Number(payload.max_value || 0);
+    const label = heatMetric === "isk" ? "ISK" : "kills";
+    return systems + " systems · max " + formatHeatValue(maxValue) +
+      " · " + String(payload.source || heatSource).toUpperCase() +
+      " · " + label;
+  }
+
+  function applyHeatPayload(payload, updateRange=true) {
+    currentHeatPayload = payload;
+    heatBySystem = new Map();
+    (payload.systems || []).forEach(entry => {
+      heatBySystem.set(String(entry.system_id), entry);
+    });
+
+    if (updateRange) {
+      if (heatFrom) heatFrom.value = heatInputValue(payload.from);
+      if (heatTo) heatTo.value = heatInputValue(payload.to);
+    }
+
+    if (
+      heatCap
+      && (!heatCap.value || !(Number(heatCap.value) > 0))
+      && Number(payload.max_value || 0) > 0
+    ) {
+      heatCap.value = String(Math.ceil(Number(payload.max_value)));
+    }
+
+    if (heatStatus) heatStatus.textContent = heatStatusText(payload);
+    renderCurrentView();
+  }
+
+  async function loadHeat(fromValue=null, toValue=null, updateRange=true) {
+    stopHeatEvolution();
+    const token = ++heatRequestToken;
+    if (heatStatus) heatStatus.textContent = "Loading…";
+
+    const requestFrom = fromValue !== null
+      ? fromValue
+      : (heatFrom && heatFrom.value ? heatFrom.value : null);
+    const requestTo = toValue !== null
+      ? toValue
+      : (heatTo && heatTo.value ? heatTo.value : null);
+
+    try {
+      const payload = await fetchHeatPayload(requestFrom, requestTo);
+      if (token !== heatRequestToken) return;
+      applyHeatPayload(payload, updateRange);
+    } catch (error) {
+      if (token !== heatRequestToken) return;
+      currentHeatPayload = null;
+      heatBySystem = new Map();
+      if (heatStatus) heatStatus.textContent = String(error.message || error);
+      renderCurrentView();
+    }
+  }
+
+  async function startHeatEvolution() {
+    if (heatEvolutionPlaying) {
+      stopHeatEvolution();
+      return;
+    }
+
+    const rangeStart = heatInputDate(heatFrom && heatFrom.value);
+    const rangeEnd = heatInputDate(heatTo && heatTo.value);
+    const windowHours = Math.max(1, Number(heatWindowHours && heatWindowHours.value) || 24);
+    const windowMs = windowHours * 60 * 60 * 1000;
+
+    if (!rangeStart || !rangeEnd || rangeStart >= rangeEnd) {
+      if (heatStatus) heatStatus.textContent = "Invalid heat map evolution range";
+      return;
+    }
+
+    heatEvolutionPlaying = true;
+    const runToken = ++heatEvolutionRunToken;
+    if (heatPlay) heatPlay.textContent = "Pause";
+
+    const stepMs = Math.min(windowMs, 24 * 60 * 60 * 1000);
+    let cursor = new Date(rangeStart.getTime());
+
+    while (
+      heatEvolutionPlaying
+      && runToken === heatEvolutionRunToken
+      && cursor < rangeEnd
+    ) {
+      const frameEnd = new Date(Math.min(
+        cursor.getTime() + windowMs,
+        rangeEnd.getTime()
+      ));
+
+      try {
+        const payload = await fetchHeatPayload(
+          heatInputValue(cursor),
+          heatInputValue(frameEnd)
+        );
+        if (!heatEvolutionPlaying || runToken !== heatEvolutionRunToken) return;
+        applyHeatPayload(payload, false);
+        if (heatStatus) {
+          heatStatus.textContent =
+            "Evolution · " + heatInputValue(cursor).replace("T", " ") +
+            " → " + heatInputValue(frameEnd).replace("T", " ") +
+            " UTC · " + heatStatusText(payload);
+        }
+      } catch (error) {
+        if (runToken !== heatEvolutionRunToken) return;
+        if (heatStatus) heatStatus.textContent = String(error.message || error);
+        stopHeatEvolution();
+        return;
+      }
+
+      const fps = Math.max(
+        1,
+        Math.min(30, Number(heatFps && heatFps.value) || 4)
+      );
+      await new Promise(resolve => setTimeout(resolve, 1000 / fps));
+      cursor = new Date(cursor.getTime() + stepMs);
+    }
+
+    if (runToken === heatEvolutionRunToken) stopHeatEvolution();
+  }
+
+  function syncHeatMetricAvailability() {
+    const iskButton = heatMetricButtons.find(button => button.dataset.heatMetric === "isk");
+    const killsButton = heatMetricButtons.find(button => button.dataset.heatMetric === "kills");
+    const iskUnavailable = heatSource === "api";
+
+    if (iskButton) {
+      iskButton.disabled = iskUnavailable;
+      iskButton.title = iskUnavailable
+        ? "ISK is not available in Killboard mode yet"
+        : "";
+    }
+    if (iskUnavailable && heatMetric === "isk") {
+      heatMetric = "kills";
+    }
+
+    heatMetricButtons.forEach(button => {
+      button.classList.toggle(
+        "active",
+        button.dataset.heatMetric === heatMetric
+      );
+    });
+    if (killsButton && heatMetric === "kills") killsButton.classList.add("active");
+  }
+
+  function heatFilterImage(item) {
+    if (item.image_url) return item.image_url;
+    if (item.entity_type === "ship") {
+      return "https://images.evetech.net/types/" + item.entity_id + "/icon?size=32";
+    }
+    if (item.entity_type === "alliance") {
+      return "https://images.evetech.net/alliances/" + item.entity_id + "/logo?size=32";
+    }
+    return "";
+  }
+
+  function renderHeatTerms(kind) {
+    const root = document.querySelector('[data-heat-terms="' + kind + '"]');
+    if (!root) return;
+    const terms = heatFilters[kind] || [];
+
+    if (!terms.length) {
+      root.innerHTML = '<div class="eve2d-heat-empty">ALL by default.</div>';
+      return;
+    }
+
+    root.innerHTML = terms.map((term, index) => {
+      const imageUrl = heatFilterImage(term);
+      const image = imageUrl
+        ? '<img src="' + escapeHtml(imageUrl) + '" alt="" loading="lazy">'
+        : '<span style="width:26px"></span>';
+      return '<div class="eve2d-heat-term ' + (term.sign < 0 ? 'minus' : '') + '">' +
+        '<button class="btn btn-sm ' +
+          (term.sign > 0 ? 'btn-outline-success' : 'btn-outline-danger') +
+          ' eve2d-heat-sign" type="button" data-heat-sign="' + kind + ':' + index + '">' +
+          (term.sign > 0 ? '+' : '−') + '</button>' +
+        image +
+        '<div class="eve2d-heat-term-name" title="' +
+          escapeHtml(term.label || term.name || '') + '">' +
+          escapeHtml(term.label || term.name || '') + '</div>' +
+        '<select class="form-select form-select-sm eve2d-heat-role" data-heat-role="' +
+          kind + ':' + index + '">' +
+          '<option value="both"' + (term.role === 'both' ? ' selected' : '') + '>Either</option>' +
+          '<option value="attacker"' + (term.role === 'attacker' ? ' selected' : '') + '>Attacker</option>' +
+          '<option value="victim"' + (term.role === 'victim' ? ' selected' : '') + '>Victim</option>' +
+        '</select>' +
+        '<button class="eve2d-heat-remove" type="button" data-heat-remove="' +
+          kind + ':' + index + '">×</button>' +
+      '</div>';
+    }).join('');
+  }
+
+  function renderAllHeatTerms() {
+    renderHeatTerms("entity");
+    renderHeatTerms("ship");
+  }
+
+  function addHeatTerm(kind, item) {
+    const entityType = kind === "ship" ? "ship" : String(item.entity_type || "");
+    const entityId = Number(item.entity_id);
+    if (!Number.isFinite(entityId) || !entityType) return;
+
+    const exists = heatFilters[kind].some(term =>
+      term.entity_type === entityType && Number(term.entity_id) === entityId
+    );
+    if (exists) return;
+
+    heatFilters[kind].push({
+      sign:1,
+      role:"both",
+      entity_type:entityType,
+      entity_id:entityId,
+      name:item.name || item.label || (entityType + " " + entityId),
+      label:item.label || item.name || (entityType + " " + entityId),
+      image_url:item.image_url || "",
+    });
+    renderHeatTerms(kind);
+  }
+
+  function drawHeatSearchResults(kind, box, results) {
+    box._items = Array.isArray(results) ? results : [];
+    if (!box._items.length) {
+      box.innerHTML = '<div class="eve2d-heat-empty px-2 py-2">No result.</div>';
+      box.classList.add("show");
+      return;
+    }
+
+    box.innerHTML = box._items.map((item, index) => {
+      const imageUrl = heatFilterImage(item);
+      const image = imageUrl
+        ? '<img src="' + escapeHtml(imageUrl) + '" alt="" loading="lazy">'
+        : '<span style="width:26px"></span>';
+      return '<div class="eve2d-heat-result" data-heat-result="' + index + '">' +
+        image +
+        '<div style="min-width:0">' +
+          '<div class="eve2d-heat-result-name">' +
+            escapeHtml(item.label || item.name || '') +
+          '</div>' +
+          '<div class="eve2d-heat-result-meta">' +
+            escapeHtml(item.subtitle || item.entity_type || '') +
+          '</div>' +
+        '</div>' +
+      '</div>';
+    }).join('');
+    box.classList.add("show");
+  }
+
+  const heatSearchTimers = {};
+  const heatSearchAborters = {};
+
+  document.querySelectorAll("[data-heat-search]").forEach(input => {
+    const kind = String(input.dataset.heatSearch || "");
+    const box = document.querySelector('[data-heat-results="' + kind + '"]');
+    if (!box) return;
+
+    input.addEventListener("input", () => {
+      clearTimeout(heatSearchTimers[kind]);
+      const query = input.value.trim();
+      if (query.length < 2) {
+        box.classList.remove("show");
+        box.innerHTML = "";
+        return;
+      }
+
+      heatSearchTimers[kind] = setTimeout(async () => {
+        if (heatSearchAborters[kind]) heatSearchAborters[kind].abort();
+        heatSearchAborters[kind] = new AbortController();
+        const searchKind = kind === "entity" ? "heat_entity" : "ship";
+
+        try {
+          const response = await fetch(
+            "/killboard/search?kind=" + encodeURIComponent(searchKind) +
+            "&q=" + encodeURIComponent(query) + "&limit=15",
+            {
+              credentials:"same-origin",
+              cache:"no-store",
+              signal:heatSearchAborters[kind].signal,
+            }
+          );
+          const payload = await response.json();
+          drawHeatSearchResults(kind, box, payload.results || []);
+        } catch (error) {
+          if (error && error.name === "AbortError") return;
+          drawHeatSearchResults(kind, box, []);
+        }
+      }, 220);
+    });
+
+    box.addEventListener("click", event => {
+      const row = event.target.closest("[data-heat-result]");
+      if (!row) return;
+      const item = (box._items || [])[Number(row.dataset.heatResult)];
+      if (!item) return;
+      addHeatTerm(kind, item);
+      input.value = "";
+      box.classList.remove("show");
+      box.innerHTML = "";
+    });
+  });
+
+  if (heatAdvancedToggle && heatAdvancedPanel) {
+    heatAdvancedToggle.addEventListener("click", () => {
+      heatAdvancedPanel.hidden = !heatAdvancedPanel.hidden;
+    });
+  }
+
+  if (heatAdvancedPanel) {
+    heatAdvancedPanel.addEventListener("click", event => {
+      const signButton = event.target.closest("[data-heat-sign]");
+      if (signButton) {
+        const parts = signButton.dataset.heatSign.split(":");
+        const item = heatFilters[parts[0]][Number(parts[1])];
+        if (item) item.sign = item.sign > 0 ? -1 : 1;
+        renderHeatTerms(parts[0]);
+        return;
+      }
+
+      const removeButton = event.target.closest("[data-heat-remove]");
+      if (removeButton) {
+        const parts = removeButton.dataset.heatRemove.split(":");
+        heatFilters[parts[0]].splice(Number(parts[1]), 1);
+        renderHeatTerms(parts[0]);
+      }
+    });
+
+    heatAdvancedPanel.addEventListener("change", event => {
+      const role = event.target.closest("[data-heat-role]");
+      if (!role) return;
+      const parts = role.dataset.heatRole.split(":");
+      const item = heatFilters[parts[0]][Number(parts[1])];
+      if (item) item.role = role.value || "both";
+    });
+  }
+
+  renderAllHeatTerms();
+
   function influenceCacheKey(dateValue) {
     return activeGrouping + "|" + String(dateValue || "latest");
   }
