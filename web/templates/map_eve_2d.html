@@ -162,6 +162,85 @@
     font-size:.68rem;
     color:#788aa1;
   }
+  .eve2d-ranking-panel {
+    position:absolute;
+    z-index:4;
+    top:14px;
+    right:14px;
+    width:min(340px, calc(100% - 28px));
+    max-height:calc(100% - 28px);
+    display:flex;
+    flex-direction:column;
+    border:1px solid rgba(111,137,173,.26);
+    border-radius:10px;
+    background:rgba(6,12,20,.92);
+    box-shadow:0 12px 34px rgba(0,0,0,.28);
+    backdrop-filter:blur(6px);
+    overflow:hidden;
+  }
+  .eve2d-ranking-panel[hidden] { display:none; }
+  .eve2d-ranking-head {
+    padding:11px 12px 9px;
+    border-bottom:1px solid rgba(111,137,173,.17);
+  }
+  .eve2d-ranking-title {
+    font-size:.76rem;
+    font-weight:800;
+    letter-spacing:.06em;
+    text-transform:uppercase;
+    color:#d7e3f3;
+  }
+  .eve2d-ranking-meta {
+    margin-top:3px;
+    color:#788aa1;
+    font-size:.68rem;
+  }
+  .eve2d-ranking-list {
+    overflow:auto;
+    padding:5px 0;
+  }
+  .eve2d-ranking-row {
+    display:grid;
+    grid-template-columns:30px 12px minmax(0,1fr) auto;
+    gap:7px;
+    align-items:center;
+    padding:6px 10px;
+    border-bottom:1px solid rgba(111,137,173,.08);
+  }
+  .eve2d-ranking-row:last-child { border-bottom:0; }
+  .eve2d-ranking-rank {
+    color:#6f829d;
+    font-size:.69rem;
+    text-align:right;
+    font-variant-numeric:tabular-nums;
+  }
+  .eve2d-ranking-color {
+    width:10px;
+    height:10px;
+    border-radius:50%;
+    border:1px solid rgba(255,255,255,.45);
+    box-shadow:0 0 7px rgba(255,255,255,.08);
+  }
+  .eve2d-ranking-name {
+    min-width:0;
+    overflow:hidden;
+    text-overflow:ellipsis;
+    white-space:nowrap;
+    color:#d7e3f3;
+    font-size:.72rem;
+  }
+  .eve2d-ranking-stats {
+    color:#9fb1c8;
+    font-size:.68rem;
+    text-align:right;
+    white-space:nowrap;
+    font-variant-numeric:tabular-nums;
+  }
+  .eve2d-ranking-empty {
+    padding:12px;
+    color:#788aa1;
+    font-size:.72rem;
+  }
   @media (max-width:800px) {
     .eve2d-head { grid-template-columns:1fr; align-items:start; }
     .eve2d-toolbar { justify-content:flex-start; flex-wrap:wrap; }
@@ -211,6 +290,13 @@
         <div class="eve2d-influence-status" id="eve2dInfluenceStatus"></div>
       </div>
     </div>
+    <div class="eve2d-ranking-panel" id="eve2dRankingPanel" hidden>
+      <div class="eve2d-ranking-head">
+        <div class="eve2d-ranking-title">SOV Ranking</div>
+        <div class="eve2d-ranking-meta" id="eve2dRankingMeta"></div>
+      </div>
+      <div class="eve2d-ranking-list" id="eve2dRankingList"></div>
+    </div>
     <canvas id="eve2dCanvas" aria-label="New Eden 2D system and stargate map"></canvas>
     <div class="eve2d-tooltip" id="eve2dTooltip"></div>
     <div class="eve2d-help">Drag to pan · wheel to zoom · hover a system · click a system to open</div>
@@ -227,6 +313,9 @@
   const influenceControls = document.getElementById("eve2dInfluenceControls");
   const influenceDate = document.getElementById("eve2dInfluenceDate");
   const influenceStatus = document.getElementById("eve2dInfluenceStatus");
+  const rankingPanel = document.getElementById("eve2dRankingPanel");
+  const rankingMeta = document.getElementById("eve2dRankingMeta");
+  const rankingList = document.getElementById("eve2dRankingList");
   const modeButtons = Array.from(document.querySelectorAll("[data-eve2d-mode]"));
   const groupingButtons = Array.from(document.querySelectorAll("[data-influence-group]"));
   if (!dataEl || !shell || !canvas) return;
@@ -733,6 +822,64 @@
     }[ch]));
   }
 
+  function renderInfluenceRanking(payload) {
+    if (!rankingPanel || !rankingMeta || !rankingList) return;
+
+    const groups = Array.isArray(payload.groups) ? payload.groups.slice() : [];
+    groups.sort((a, b) => {
+      const aCount = Array.isArray(a.system_ids) ? a.system_ids.length : 0;
+      const bCount = Array.isArray(b.system_ids) ? b.system_ids.length : 0;
+      return bCount - aCount || String(a.name || "").localeCompare(String(b.name || ""));
+    });
+
+    const totalSystems = groups.reduce(
+      (sum, group) => sum + (Array.isArray(group.system_ids) ? group.system_ids.length : 0),
+      0
+    );
+    const groupingLabel = payload.grouping === "alliance" ? "Alliance" : "Coalition";
+    rankingMeta.textContent =
+      groupingLabel + " · " + (payload.date || "") +
+      " · " + groups.length + " groups · " + totalSystems + " systems";
+
+    rankingList.replaceChildren();
+
+    if (!groups.length || !totalSystems) {
+      const empty = document.createElement("div");
+      empty.className = "eve2d-ranking-empty";
+      empty.textContent = "No sovereignty for this date";
+      rankingList.appendChild(empty);
+      return;
+    }
+
+    groups.forEach((group, index) => {
+      const count = Array.isArray(group.system_ids) ? group.system_ids.length : 0;
+      const percent = totalSystems ? (count * 100 / totalSystems) : 0;
+
+      const row = document.createElement("div");
+      row.className = "eve2d-ranking-row";
+
+      const rank = document.createElement("div");
+      rank.className = "eve2d-ranking-rank";
+      rank.textContent = "#" + (index + 1);
+
+      const color = document.createElement("div");
+      color.className = "eve2d-ranking-color";
+      color.style.background = group.color || "transparent";
+
+      const name = document.createElement("div");
+      name.className = "eve2d-ranking-name";
+      name.textContent = group.name || "";
+      name.title = group.name || "";
+
+      const stats = document.createElement("div");
+      stats.className = "eve2d-ranking-stats";
+      stats.textContent = count + " · " + percent.toFixed(1) + "%";
+
+      row.append(rank, color, name, stats);
+      rankingList.appendChild(row);
+    });
+  }
+
   function applyInfluence(payload) {
     influenceGroups = Array.isArray(payload.groups) ? payload.groups : [];
     influenceBySystem = new Map();
@@ -748,6 +895,7 @@
       influenceDate.max = payload.max_date || "";
     }
     buildInfluenceSurface();
+    renderInfluenceRanking(payload);
     if (influenceStatus) {
       const label = payload.grouping === "alliance" ? "alliance groups" : "coalition groups";
       influenceStatus.textContent = influenceGroups.length
@@ -760,6 +908,9 @@
   async function loadInfluence(dateValue) {
     const token = ++influenceRequestToken;
     if (influenceStatus) influenceStatus.textContent = "Loading…";
+    if (rankingPanel) rankingPanel.hidden = false;
+    if (rankingMeta) rankingMeta.textContent = "Loading…";
+    if (rankingList) rankingList.replaceChildren();
     const params = new URLSearchParams();
     if (dateValue) params.set("date", dateValue);
     params.set("group", activeGrouping);
@@ -781,6 +932,14 @@
       influenceBySystem = new Map();
       influenceSurface = null;
       if (influenceStatus) influenceStatus.textContent = String(error.message || error);
+      if (rankingMeta) rankingMeta.textContent = "Unavailable";
+      if (rankingList) {
+        rankingList.replaceChildren();
+        const empty = document.createElement("div");
+        empty.className = "eve2d-ranking-empty";
+        empty.textContent = String(error.message || error);
+        rankingList.appendChild(empty);
+      }
       draw();
     }
   }
@@ -791,6 +950,7 @@
       button.classList.toggle("active", button.dataset.eve2dMode === activeMode);
     });
     if (influenceControls) influenceControls.hidden = activeMode !== "influence";
+    if (rankingPanel) rankingPanel.hidden = activeMode !== "influence";
 
     if (activeMode === "influence") {
       loadInfluence(influenceDate && influenceDate.value ? influenceDate.value : null);
