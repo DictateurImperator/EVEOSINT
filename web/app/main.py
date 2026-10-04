@@ -18,6 +18,7 @@ from .routes_admin_debug import router as admin_debug_router
 from .routes_admin_update_pipeline import router as admin_update_pipeline_router
 from .routes_admin_mer import router as admin_mer_router
 from .routes_admin_system import router as admin_system_router
+from .routes_admin_sov_colors import router as admin_sov_colors_router
 from .routes_admin_users import router as admin_users_router
 from .routes_entities import router as entities_router
 from .routes_home import router as home_router
@@ -238,6 +239,7 @@ app.include_router(update_status_router)
 app.include_router(admin_users_router)
 app.include_router(admin_coalitions_router)
 app.include_router(admin_system_router)
+app.include_router(admin_sov_colors_router)
 app.include_router(admin_jobs_router)
 app.include_router(admin_debug_router)
 app.include_router(admin_update_pipeline_router)

@@ -142,6 +142,23 @@ CREATE TABLE IF NOT EXISTS rawkm.killmail_import_days (
 
 CREATE SCHEMA IF NOT EXISTS sovereignty;
 
+CREATE TABLE IF NOT EXISTS sovereignty.reconciled_map (
+    day DATE NOT NULL,
+    system_id BIGINT NOT NULL,
+    alliance_id BIGINT,
+    corporation_id BIGINT,
+    faction_id BIGINT,
+    source TEXT NOT NULL CHECK (source IN ('dotlan', 'esi')),
+    observed_at TIMESTAMPTZ NOT NULL,
+    PRIMARY KEY (day, system_id)
+);
+
+CREATE INDEX IF NOT EXISTS sov_reconciled_map_system_day_idx
+ON sovereignty.reconciled_map (system_id, day DESC);
+
+CREATE INDEX IF NOT EXISTS sov_reconciled_map_day_idx
+ON sovereignty.reconciled_map (day);
+
 CREATE TABLE IF NOT EXISTS sovereignty.influence_color_assignments (
     assignment_id BIGSERIAL PRIMARY KEY,
     entity_type TEXT NOT NULL CHECK (entity_type IN ('alliance', 'coalition')),
@@ -166,5 +183,14 @@ ON sovereignty.influence_color_assignments (entity_type, entity_id, valid_from, 
 CREATE TABLE IF NOT EXISTS sovereignty.influence_color_state (
     entity_type TEXT PRIMARY KEY CHECK (entity_type IN ('alliance', 'coalition')),
     initialized_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS sovereignty.influence_color_overrides (
+    entity_type TEXT NOT NULL CHECK (entity_type IN ('alliance', 'coalition')),
+    entity_id BIGINT NOT NULL,
+    color TEXT NOT NULL,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_by BIGINT,
+    PRIMARY KEY (entity_type, entity_id)
 );
 

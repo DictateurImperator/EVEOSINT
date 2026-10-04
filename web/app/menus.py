@@ -200,6 +200,23 @@ def build_context_menu(user, active_module, active_menu_key):
                     break
             items.insert(insert_at, debug_item)
 
+    if active_module == "admin" and "admin" in user.get("roles", []):
+        if not any(item.get("menu_key") == "admin.sov_colors" for item in items):
+            sov_colors_item = {
+                "id": None,
+                "menu_key": "admin.sov_colors",
+                "label": "SOV Colors",
+                "href": "/admin/sov-colors",
+                "icon": "◐",
+                "permission_key": None,
+            }
+            insert_at = len(items)
+            for index, item in enumerate(items):
+                if item.get("menu_key") == "admin.mer":
+                    insert_at = index + 1
+                    break
+            items.insert(insert_at, sov_colors_item)
+
     for item in items:
         item["active"] = (
             item["menu_key"] == active_menu_key

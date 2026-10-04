@@ -546,6 +546,8 @@
   let cinematicPlaying = false;
   let cinematicRunToken = 0;
   let cinematicCurrentDate = null;
+  let cinematicSeries = [];
+  let cinematicSeriesKey = "";
   let currentInfluencePayload = null;
   let changeOverlay = new Map();
   const influenceCache = new Map();
@@ -1426,7 +1428,16 @@
   function stopEvolution() {
     cinematicPlaying = false;
     ++cinematicRunToken;
-    if (playButton) playButton.textContent = "Play";
+    if (playButton) {
+      playButton.disabled = false;
+      playButton.textContent = "Play";
+    }
+  }
+
+  function invalidateCinematicSeries() {
+    cinematicSeries = [];
+    cinematicSeriesKey = "";
+    cinematicCurrentDate = null;
   }
 
   function buildChangeOverlay(fromPayload, toPayload) {
@@ -1497,14 +1508,64 @@
     }
   }
 
-  async function showEvolutionFrame(dateValue, runToken) {
-    const payload = await fetchInfluencePayload(dateValue);
+  async function showEvolutionPayload(payload, runToken) {
     if (runToken !== cinematicRunToken) return false;
     changeOverlay = new Map();
-    cinematicCurrentDate = dateValue;
+    cinematicCurrentDate = payload.date || null;
     applyInfluence(payload, false);
-    if (influenceStatus) influenceStatus.textContent = "Evolution · " + dateValue;
+    if (influenceStatus) {
+      influenceStatus.textContent = "Evolution · " + (payload.date || "");
+    }
     return true;
+  }
+
+  async function prepareEvolutionSeries(fromValue, toValue) {
+    const key = activeGrouping + "|" + fromValue + "|" + toValue;
+    if (cinematicSeriesKey === key && cinematicSeries.length) {
+      return cinematicSeries;
+    }
+
+    const fromDate = isoDate(fromValue);
+    const toDate = isoDate(toValue);
+    if (!fromDate || !toDate || fromDate > toDate) {
+      throw new Error("Invalid cinematic date range");
+    }
+
+    const dates = [];
+    for (
+      let cursor = fromDate;
+      cursor <= toDate;
+      cursor = addDays(cursor, 1)
+    ) {
+      dates.push(formatIsoDate(cursor));
+    }
+
+    const prepared = new Array(dates.length);
+    const batchSize = 4;
+    for (
+      let startIndex = 0;
+      startIndex < dates.length;
+      startIndex += batchSize
+    ) {
+      const batch = dates.slice(startIndex, startIndex + batchSize);
+      const payloads = await Promise.all(
+        batch.map(dateValue => fetchInfluencePayload(dateValue))
+      );
+      payloads.forEach((payload, offset) => {
+        prepared[startIndex + offset] = payload;
+      });
+
+      if (influenceStatus) {
+        influenceStatus.textContent =
+          "Preparing evolution · " +
+          Math.min(startIndex + batch.length, dates.length) +
+          " / " + dates.length + " days";
+      }
+    }
+
+    cinematicSeries = prepared;
+    cinematicSeriesKey = key;
+    return cinematicSeries;
   }
 
   async function startEvolution() {
@@ -1513,7 +1574,9 @@
     const fromDate = isoDate(fromValue);
     const toDate = isoDate(toValue);
     if (!fromDate || !toDate || fromDate > toDate) {
-      if (influenceStatus) influenceStatus.textContent = "Invalid cinematic date range";
+      if (influenceStatus) {
+        influenceStatus.textContent = "Invalid cinematic date range";
+      }
       return;
     }
 
@@ -1522,20 +1585,57 @@
       return;
     }
 
+    const prepareToken = ++cinematicRunToken;
+    if (playButton) {
+      playButton.disabled = true;
+      playButton.textContent = "Preparing…";
+    }
+
+    let series;
+    try {
+      series = await prepareEvolutionSeries(fromValue, toValue);
+    } catch (error) {
+      if (prepareToken !== cinematicRunToken) return;
+      if (influenceStatus) {
+        influenceStatus.textContent = String(error.message || error);
+      }
+      if (playButton) {
+        playButton.disabled = false;
+        playButton.textContent = "Play";
+      }
+      return;
+    }
+
+    if (prepareToken !== cinematicRunToken) return;
+
     cinematicPlaying = true;
-    const runToken = ++cinematicRunToken;
-    if (playButton) playButton.textContent = "Pause";
+    const runToken = prepareToken;
+    if (playButton) {
+      playButton.disabled = false;
+      playButton.textContent = "Pause";
+    }
 
-    let cursor = cinematicCurrentDate ? isoDate(cinematicCurrentDate) : fromDate;
-    if (!cursor || cursor < fromDate || cursor > toDate) cursor = fromDate;
+    let startIndex = 0;
+    if (cinematicCurrentDate) {
+      const currentIndex = series.findIndex(
+        payload => payload && payload.date === cinematicCurrentDate
+      );
+      if (currentIndex >= 0 && currentIndex < series.length - 1) {
+        startIndex = currentIndex;
+      }
+    }
 
-    while (cinematicPlaying && runToken === cinematicRunToken && cursor <= toDate) {
-      const shown = await showEvolutionFrame(formatIsoDate(cursor), runToken);
+    for (let index = startIndex; index < series.length; index++) {
+      if (!cinematicPlaying || runToken !== cinematicRunToken) return;
+
+      const shown = await showEvolutionPayload(series[index], runToken);
       if (!shown) return;
 
-      const fps = Math.max(1, Math.min(30, Number(fpsInput && fpsInput.value) || 4));
+      const fps = Math.max(
+        1,
+        Math.min(30, Number(fpsInput && fpsInput.value) || 4)
+      );
       await new Promise(resolve => setTimeout(resolve, 1000 / fps));
-      cursor = addDays(cursor, 1);
     }
 
     if (runToken === cinematicRunToken) {
@@ -1555,7 +1655,8 @@
     const fromValue = dateFrom && dateFrom.value;
     if (fromValue) {
       const runToken = ++cinematicRunToken;
-      await showEvolutionFrame(fromValue, runToken);
+      const payload = await fetchInfluencePayload(fromValue);
+      await showEvolutionPayload(payload, runToken);
     }
   }
 
@@ -1719,6 +1820,7 @@
         item.classList.toggle("active", item.dataset.influenceGroup === activeGrouping);
       });
       stopEvolution();
+      invalidateCinematicSeries();
       changeOverlay = new Map();
       if (activeMode === "influence") {
         if (cinematicEnabled) refreshCinematic();
@@ -1747,6 +1849,7 @@
       if (singleDateControls) singleDateControls.hidden = cinematicEnabled;
       if (cinematicControls) cinematicControls.hidden = !cinematicEnabled;
       stopEvolution();
+      invalidateCinematicSeries();
       changeOverlay = new Map();
 
       if (cinematicEnabled && currentInfluencePayload) {
@@ -1767,6 +1870,7 @@
         item.classList.toggle("active", item.dataset.cinematicKind === cinematicKind);
       });
       if (evolutionControls) evolutionControls.hidden = cinematicKind !== "evolution";
+      invalidateCinematicSeries();
       refreshCinematic();
     });
   });
@@ -1780,7 +1884,7 @@
   [dateFrom, dateTo].forEach(input => {
     if (!input) return;
     input.addEventListener("change", () => {
-      cinematicCurrentDate = null;
+      invalidateCinematicSeries();
       refreshCinematic();
     });
   });

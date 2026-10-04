@@ -642,6 +642,17 @@ def _ensure_influence_color_tables(cur):
             initialized_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
         )
     """)
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS sovereignty.influence_color_overrides (
+            entity_type TEXT NOT NULL
+                CHECK (entity_type IN ('alliance', 'coalition')),
+            entity_id BIGINT NOT NULL,
+            color TEXT NOT NULL,
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            updated_by BIGINT,
+            PRIMARY KEY (entity_type, entity_id)
+        )
+    """)
 
 
 def _influence_color_candidates():
@@ -919,9 +930,23 @@ def _apply_persistent_influence_colors(
                     }
                     used_colors.append((hue, saturation, lightness))
 
+            cur.execute("""
+                SELECT entity_id, color
+                FROM sovereignty.influence_color_overrides
+                WHERE entity_type = %s
+                  AND entity_id = ANY(%s)
+            """, (entity_type, entity_ids))
+            overrides = {
+                int(entity_id): color
+                for entity_id, color in cur.fetchall()
+            }
+
         conn.commit()
 
     for entity_id, group in entity_groups.items():
+        if entity_id in overrides:
+            group["color"] = overrides[entity_id]
+            continue
         row = assignments.get(entity_id)
         if row:
             group["color"] = row["color"]
@@ -936,21 +961,19 @@ def get_eve_2d_influence(target_date=None, grouping="coalition"):
     with db() as conn:
         with conn.cursor() as cur:
             cur.execute("""
-                SELECT
-                    to_regclass('sovereignty.current_map'),
-                    to_regclass('sovereignty.map_changes')
+                SELECT to_regclass('sovereignty.reconciled_map')
             """)
-            current_table, changes_table = cur.fetchone()
-            if current_table is None or changes_table is None:
+            reconciled_table = cur.fetchone()[0]
+            if reconciled_table is None:
                 raise MapDataError("sovereignty_history_unavailable")
 
-            cur.execute("SELECT MAX((observed_at AT TIME ZONE 'UTC')::date) FROM sovereignty.current_map")
-            latest_date = cur.fetchone()[0]
+            cur.execute("""
+                SELECT MIN(day), MAX(day)
+                FROM sovereignty.reconciled_map
+            """)
+            earliest_date, latest_date = cur.fetchone()
             if latest_date is None:
                 raise MapDataError("sovereignty_history_unavailable")
-
-            cur.execute("SELECT MIN((source_observed_at AT TIME ZONE 'UTC')::date) FROM sovereignty.map_changes")
-            earliest_change_date = cur.fetchone()[0]
 
             if target_date is None:
                 selected_date = latest_date
@@ -964,13 +987,19 @@ def get_eve_2d_influence(target_date=None, grouping="coalition"):
 
             if selected_date > latest_date:
                 selected_date = latest_date
-            if earliest_change_date is not None and selected_date < earliest_change_date:
+            if earliest_date is not None and selected_date < earliest_date:
                 raise MapDataError("influence_date_before_history")
 
             cur.execute("""
-                SELECT system_id, alliance_id, corporation_id, faction_id
-                FROM sovereignty.current_map
-            """)
+                SELECT DISTINCT ON (system_id)
+                    system_id,
+                    alliance_id,
+                    corporation_id,
+                    faction_id
+                FROM sovereignty.reconciled_map
+                WHERE day <= %s
+                ORDER BY system_id, day DESC
+            """, (selected_date,))
             owners = {
                 int(system_id): (
                     int(alliance_id) if alliance_id is not None else None,
@@ -979,41 +1008,6 @@ def get_eve_2d_influence(target_date=None, grouping="coalition"):
                 )
                 for system_id, alliance_id, corporation_id, faction_id in cur.fetchall()
             }
-
-            cur.execute("""
-                SELECT
-                    system_id,
-                    change_type,
-                    old_alliance_id,
-                    old_corporation_id,
-                    old_faction_id,
-                    new_alliance_id,
-                    new_corporation_id,
-                    new_faction_id
-                FROM sovereignty.map_changes
-                WHERE (source_observed_at AT TIME ZONE 'UTC')::date > %s
-                ORDER BY source_observed_at DESC, change_id DESC
-            """, (selected_date,))
-
-            for (
-                system_id,
-                change_type,
-                old_alliance_id,
-                old_corporation_id,
-                old_faction_id,
-                _new_alliance_id,
-                _new_corporation_id,
-                _new_faction_id,
-            ) in cur.fetchall():
-                system_id = int(system_id)
-                if change_type == "GAIN":
-                    owners[system_id] = (None, None, None)
-                elif change_type == "LOST":
-                    owners[system_id] = (
-                        int(old_alliance_id) if old_alliance_id is not None else None,
-                        int(old_corporation_id) if old_corporation_id is not None else None,
-                        int(old_faction_id) if old_faction_id is not None else None,
-                    )
 
             alliance_ids = sorted({
                 owner[0]
@@ -1199,7 +1193,7 @@ def get_eve_2d_influence(target_date=None, grouping="coalition"):
     return {
         "date": selected_date.isoformat(),
         "grouping": grouping,
-        "min_date": earliest_change_date.isoformat() if earliest_change_date else selected_date.isoformat(),
+        "min_date": earliest_date.isoformat() if earliest_date else selected_date.isoformat(),
         "max_date": latest_date.isoformat(),
         "groups": result_groups,
     }

@@ -1,9 +1,9 @@
 [Unit]
-Description=EVEOSINT - refresh sovereignty when ESI cache can have expired
+Description=EVEOSINT - daily sovereignty ESI snapshot
 
 [Timer]
-OnBootSec=5min
-OnUnitInactiveSec=75min
+OnCalendar=daily
+Persistent=true
 RandomizedDelaySec=2min
 AccuracySec=1min
 Unit=eveosint-sovereignty-esi.service
