@@ -752,6 +752,51 @@ def _load_influence_assignments(cur, entity_type, entity_ids, selected_date):
     }
 
 
+def _load_nearest_influence_assignments(
+    cur,
+    entity_type,
+    entity_ids,
+    selected_date,
+):
+    if not entity_ids:
+        return {}
+
+    cur.execute("""
+        SELECT DISTINCT ON (entity_id)
+            entity_id,
+            color,
+            color_hue,
+            color_saturation,
+            color_lightness
+        FROM sovereignty.influence_color_assignments
+        WHERE entity_type = %s
+          AND entity_id = ANY(%s)
+        ORDER BY
+            entity_id,
+            CASE WHEN valid_from > %s THEN 0 ELSE 1 END,
+            CASE WHEN valid_from > %s THEN valid_from END ASC NULLS LAST,
+            valid_from DESC,
+            assignment_id DESC
+    """, (
+        entity_type,
+        entity_ids,
+        selected_date,
+        selected_date,
+    ))
+
+    return {
+        int(entity_id): {
+            "color": color,
+            "components": (
+                float(hue),
+                float(saturation),
+                float(lightness),
+            ),
+        }
+        for entity_id, color, hue, saturation, lightness in cur.fetchall()
+    }
+
+
 def _apply_persistent_influence_colors(
     groups,
     entity_type,
@@ -910,25 +955,36 @@ def _apply_persistent_influence_colors(
                     selected_date,
                 )
 
-                # Dates older than the colour table itself have no factual
-                # assignment to recover. Keep those historical views usable
-                # without inventing persisted history.
-                used_colors = [
-                    row["components"]
-                    for row in assignments.values()
+                # Historical dates must never recolour an entity according
+                # to whichever other groups happen to exist on that date.
+                # Reuse the nearest persisted assignment when one exists.
+                missing_ids = [
+                    entity_id
+                    for entity_id in entity_ids
+                    if entity_id not in assignments
                 ]
+                nearest = _load_nearest_influence_assignments(
+                    cur,
+                    entity_type,
+                    missing_ids,
+                    selected_date,
+                )
+                assignments.update(nearest)
+
+                # Entities that have never had a persisted assignment still
+                # need a stable historical colour. Pick it from entity_id only,
+                # never from the date-specific set of neighbouring colours.
                 for entity_id in entity_ids:
                     if entity_id in assignments:
                         continue
                     color, hue, saturation, lightness = _pick_influence_color(
-                        used_colors,
+                        [],
                         entity_id,
                     )
                     assignments[entity_id] = {
                         "color": color,
                         "components": (hue, saturation, lightness),
                     }
-                    used_colors.append((hue, saturation, lightness))
 
             cur.execute("""
                 SELECT entity_id, color
