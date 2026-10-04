@@ -76,25 +76,6 @@ def _topology():
         stargate_rows = _load_table(conn, "sde_mapstargates")
         faction_rows = _load_table(conn, "sde_factions")
 
-        wormhole_systems_with_moons = set()
-        wormhole_moon_data_available = False
-        with conn.cursor() as cur:
-            cur.execute("SELECT to_regclass('public.sde_mapmoons')")
-            if cur.fetchone()[0] is not None:
-                wormhole_moon_data_available = True
-                cur.execute("""
-                    SELECT DISTINCT NULLIF(data->>'solarSystemID', '')::bigint
-                    FROM public.sde_mapmoons
-                    WHERE NULLIF(data->>'solarSystemID', '') ~ '^[0-9]+$'
-                      AND NULLIF(data->>'solarSystemID', '')::bigint
-                          BETWEEN 31000000 AND 31999999
-                """)
-                wormhole_systems_with_moons = {
-                    int(row[0])
-                    for row in cur.fetchall()
-                    if row[0] is not None
-                }
-
     regions = {}
     for sde_key, data in region_rows:
         data = data or {}
@@ -216,8 +197,6 @@ def _topology():
         "region_system_ids": region_system_ids,
         "constellation_system_ids": constellation_system_ids,
         "system_neighbors": system_neighbors,
-        "wormhole_systems_with_moons": wormhole_systems_with_moons,
-        "wormhole_moon_data_available": wormhole_moon_data_available,
     }
 
 
@@ -407,16 +386,9 @@ def _effective_wormhole_class_id(topology, system):
 
 
 def _is_shattered_wormhole(topology, system_id, class_id):
-    if class_id == 13:
-        return True
-
-    if class_id not in {1, 2, 3, 4, 5, 6}:
-        return False
-
-    if topology.get("wormhole_moon_data_available"):
-        return int(system_id) not in topology["wormhole_systems_with_moons"]
-
-    return 31_002_505 <= int(system_id) <= 31_002_604
+    # Rhea's 75 standard shattered systems are immediately followed by the
+    # 25 C13 small-ship shattered systems in this canonical SDE ID range.
+    return class_id == 13 or 31_002_505 <= int(system_id) <= 31_002_604
 
 
 def _anoikis_layout(topology):
