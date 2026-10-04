@@ -1,6 +1,6 @@
 import colorsys
 import math
-from datetime import date
+from datetime import date, datetime, timedelta, timezone
 from functools import lru_cache
 
 from .db import db
@@ -1270,6 +1270,547 @@ def get_eve_2d_influence(target_date=None, grouping="coalition"):
         "min_date": earliest_date.isoformat() if earliest_date else selected_date.isoformat(),
         "max_date": latest_date.isoformat(),
         "groups": result_groups,
+    }
+
+
+
+FIGHT_HEAT_DT_HOUR_UTC = 11
+FIGHT_HEAT_SOURCES = {"api", "total", "hidden"}
+FIGHT_HEAT_METRICS = {"kills", "isk"}
+
+
+def _fight_heat_parse_datetime(value):
+    if value is None or value == "":
+        return None
+    try:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise MapDataError("fight_heat_datetime_invalid") from exc
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _fight_heat_default_range():
+    now = datetime.now(timezone.utc)
+    latest_dt = now.replace(
+        hour=FIGHT_HEAT_DT_HOUR_UTC,
+        minute=0,
+        second=0,
+        microsecond=0,
+    )
+    if now < latest_dt:
+        latest_dt -= timedelta(days=1)
+    return latest_dt - timedelta(hours=24), latest_dt
+
+
+def _fight_heat_normalize_role(value):
+    role = str(value or "both").strip().lower()
+    return role if role in {"both", "attacker", "victim"} else "both"
+
+
+def _fight_heat_ship_terms(values):
+    terms = []
+    for raw in values or []:
+        parts = str(raw or "").split(":", 1)
+        if len(parts) != 2:
+            continue
+        try:
+            type_id = int(parts[1])
+        except (TypeError, ValueError):
+            continue
+        if type_id <= 0:
+            continue
+        terms.append({
+            "role": _fight_heat_normalize_role(parts[0]),
+            "type_id": type_id,
+        })
+    return terms
+
+
+def _fight_heat_entity_terms(values):
+    terms = []
+    for raw in values or []:
+        parts = str(raw or "").split(":", 2)
+        if len(parts) != 3:
+            continue
+        entity_type = str(parts[1] or "").strip().lower()
+        if entity_type not in {"alliance", "coalition"}:
+            continue
+        try:
+            entity_id = int(parts[2])
+        except (TypeError, ValueError):
+            continue
+        if entity_id <= 0:
+            continue
+        terms.append({
+            "role": _fight_heat_normalize_role(parts[0]),
+            "entity_type": entity_type,
+            "entity_id": entity_id,
+        })
+    return terms
+
+
+def _fight_heat_load_coalition_rules(cur):
+    cur.execute("""
+        SELECT
+            coalition_id,
+            operation,
+            member_type,
+            member_id,
+            valid_from,
+            valid_to
+        FROM entities.coalition_memberships
+        WHERE member_type IN ('coalition', 'alliance', 'corporation')
+        ORDER BY id
+    """)
+    rules = {}
+    for coalition_id, operation, member_type, member_id, valid_from, valid_to in cur.fetchall():
+        rules.setdefault(int(coalition_id), []).append({
+            "operation": str(operation),
+            "member_type": str(member_type),
+            "member_id": int(member_id),
+            "valid_from": valid_from,
+            "valid_to": valid_to,
+        })
+    return rules
+
+
+def _fight_heat_resolve_coalition(rules, coalition_id, day, cache, stack=frozenset()):
+    coalition_id = int(coalition_id)
+    key = (coalition_id, day)
+    if key in cache:
+        return cache[key]
+    if coalition_id in stack:
+        return frozenset()
+
+    includes = set()
+    excludes = set()
+    next_stack = stack | {coalition_id}
+
+    for rule in rules.get(coalition_id, []):
+        if rule["valid_from"] is not None and rule["valid_from"] > day:
+            continue
+        if rule["valid_to"] is not None and rule["valid_to"] < day:
+            continue
+
+        member_type = rule["member_type"]
+        member_id = rule["member_id"]
+        if member_type == "coalition":
+            target = set(_fight_heat_resolve_coalition(
+                rules,
+                member_id,
+                day,
+                cache,
+                next_stack,
+            ))
+        else:
+            target = {(member_type, member_id)}
+
+        if rule["operation"] == "exclude":
+            excludes.update(target)
+        else:
+            includes.update(target)
+
+    resolved = frozenset(includes - excludes)
+    cache[key] = resolved
+    return resolved
+
+
+def _fight_heat_coalition_segments(rules, coalition_id, from_dt, to_dt):
+    boundaries = {from_dt, to_dt}
+    for rule_list in rules.values():
+        for rule in rule_list:
+            if rule["valid_from"] is not None:
+                boundary = datetime.combine(
+                    rule["valid_from"],
+                    datetime.min.time(),
+                    tzinfo=timezone.utc,
+                )
+                if from_dt < boundary < to_dt:
+                    boundaries.add(boundary)
+            if rule["valid_to"] is not None:
+                boundary = datetime.combine(
+                    rule["valid_to"] + timedelta(days=1),
+                    datetime.min.time(),
+                    tzinfo=timezone.utc,
+                )
+                if from_dt < boundary < to_dt:
+                    boundaries.add(boundary)
+
+    ordered = sorted(boundaries)
+    cache = {}
+    segments = []
+    for index in range(len(ordered) - 1):
+        start = ordered[index]
+        end = ordered[index + 1]
+        if start >= end:
+            continue
+        members = _fight_heat_resolve_coalition(
+            rules,
+            coalition_id,
+            start.date(),
+            cache,
+        )
+        alliance_ids = tuple(sorted(
+            entity_id for entity_type, entity_id in members
+            if entity_type == "alliance"
+        ))
+        corporation_ids = tuple(sorted(
+            entity_id for entity_type, entity_id in members
+            if entity_type == "corporation"
+        ))
+        if not alliance_ids and not corporation_ids:
+            continue
+
+        if (
+            segments
+            and segments[-1]["end"] == start
+            and segments[-1]["alliance_ids"] == alliance_ids
+            and segments[-1]["corporation_ids"] == corporation_ids
+        ):
+            segments[-1]["end"] = end
+            continue
+
+        segments.append({
+            "start": start,
+            "end": end,
+            "alliance_ids": alliance_ids,
+            "corporation_ids": corporation_ids,
+        })
+    return segments
+
+
+def _fight_heat_side_predicate(source, alias, role, entity_type, entity_ids):
+    ids = list(entity_ids)
+    if not ids:
+        return "FALSE", []
+
+    if source == "api":
+        if entity_type == "ship":
+            victim = f"{alias}.victim_ship_type_id = ANY(%s)"
+            attacker = (
+                "EXISTS (SELECT 1 FROM rawkm.killmail_attackers hfa "
+                f"WHERE hfa.killmail_id = {alias}.killmail_id "
+                f"AND hfa.killmail_time = {alias}.killmail_time "
+                "AND hfa.ship_type_id = ANY(%s))"
+            )
+        else:
+            victim = f"{alias}.victim_{entity_type}_id = ANY(%s)"
+            attacker = (
+                "EXISTS (SELECT 1 FROM rawkm.killmail_attackers hfa "
+                f"WHERE hfa.killmail_id = {alias}.killmail_id "
+                f"AND hfa.killmail_time = {alias}.killmail_time "
+                f"AND hfa.{entity_type}_id = ANY(%s))"
+            )
+    else:
+        if entity_type == "ship":
+            victim = f"{alias}.victim_ship_type_id = ANY(%s)"
+            attacker = f"{alias}.killer_ship_type_id = ANY(%s)"
+        else:
+            victim = f"{alias}.victim_{entity_type}_id = ANY(%s)"
+            attacker = f"{alias}.killer_{entity_type}_id = ANY(%s)"
+
+    if role == "victim":
+        return victim, [ids]
+    if role == "attacker":
+        return attacker, [ids]
+    return f"({victim} OR {attacker})", [ids, ids]
+
+
+def _fight_heat_coalition_side_predicate(
+    source,
+    alias,
+    time_column,
+    role,
+    segments,
+):
+    segment_parts = []
+    params = []
+
+    for segment in segments:
+        side_parts = []
+        side_params = []
+
+        for entity_type, ids in (
+            ("alliance", segment["alliance_ids"]),
+            ("corporation", segment["corporation_ids"]),
+        ):
+            if not ids:
+                continue
+            predicate, predicate_params = _fight_heat_side_predicate(
+                source,
+                alias,
+                role,
+                entity_type,
+                ids,
+            )
+            side_parts.append(predicate)
+            side_params.extend(predicate_params)
+
+        if not side_parts:
+            continue
+
+        segment_parts.append(
+            f"({alias}.{time_column} >= %s AND {alias}.{time_column} < %s "
+            f"AND ({' OR '.join(side_parts)}))"
+        )
+        params.extend([segment["start"], segment["end"]])
+        params.extend(side_params)
+
+    if not segment_parts:
+        return "FALSE", []
+    return "(" + " OR ".join(segment_parts) + ")", params
+
+
+def _fight_heat_term_predicate(
+    source,
+    alias,
+    time_column,
+    term,
+    coalition_rules,
+    from_dt,
+    to_dt,
+):
+    if "type_id" in term:
+        return _fight_heat_side_predicate(
+            source,
+            alias,
+            term["role"],
+            "ship",
+            [term["type_id"]],
+        )
+
+    if term["entity_type"] == "alliance":
+        return _fight_heat_side_predicate(
+            source,
+            alias,
+            term["role"],
+            "alliance",
+            [term["entity_id"]],
+        )
+
+    segments = _fight_heat_coalition_segments(
+        coalition_rules,
+        term["entity_id"],
+        from_dt,
+        to_dt,
+    )
+    return _fight_heat_coalition_side_predicate(
+        source,
+        alias,
+        time_column,
+        term["role"],
+        segments,
+    )
+
+
+def _fight_heat_append_builder_terms(
+    clauses,
+    params,
+    source,
+    alias,
+    time_column,
+    include_terms,
+    exclude_terms,
+    coalition_rules,
+    from_dt,
+    to_dt,
+):
+    if include_terms:
+        by_role = {"attacker": [], "victim": [], "both": []}
+        for term in include_terms:
+            by_role[term["role"]].append(term)
+
+        for role_terms in by_role.values():
+            if not role_terms:
+                continue
+            parts = []
+            role_params = []
+            for term in role_terms:
+                predicate, predicate_params = _fight_heat_term_predicate(
+                    source,
+                    alias,
+                    time_column,
+                    term,
+                    coalition_rules,
+                    from_dt,
+                    to_dt,
+                )
+                parts.append(predicate)
+                role_params.extend(predicate_params)
+            clauses.append("(" + " OR ".join(parts) + ")")
+            params.extend(role_params)
+
+    for term in exclude_terms:
+        predicate, predicate_params = _fight_heat_term_predicate(
+            source,
+            alias,
+            time_column,
+            term,
+            coalition_rules,
+            from_dt,
+            to_dt,
+        )
+        clauses.append(f"NOT ({predicate})")
+        params.extend(predicate_params)
+
+
+def get_eve_2d_fight_heat(
+    source="api",
+    metric="kills",
+    from_value=None,
+    to_value=None,
+    ship_include=None,
+    ship_exclude=None,
+    entity_include=None,
+    entity_exclude=None,
+):
+    source = str(source or "api").strip().lower()
+    metric = str(metric or "kills").strip().lower()
+
+    if source not in FIGHT_HEAT_SOURCES:
+        raise MapDataError("fight_heat_source_invalid")
+    if metric not in FIGHT_HEAT_METRICS:
+        raise MapDataError("fight_heat_metric_invalid")
+    if source == "api" and metric == "isk":
+        raise MapDataError("fight_heat_isk_unavailable")
+
+    from_dt = _fight_heat_parse_datetime(from_value)
+    to_dt = _fight_heat_parse_datetime(to_value)
+    default_from, default_to = _fight_heat_default_range()
+
+    if from_dt is None and to_dt is None:
+        from_dt, to_dt = default_from, default_to
+    elif from_dt is None:
+        from_dt = to_dt - timedelta(hours=24)
+    elif to_dt is None:
+        to_dt = from_dt + timedelta(hours=24)
+
+    if from_dt >= to_dt:
+        raise MapDataError("fight_heat_range_invalid")
+
+    normalized_ship_include = _fight_heat_ship_terms(ship_include)
+    normalized_ship_exclude = _fight_heat_ship_terms(ship_exclude)
+    normalized_entity_include = _fight_heat_entity_terms(entity_include)
+    normalized_entity_exclude = _fight_heat_entity_terms(entity_exclude)
+
+    coalition_needed = any(
+        term.get("entity_type") == "coalition"
+        for term in normalized_entity_include + normalized_entity_exclude
+    )
+
+    with db() as conn:
+        with conn.cursor() as cur:
+            if source == "api":
+                cur.execute("SELECT to_regclass('rawkm.killmails')")
+                if cur.fetchone()[0] is None:
+                    raise MapDataError("fight_heat_source_unavailable")
+                alias = "km"
+                time_column = "killmail_time"
+                clauses = [
+                    "km.killmail_time >= %s",
+                    "km.killmail_time < %s",
+                    "km.solar_system_id IS NOT NULL",
+                ]
+                params = [from_dt, to_dt]
+                table_sql = "rawkm.killmails km"
+            else:
+                cur.execute("SELECT to_regclass('mer.killmails')")
+                if cur.fetchone()[0] is None:
+                    raise MapDataError("fight_heat_source_unavailable")
+                alias = "m"
+                time_column = "kill_datetime"
+                clauses = [
+                    "m.kill_datetime >= %s",
+                    "m.kill_datetime < %s",
+                    "m.solar_system_id IS NOT NULL",
+                ]
+                params = [from_dt, to_dt]
+                table_sql = "mer.killmails m"
+                if source == "hidden":
+                    clauses.append("m.resolved_km IS NULL")
+
+            coalition_rules = (
+                _fight_heat_load_coalition_rules(cur)
+                if coalition_needed
+                else {}
+            )
+
+            _fight_heat_append_builder_terms(
+                clauses,
+                params,
+                source,
+                alias,
+                time_column,
+                normalized_ship_include,
+                normalized_ship_exclude,
+                coalition_rules,
+                from_dt,
+                to_dt,
+            )
+            _fight_heat_append_builder_terms(
+                clauses,
+                params,
+                source,
+                alias,
+                time_column,
+                normalized_entity_include,
+                normalized_entity_exclude,
+                coalition_rules,
+                from_dt,
+                to_dt,
+            )
+
+            if metric == "kills":
+                value_sql = "COUNT(*)::double precision"
+            else:
+                value_sql = (
+                    "SUM(COALESCE("
+                    "m.ccp_isk_destroyed, "
+                    "m.zkb_isk_destroyed, "
+                    "0"
+                    "))::double precision"
+                )
+
+            cur.execute(
+                f"""
+                SELECT
+                    {alias}.solar_system_id,
+                    {value_sql} AS heat_value
+                FROM {table_sql}
+                WHERE {' AND '.join(clauses)}
+                GROUP BY {alias}.solar_system_id
+                HAVING {value_sql} > 0
+                ORDER BY heat_value DESC, {alias}.solar_system_id
+                """,
+                params,
+            )
+            rows = cur.fetchall()
+
+    systems = [
+        {
+            "system_id": int(system_id),
+            "value": float(value or 0),
+        }
+        for system_id, value in rows
+        if system_id is not None
+    ]
+    max_value = max((row["value"] for row in systems), default=0.0)
+    total_value = sum(row["value"] for row in systems)
+
+    return {
+        "source": source,
+        "metric": metric,
+        "from": from_dt.isoformat(),
+        "to": to_dt.isoformat(),
+        "default_from": default_from.isoformat(),
+        "default_to": default_to.isoformat(),
+        "dt_hour_utc": FIGHT_HEAT_DT_HOUR_UTC,
+        "max_value": max_value,
+        "total_value": total_value,
+        "systems_count": len(systems),
+        "systems": systems,
     }
 
 
