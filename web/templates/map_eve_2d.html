@@ -1691,6 +1691,24 @@
   function setMode(mode) {
     activeMode = mode === "influence" ? "influence" : "systems";
     modeButtons.forEach(button => {
+      button.classList.toggle("active", button.dataset.eve2dMode === activeMode);
+    });
+    if (influenceControls) influenceControls.hidden = activeMode !== "influence";
+    if (rankingPanel) rankingPanel.hidden = activeMode !== "influence";
+
+    stopEvolution();
+    changeOverlay = new Map();
+
+    if (activeMode === "influence") {
+      if (cinematicEnabled) refreshCinematic();
+      else loadInfluence(influenceDate && influenceDate.value ? influenceDate.value : null);
+    } else {
+      ++influenceRequestToken;
+      renderCurrentView();
+    }
+  }
+
+  modeButtons.forEach(button => {
     button.addEventListener("click", () => setMode(button.dataset.eve2dMode));
   });
 
