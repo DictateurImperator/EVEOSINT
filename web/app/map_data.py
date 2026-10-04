@@ -414,6 +414,8 @@ def get_eve_2d_map():
 
 def _influence_color(group_id):
     value = abs(int(group_id))
+    if value == 1354830081:  # Goonswarm Federation
+        return "hsl(52 92% 56%)"
     hue = (value * 137.508) % 360
     return f"hsl({hue:.1f} 62% 58%)"
 
