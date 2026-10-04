@@ -1563,24 +1563,45 @@
       }
     }
 
-    let previousColors = new Map();
+    const groupIds = new Set();
     prepared.forEach(payload => {
-      const currentColors = new Map();
       const groups = Array.isArray(payload && payload.groups) ? payload.groups : [];
       groups.forEach(group => {
         const groupId = String(group && group.id || "");
-        if (
-          groupId
-          && previousColors.has(groupId)
-          && group.color_override !== true
-        ) {
-          group.color = previousColors.get(groupId);
+        if (groupId) groupIds.add(groupId);
+      });
+    });
+
+    groupIds.forEach(groupId => {
+      let run = [];
+
+      function applyRun() {
+        if (!run.length) return;
+
+        const overrideGroup = run.find(group => group.color_override === true && group.color);
+        const canonicalColor = overrideGroup
+          ? overrideGroup.color
+          : (run[run.length - 1].color || run[0].color);
+
+        if (canonicalColor) {
+          run.forEach(group => {
+            group.color = canonicalColor;
+          });
         }
-        if (groupId && group.color) {
-          currentColors.set(groupId, group.color);
+        run = [];
+      }
+
+      prepared.forEach(payload => {
+        const groups = Array.isArray(payload && payload.groups) ? payload.groups : [];
+        const group = groups.find(item => String(item && item.id || "") === groupId);
+        if (group) {
+          run.push(group);
+        } else {
+          applyRun();
         }
       });
-      previousColors = currentColors;
+
+      applyRun();
     });
 
     cinematicSeries = prepared;
