@@ -320,7 +320,10 @@ def reconcile(conn, force=False):
                     'sovhub',
                     detected_at
                 FROM canonical_events
-                ORDER BY event_at, system_id, action
+                ORDER BY
+                    event_at,
+                    system_id,
+                    CASE action WHEN 'LOST' THEN 0 ELSE 1 END
                 ON CONFLICT (system_id, event_at, action, source) DO UPDATE SET
                     alliance_id = EXCLUDED.alliance_id,
                     corporation_id = NULL,
