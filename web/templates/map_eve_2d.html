@@ -241,6 +241,70 @@
     color:#788aa1;
     font-size:.72rem;
   }
+  .eve2d-common-controls,
+  .eve2d-cinematic-toggle {
+    margin-top:10px;
+    padding-top:10px;
+    border-top:1px solid rgba(111,137,173,.17);
+  }
+  .eve2d-check-label {
+    display:flex !important;
+    align-items:center;
+    gap:7px;
+    margin:0 !important;
+    color:#b8c7d9 !important;
+    font-size:.75rem !important;
+    cursor:pointer;
+  }
+  .eve2d-check-label input {
+    margin:0;
+  }
+  .eve2d-cinematic-controls {
+    display:grid;
+    gap:8px;
+    margin-top:9px;
+    padding-top:9px;
+    border-top:1px solid rgba(111,137,173,.13);
+  }
+  .eve2d-cinematic-controls[hidden] { display:none; }
+  .eve2d-date-grid {
+    display:grid;
+    grid-template-columns:1fr 1fr;
+    gap:6px;
+  }
+  .eve2d-date-grid label {
+    margin-bottom:3px;
+  }
+  .eve2d-cinematic-kind {
+    display:grid;
+    grid-template-columns:1fr 1fr;
+    gap:6px;
+  }
+  .eve2d-cinematic-actions {
+    display:grid;
+    grid-template-columns:minmax(0,1fr) auto;
+    gap:6px;
+    align-items:end;
+  }
+  .eve2d-cinematic-actions input {
+    min-width:0;
+  }
+  .eve2d-static-host {
+    position:absolute;
+    inset:0;
+    z-index:1;
+    overflow:hidden;
+    background:#050a11;
+  }
+  .eve2d-static-host[hidden] { display:none; }
+  .eve2d-static-host svg {
+    display:block;
+    width:100%;
+    height:100%;
+    min-height:680px;
+    background:#050a11;
+    user-select:none;
+  }
   @media (max-width:800px) {
     .eve2d-head { grid-template-columns:1fr; align-items:start; }
     .eve2d-toolbar { justify-content:flex-start; flex-wrap:wrap; }
@@ -279,14 +343,57 @@
         <button class="eve2d-mode-option active" type="button" data-eve2d-mode="systems">Systems</button>
         <button class="eve2d-mode-option" type="button" data-eve2d-mode="influence">Influence</button>
       </div>
+      <div class="eve2d-common-controls">
+        <label class="eve2d-check-label" for="eve2dInteractive">
+          <input type="checkbox" id="eve2dInteractive">
+          <span>Interactive</span>
+        </label>
+      </div>
       <div class="eve2d-influence-controls" id="eve2dInfluenceControls" hidden>
         <label>Grouping</label>
         <div class="eve2d-influence-grouping">
           <button class="eve2d-group-option" type="button" data-influence-group="alliance">Alliance</button>
           <button class="eve2d-group-option active" type="button" data-influence-group="coalition">Coalition</button>
         </div>
-        <label for="eve2dInfluenceDate">Date</label>
-        <input class="form-control form-control-sm" type="date" id="eve2dInfluenceDate">
+        <div id="eve2dSingleDateControls">
+          <label for="eve2dInfluenceDate">Date</label>
+          <input class="form-control form-control-sm" type="date" id="eve2dInfluenceDate">
+        </div>
+
+        <div class="eve2d-cinematic-toggle">
+          <label class="eve2d-check-label" for="eve2dCinematic">
+            <input type="checkbox" id="eve2dCinematic">
+            <span>Cinematic mode</span>
+          </label>
+        </div>
+
+        <div class="eve2d-cinematic-controls" id="eve2dCinematicControls" hidden>
+          <div class="eve2d-date-grid">
+            <div>
+              <label for="eve2dDateFrom">From</label>
+              <input class="form-control form-control-sm" type="date" id="eve2dDateFrom">
+            </div>
+            <div>
+              <label for="eve2dDateTo">To</label>
+              <input class="form-control form-control-sm" type="date" id="eve2dDateTo">
+            </div>
+          </div>
+
+          <label>Mode</label>
+          <div class="eve2d-cinematic-kind">
+            <button class="eve2d-group-option active" type="button" data-cinematic-kind="evolution">Evolution</button>
+            <button class="eve2d-group-option" type="button" data-cinematic-kind="changes">Changes</button>
+          </div>
+
+          <div class="eve2d-cinematic-actions" id="eve2dEvolutionControls">
+            <div>
+              <label for="eve2dFps">Images / second</label>
+              <input class="form-control form-control-sm" type="number" min="1" max="30" step="1" value="4" id="eve2dFps">
+            </div>
+            <button class="btn btn-sm btn-outline-primary" type="button" id="eve2dPlay">Play</button>
+          </div>
+        </div>
+
         <div class="eve2d-influence-status" id="eve2dInfluenceStatus"></div>
       </div>
     </div>
@@ -297,7 +404,8 @@
       </div>
       <div class="eve2d-ranking-list" id="eve2dRankingList"></div>
     </div>
-    <canvas id="eve2dCanvas" aria-label="New Eden 2D system and stargate map"></canvas>
+    <div class="eve2d-static-host" id="eve2dStaticHost"></div>
+    <canvas id="eve2dCanvas" aria-label="New Eden 2D system and stargate map" hidden></canvas>
     <div class="eve2d-tooltip" id="eve2dTooltip"></div>
     <div class="eve2d-help">Drag to pan · wheel to zoom · hover a system · click a system to open</div>
   </div>
@@ -309,9 +417,20 @@
   const dataEl = document.getElementById("eve2dData");
   const shell = document.getElementById("eve2dShell");
   const canvas = document.getElementById("eve2dCanvas");
+  const staticHost = document.getElementById("eve2dStaticHost");
   const tooltip = document.getElementById("eve2dTooltip");
   const influenceControls = document.getElementById("eve2dInfluenceControls");
   const influenceDate = document.getElementById("eve2dInfluenceDate");
+  const singleDateControls = document.getElementById("eve2dSingleDateControls");
+  const interactiveToggle = document.getElementById("eve2dInteractive");
+  const cinematicToggle = document.getElementById("eve2dCinematic");
+  const cinematicControls = document.getElementById("eve2dCinematicControls");
+  const dateFrom = document.getElementById("eve2dDateFrom");
+  const dateTo = document.getElementById("eve2dDateTo");
+  const fpsInput = document.getElementById("eve2dFps");
+  const playButton = document.getElementById("eve2dPlay");
+  const evolutionControls = document.getElementById("eve2dEvolutionControls");
+  const cinematicKindButtons = Array.from(document.querySelectorAll("[data-cinematic-kind]"));
   const influenceStatus = document.getElementById("eve2dInfluenceStatus");
   const rankingPanel = document.getElementById("eve2dRankingPanel");
   const rankingMeta = document.getElementById("eve2dRankingMeta");
@@ -421,6 +540,17 @@
   let influenceSurface = null;
   let influenceRequestToken = 0;
   let activeGrouping = "coalition";
+  let interactiveEnabled = false;
+  let cinematicEnabled = false;
+  let cinematicKind = "evolution";
+  let cinematicPlaying = false;
+  let cinematicRunToken = 0;
+  let cinematicCurrentDate = null;
+  let currentInfluencePayload = null;
+  let changeOverlay = new Map();
+  const influenceCache = new Map();
+  let staticSvg = null;
+  let staticViewBox = {x:0, y:0, width:WORLD_WIDTH, height:WORLD_HEIGHT};
 
   function resizeCanvas() {
     const rect = shell.getBoundingClientRect();
@@ -431,10 +561,10 @@
     canvas.height = Math.round(cssHeight * dpr);
     canvas.style.width = cssWidth + "px";
     canvas.style.height = cssHeight + "px";
-    draw();
+    if (interactiveEnabled) draw();
   }
 
-  function fitMap() {
+  function fitCanvasMap() {
     const padding = 48;
     const sx = (cssWidth - padding * 2) / WORLD_WIDTH;
     const sy = (cssHeight - padding * 2) / WORLD_HEIGHT;
@@ -442,6 +572,39 @@
     offsetX = (cssWidth - WORLD_WIDTH * scale) / 2;
     offsetY = (cssHeight - WORLD_HEIGHT * scale) / 2;
     draw();
+  }
+
+  function applyStaticViewBox() {
+    if (!staticSvg) return;
+    staticSvg.setAttribute(
+      "viewBox",
+      [staticViewBox.x, staticViewBox.y, staticViewBox.width, staticViewBox.height].join(" ")
+    );
+  }
+
+  function fitStaticMap() {
+    staticViewBox = {x:0, y:0, width:WORLD_WIDTH, height:WORLD_HEIGHT};
+    applyStaticViewBox();
+  }
+
+  function zoomStaticMap(factor) {
+    if (!staticSvg) return;
+    const nextWidth = Math.max(WORLD_WIDTH / 24, Math.min(WORLD_WIDTH * 2, staticViewBox.width / factor));
+    const nextHeight = nextWidth * staticViewBox.height / staticViewBox.width;
+    const centerX = staticViewBox.x + staticViewBox.width / 2;
+    const centerY = staticViewBox.y + staticViewBox.height / 2;
+    staticViewBox = {
+      x:centerX - nextWidth / 2,
+      y:centerY - nextHeight / 2,
+      width:nextWidth,
+      height:nextHeight,
+    };
+    applyStaticViewBox();
+  }
+
+  function fitMap() {
+    if (interactiveEnabled) fitCanvasMap();
+    else fitStaticMap();
   }
 
   function worldToScreen(node) {
@@ -894,6 +1057,28 @@
     });
     ctx.stroke();
 
+    changeOverlay.forEach((change, systemId) => {
+      const node = nodeById.get(String(systemId));
+      if (!node || node.space === "anoikis") return;
+      const p = worldToScreen(node);
+      if (p.x < -12 || p.x > cssWidth + 12 || p.y < -12 || p.y > cssHeight + 12) return;
+
+      if (change.loss) {
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, 7, 0, Math.PI * 2);
+        ctx.strokeStyle = "#ff5b5b";
+        ctx.lineWidth = 2.2;
+        ctx.stroke();
+      }
+      if (change.gain) {
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, 4.5, 0, Math.PI * 2);
+        ctx.strokeStyle = "#57e389";
+        ctx.lineWidth = 2;
+        ctx.stroke();
+      }
+    });
+
     const radius = Math.max(1.15, Math.min(3.1, 1.25 * Math.sqrt(scale)));
     allNodes.forEach(node => {
       const p = worldToScreen(node);
@@ -984,6 +1169,408 @@
     }[ch]));
   }
 
+  const SVG_NS = "http://www.w3.org/2000/svg";
+
+  function svgElement(name, attributes={}, textValue=null) {
+    const element = document.createElementNS(SVG_NS, name);
+    Object.entries(attributes).forEach(([key, value]) => {
+      if (value !== null && value !== undefined) element.setAttribute(key, String(value));
+    });
+    if (textValue !== null) element.textContent = String(textValue);
+    return element;
+  }
+
+  function groupAnchor(group) {
+    const ownedNodes = (group.system_ids || [])
+      .map(systemId => nodeById.get(String(systemId)))
+      .filter(node => node && node.space !== "anoikis");
+    if (!ownedNodes.length) return null;
+
+    let meanX = 0;
+    let meanY = 0;
+    ownedNodes.forEach(node => {
+      meanX += node._x;
+      meanY += node._y;
+    });
+    meanX /= ownedNodes.length;
+    meanY /= ownedNodes.length;
+
+    let anchor = ownedNodes[0];
+    let bestDistance = Infinity;
+    ownedNodes.forEach(node => {
+      const dx = node._x - meanX;
+      const dy = node._y - meanY;
+      const distance = dx * dx + dy * dy;
+      if (distance < bestDistance) {
+        bestDistance = distance;
+        anchor = node;
+      }
+    });
+    return anchor;
+  }
+
+  function renderStaticSvg(resetView=false) {
+    if (!staticHost) return;
+
+    const svg = svgElement("svg", {
+      xmlns:SVG_NS,
+      preserveAspectRatio:"xMidYMid meet",
+      "aria-label":"Static EVE 2D map",
+    });
+
+    svg.appendChild(svgElement("rect", {
+      x:0, y:0, width:WORLD_WIDTH, height:WORLD_HEIGHT, fill:"#050a11"
+    }));
+
+    if (activeMode === "influence" && influenceSurface) {
+      const image = svgElement("image", {
+        x:0,
+        y:0,
+        width:NEW_EDEN_WIDTH,
+        height:NEW_EDEN_HEIGHT,
+        preserveAspectRatio:"none",
+        opacity:"1",
+      });
+      image.setAttribute("href", influenceSurface.toDataURL("image/png"));
+      svg.appendChild(image);
+    }
+
+    regionLabels.forEach(label => {
+      if (!label.name) return;
+      svg.appendChild(svgElement("text", {
+        x:label._x,
+        y:label._y,
+        "text-anchor":"middle",
+        "dominant-baseline":"middle",
+        fill:"rgba(188,205,226,.18)",
+        "font-family":"Georgia, 'Times New Roman', serif",
+        "font-style":"italic",
+        "font-weight":"700",
+        "font-size":"18",
+      }, String(label.name).toUpperCase()));
+    });
+
+    anoikisClasses.forEach(group => {
+      const x = ANOIKIS_BASE_X + Number(group.x || 0);
+      const y = ANOIKIS_BASE_Y + Number(group.y || 0);
+      svg.appendChild(svgElement("rect", {
+        x, y,
+        width:Number(group.width || 0),
+        height:Number(group.height || 0),
+        fill:group.key === "shattered" ? "rgba(126,105,168,.04)" : "rgba(101,119,153,.03)",
+        stroke:group.key === "shattered" ? "rgba(184,157,230,.28)" : "rgba(117,142,178,.18)",
+        "stroke-width":"1",
+        "stroke-dasharray":group.key === "shattered" ? "5 5" : null,
+      }));
+      svg.appendChild(svgElement("text", {
+        x:x + Number(group.width || 0) / 2,
+        y:y + 22,
+        "text-anchor":"middle",
+        fill:group.key === "shattered" ? "rgba(210,189,244,.30)" : "rgba(177,194,216,.24)",
+        "font-family":"Georgia, 'Times New Roman', serif",
+        "font-style":"italic",
+        "font-weight":"800",
+        "font-size":"22",
+      }, group.label || ""));
+    });
+
+    anoikisConstellations.forEach(group => {
+      const x = ANOIKIS_BASE_X + Number(group.x || 0);
+      const y = ANOIKIS_BASE_Y + Number(group.y || 0);
+      svg.appendChild(svgElement("rect", {
+        x, y,
+        width:Number(group.width || 0),
+        height:Number(group.height || 0),
+        fill:"none",
+        stroke:"rgba(137,151,179,.12)",
+        "stroke-width":"1",
+      }));
+      svg.appendChild(svgElement("text", {
+        x:x + 4,
+        y:y + 10,
+        fill:"rgba(161,174,198,.40)",
+        "font-family":"system-ui, sans-serif",
+        "font-size":"9",
+        "font-weight":"600",
+      }, group.name || ""));
+    });
+
+    if (anoikisClasses.length) {
+      svg.appendChild(svgElement("text", {
+        x:ANOIKIS_BASE_X + ANOIKIS_WIDTH / 2,
+        y:Math.max(20, ANOIKIS_BASE_Y - 18),
+        "text-anchor":"middle",
+        fill:"rgba(196,184,255,.30)",
+        "font-family":"Georgia, 'Times New Roman', serif",
+        "font-style":"italic",
+        "font-weight":"800",
+        "font-size":"26",
+      }, "ANOIKIS"));
+    }
+
+    edgePairs.forEach(([source, target]) => {
+      svg.appendChild(svgElement("line", {
+        x1:source._x, y1:source._y,
+        x2:target._x, y2:target._y,
+        stroke:"rgba(104,132,170,.36)",
+        "stroke-width":"0.9",
+      }));
+    });
+
+    changeOverlay.forEach((change, systemId) => {
+      const node = nodeById.get(String(systemId));
+      if (!node || node.space === "anoikis") return;
+      if (change.loss) {
+        svg.appendChild(svgElement("circle", {
+          cx:node._x, cy:node._y, r:7,
+          fill:"none", stroke:"#ff5b5b", "stroke-width":"2.2",
+        }));
+      }
+      if (change.gain) {
+        svg.appendChild(svgElement("circle", {
+          cx:node._x, cy:node._y, r:4.5,
+          fill:"none", stroke:"#57e389", "stroke-width":"2",
+        }));
+      }
+    });
+
+    allNodes.forEach(node => {
+      svg.appendChild(svgElement("circle", {
+        cx:node._x,
+        cy:node._y,
+        r:node.space === "anoikis" ? 1.8 : 1.65,
+        fill:securityColor(node.security),
+      }));
+    });
+
+    if (activeMode === "influence") {
+      influenceGroups.forEach(group => {
+        const anchor = groupAnchor(group);
+        if (!anchor) return;
+        const size = Math.max(11, Math.min(24, 10 + Math.sqrt((group.system_ids || []).length) * 1.35));
+        const label = svgElement("text", {
+          x:anchor._x,
+          y:anchor._y,
+          "text-anchor":"middle",
+          "dominant-baseline":"middle",
+          fill:group.id === "coalition:none" ? "#ffffff" : "#f5f9ff",
+          stroke:"rgba(2,6,12,.88)",
+          "stroke-width":Math.max(2.5, size * .22),
+          "paint-order":"stroke",
+          "font-family":"system-ui, sans-serif",
+          "font-weight":"700",
+          "font-size":size,
+        }, group.name || "");
+        svg.appendChild(label);
+      });
+    }
+
+    staticHost.replaceChildren(svg);
+    staticSvg = svg;
+    if (resetView) fitStaticMap();
+    else applyStaticViewBox();
+  }
+
+  function renderCurrentView(resetStatic=false) {
+    if (interactiveEnabled) {
+      canvas.hidden = false;
+      staticHost.hidden = true;
+      tooltip.style.display = "none";
+      draw();
+    } else {
+      canvas.hidden = true;
+      staticHost.hidden = false;
+      tooltip.style.display = "none";
+      renderStaticSvg(resetStatic);
+    }
+  }
+
+  function influenceCacheKey(dateValue) {
+    return activeGrouping + "|" + String(dateValue || "latest");
+  }
+
+  async function fetchInfluencePayload(dateValue) {
+    const key = influenceCacheKey(dateValue);
+    if (influenceCache.has(key)) return influenceCache.get(key);
+
+    const params = new URLSearchParams();
+    if (dateValue) params.set("date", dateValue);
+    params.set("group", activeGrouping);
+    const response = await fetch("/api/map/eve-2d/influence?" + params.toString(), {
+      headers:{"Accept":"application/json"},
+      cache:"no-store",
+    });
+    const payload = await response.json();
+    if (!response.ok) throw new Error(payload.error || "Influence loading failed");
+    influenceCache.set(key, payload);
+    return payload;
+  }
+
+  function isoDate(value) {
+    if (!value) return null;
+    const match = String(value).match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (!match) return null;
+    return new Date(Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3])));
+  }
+
+  function formatIsoDate(value) {
+    return value.toISOString().slice(0, 10);
+  }
+
+  function addDays(value, days) {
+    const next = new Date(value.getTime());
+    next.setUTCDate(next.getUTCDate() + days);
+    return next;
+  }
+
+  function stopEvolution() {
+    cinematicPlaying = false;
+    ++cinematicRunToken;
+    if (playButton) playButton.textContent = "Play";
+  }
+
+  function buildChangeOverlay(fromPayload, toPayload) {
+    const fromBySystem = new Map();
+    const toBySystem = new Map();
+
+    (fromPayload.groups || []).forEach(group => {
+      (group.system_ids || []).forEach(systemId => {
+        fromBySystem.set(String(systemId), group);
+      });
+    });
+    (toPayload.groups || []).forEach(group => {
+      (group.system_ids || []).forEach(systemId => {
+        toBySystem.set(String(systemId), group);
+      });
+    });
+
+    const overlay = new Map();
+    const systemIds = new Set([...fromBySystem.keys(), ...toBySystem.keys()]);
+    systemIds.forEach(systemId => {
+      const before = fromBySystem.get(systemId) || null;
+      const after = toBySystem.get(systemId) || null;
+      const beforeId = before ? String(before.id) : "";
+      const afterId = after ? String(after.id) : "";
+      if (beforeId === afterId) return;
+
+      overlay.set(systemId, {
+        loss:Boolean(before),
+        gain:Boolean(after),
+        from:before,
+        to:after,
+      });
+    });
+    return overlay;
+  }
+
+  async function loadCinematicChanges() {
+    const fromValue = dateFrom && dateFrom.value;
+    const toValue = dateTo && dateTo.value;
+    const fromDate = isoDate(fromValue);
+    const toDate = isoDate(toValue);
+    if (!fromDate || !toDate || fromDate > toDate) {
+      if (influenceStatus) influenceStatus.textContent = "Invalid cinematic date range";
+      return;
+    }
+
+    stopEvolution();
+    const token = ++influenceRequestToken;
+    if (influenceStatus) influenceStatus.textContent = "Loading changes…";
+    try {
+      const [fromPayload, toPayload] = await Promise.all([
+        fetchInfluencePayload(fromValue),
+        fetchInfluencePayload(toValue),
+      ]);
+      if (token !== influenceRequestToken) return;
+
+      changeOverlay = buildChangeOverlay(fromPayload, toPayload);
+      applyInfluence(toPayload, false);
+      if (influenceStatus) {
+        influenceStatus.textContent =
+          "Changes · " + fromValue + " → " + toValue +
+          " · " + changeOverlay.size + " systems changed";
+      }
+      renderCurrentView();
+    } catch (error) {
+      if (token !== influenceRequestToken) return;
+      if (influenceStatus) influenceStatus.textContent = String(error.message || error);
+    }
+  }
+
+  async function showEvolutionFrame(dateValue, runToken) {
+    const payload = await fetchInfluencePayload(dateValue);
+    if (runToken !== cinematicRunToken) return false;
+    changeOverlay = new Map();
+    cinematicCurrentDate = dateValue;
+    applyInfluence(payload, false);
+    if (influenceStatus) influenceStatus.textContent = "Evolution · " + dateValue;
+    return true;
+  }
+
+  async function startEvolution() {
+    const fromValue = dateFrom && dateFrom.value;
+    const toValue = dateTo && dateTo.value;
+    const fromDate = isoDate(fromValue);
+    const toDate = isoDate(toValue);
+    if (!fromDate || !toDate || fromDate > toDate) {
+      if (influenceStatus) influenceStatus.textContent = "Invalid cinematic date range";
+      return;
+    }
+
+    if (cinematicPlaying) {
+      stopEvolution();
+      return;
+    }
+
+    cinematicPlaying = true;
+    const runToken = ++cinematicRunToken;
+    if (playButton) playButton.textContent = "Pause";
+
+    let cursor = cinematicCurrentDate ? isoDate(cinematicCurrentDate) : fromDate;
+    if (!cursor || cursor < fromDate || cursor > toDate) cursor = fromDate;
+
+    while (cinematicPlaying && runToken === cinematicRunToken && cursor <= toDate) {
+      const shown = await showEvolutionFrame(formatIsoDate(cursor), runToken);
+      if (!shown) return;
+
+      const fps = Math.max(1, Math.min(30, Number(fpsInput && fpsInput.value) || 4));
+      await new Promise(resolve => setTimeout(resolve, 1000 / fps));
+      cursor = addDays(cursor, 1);
+    }
+
+    if (runToken === cinematicRunToken) {
+      cinematicCurrentDate = null;
+      stopEvolution();
+    }
+  }
+
+  async function refreshCinematic() {
+    if (!cinematicEnabled || activeMode !== "influence") return;
+    stopEvolution();
+    if (cinematicKind === "changes") {
+      await loadCinematicChanges();
+      return;
+    }
+
+    const fromValue = dateFrom && dateFrom.value;
+    if (fromValue) {
+      const runToken = ++cinematicRunToken;
+      await showEvolutionFrame(fromValue, runToken);
+    }
+  }
+
+  function syncCinematicBounds(payload) {
+    [dateFrom, dateTo].forEach(input => {
+      if (!input) return;
+      input.min = payload.min_date || "";
+      input.max = payload.max_date || "";
+    });
+
+    const baseDate = payload.date || "";
+    if (dateFrom && !dateFrom.value) dateFrom.value = baseDate;
+    if (dateTo && !dateTo.value) dateTo.value = baseDate;
+  }
+
   function renderInfluenceRanking(payload) {
     if (!rankingPanel || !rankingMeta || !rankingList) return;
 
@@ -1042,7 +1629,8 @@
     });
   }
 
-  function applyInfluence(payload) {
+  function applyInfluence(payload, updateSingleDate=true) {
+    currentInfluencePayload = payload;
     influenceGroups = Array.isArray(payload.groups) ? payload.groups : [];
     influenceBySystem = new Map();
     influenceGroups.forEach(group => {
@@ -1052,47 +1640,41 @@
     });
 
     if (influenceDate) {
-      influenceDate.value = payload.date || "";
+      if (updateSingleDate) influenceDate.value = payload.date || "";
       influenceDate.min = payload.min_date || "";
       influenceDate.max = payload.max_date || "";
     }
+    syncCinematicBounds(payload);
     buildInfluenceSurface();
     renderInfluenceRanking(payload);
-    if (influenceStatus) {
+    if (influenceStatus && !cinematicEnabled) {
       const label = payload.grouping === "alliance" ? "alliance groups" : "coalition groups";
       influenceStatus.textContent = influenceGroups.length
         ? influenceGroups.length + " " + label
         : "No sovereignty influence for this date";
     }
-    draw();
+    renderCurrentView();
   }
 
   async function loadInfluence(dateValue) {
+    stopEvolution();
+    changeOverlay = new Map();
     const token = ++influenceRequestToken;
     if (influenceStatus) influenceStatus.textContent = "Loading…";
     if (rankingPanel) rankingPanel.hidden = false;
     if (rankingMeta) rankingMeta.textContent = "Loading…";
     if (rankingList) rankingList.replaceChildren();
-    const params = new URLSearchParams();
-    if (dateValue) params.set("date", dateValue);
-    params.set("group", activeGrouping);
-    const query = "?" + params.toString();
+
     try {
-      const response = await fetch("/api/map/eve-2d/influence" + query, {
-        headers: {"Accept": "application/json"},
-        cache: "no-store",
-      });
-      const payload = await response.json();
+      const payload = await fetchInfluencePayload(dateValue);
       if (token !== influenceRequestToken) return;
-      if (!response.ok) {
-        throw new Error(payload.error || "Influence loading failed");
-      }
-      applyInfluence(payload);
+      applyInfluence(payload, true);
     } catch (error) {
       if (token !== influenceRequestToken) return;
       influenceGroups = [];
       influenceBySystem = new Map();
       influenceSurface = null;
+      currentInfluencePayload = null;
       if (influenceStatus) influenceStatus.textContent = String(error.message || error);
       if (rankingMeta) rankingMeta.textContent = "Unavailable";
       if (rankingList) {
@@ -1102,27 +1684,13 @@
         empty.textContent = String(error.message || error);
         rankingList.appendChild(empty);
       }
-      draw();
+      renderCurrentView();
     }
   }
 
   function setMode(mode) {
     activeMode = mode === "influence" ? "influence" : "systems";
     modeButtons.forEach(button => {
-      button.classList.toggle("active", button.dataset.eve2dMode === activeMode);
-    });
-    if (influenceControls) influenceControls.hidden = activeMode !== "influence";
-    if (rankingPanel) rankingPanel.hidden = activeMode !== "influence";
-
-    if (activeMode === "influence") {
-      loadInfluence(influenceDate && influenceDate.value ? influenceDate.value : null);
-    } else {
-      ++influenceRequestToken;
-      draw();
-    }
-  }
-
-  modeButtons.forEach(button => {
     button.addEventListener("click", () => setMode(button.dataset.eve2dMode));
   });
 
@@ -1132,22 +1700,94 @@
       groupingButtons.forEach(item => {
         item.classList.toggle("active", item.dataset.influenceGroup === activeGrouping);
       });
+      stopEvolution();
+      changeOverlay = new Map();
       if (activeMode === "influence") {
-        loadInfluence(influenceDate && influenceDate.value ? influenceDate.value : null);
+        if (cinematicEnabled) refreshCinematic();
+        else loadInfluence(influenceDate && influenceDate.value ? influenceDate.value : null);
       }
+    });
+  });
+
+  if (interactiveToggle) {
+    interactiveToggle.checked = false;
+    interactiveToggle.addEventListener("change", () => {
+      interactiveEnabled = interactiveToggle.checked === true;
+      if (interactiveEnabled) {
+        resizeCanvas();
+        fitCanvasMap();
+      } else {
+        renderStaticSvg(true);
+      }
+      renderCurrentView();
+    });
+  }
+
+  if (cinematicToggle) {
+    cinematicToggle.addEventListener("change", () => {
+      cinematicEnabled = cinematicToggle.checked === true;
+      if (singleDateControls) singleDateControls.hidden = cinematicEnabled;
+      if (cinematicControls) cinematicControls.hidden = !cinematicEnabled;
+      stopEvolution();
+      changeOverlay = new Map();
+
+      if (cinematicEnabled && currentInfluencePayload) {
+        syncCinematicBounds(currentInfluencePayload);
+      }
+
+      if (activeMode === "influence") {
+        if (cinematicEnabled) refreshCinematic();
+        else loadInfluence(influenceDate && influenceDate.value ? influenceDate.value : null);
+      }
+    });
+  }
+
+  cinematicKindButtons.forEach(button => {
+    button.addEventListener("click", () => {
+      cinematicKind = button.dataset.cinematicKind === "changes" ? "changes" : "evolution";
+      cinematicKindButtons.forEach(item => {
+        item.classList.toggle("active", item.dataset.cinematicKind === cinematicKind);
+      });
+      if (evolutionControls) evolutionControls.hidden = cinematicKind !== "evolution";
+      refreshCinematic();
+    });
+  });
+
+  if (playButton) {
+    playButton.addEventListener("click", () => {
+      if (cinematicKind === "evolution") startEvolution();
+    });
+  }
+
+  [dateFrom, dateTo].forEach(input => {
+    if (!input) return;
+    input.addEventListener("change", () => {
+      cinematicCurrentDate = null;
+      refreshCinematic();
     });
   });
 
   if (influenceDate) {
     influenceDate.addEventListener("change", () => {
-      if (activeMode === "influence") loadInfluence(influenceDate.value || null);
+      if (activeMode === "influence" && !cinematicEnabled) {
+        loadInfluence(influenceDate.value || null);
+      }
     });
   }
 
   canvas.addEventListener("wheel", event => {
+    if (!interactiveEnabled) return;
     event.preventDefault();
     zoomAt(event.deltaY < 0 ? 1.16 : .86, event.clientX, event.clientY);
   }, {passive:false});
+
+  if (staticHost) {
+    staticHost.addEventListener("wheel", event => {
+      if (interactiveEnabled) return;
+      event.preventDefault();
+      zoomStaticMap(event.deltaY < 0 ? 1.18 : .84);
+    }, {passive:false});
+  }
 
   canvas.addEventListener("pointerdown", event => {
     if (event.button !== 0) return;
@@ -1205,18 +1845,29 @@
 
   document.getElementById("eve2dFit").addEventListener("click", fitMap);
   document.getElementById("eve2dZoomIn").addEventListener("click", () => {
-    const rect = canvas.getBoundingClientRect();
-    zoomAt(1.25, rect.left + rect.width / 2, rect.top + rect.height / 2);
+    if (interactiveEnabled) {
+      const rect = canvas.getBoundingClientRect();
+      zoomAt(1.25, rect.left + rect.width / 2, rect.top + rect.height / 2);
+    } else {
+      zoomStaticMap(1.25);
+    }
   });
   document.getElementById("eve2dZoomOut").addEventListener("click", () => {
-    const rect = canvas.getBoundingClientRect();
-    zoomAt(.8, rect.left + rect.width / 2, rect.top + rect.height / 2);
+    if (interactiveEnabled) {
+      const rect = canvas.getBoundingClientRect();
+      zoomAt(.8, rect.left + rect.width / 2, rect.top + rect.height / 2);
+    } else {
+      zoomStaticMap(.8);
+    }
   });
 
-  const observer = new ResizeObserver(() => resizeCanvas());
+  const observer = new ResizeObserver(() => {
+    resizeCanvas();
+    if (!interactiveEnabled) renderStaticSvg(false);
+  });
   observer.observe(shell);
   resizeCanvas();
-  fitMap();
+  renderStaticSvg(true);
 })();
 </script>
 {% endblock %}
