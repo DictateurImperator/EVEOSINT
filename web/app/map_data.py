@@ -1234,7 +1234,7 @@ def get_eve_2d_influence(target_date=None, grouping="coalition"):
             "id": unaligned_group_id,
             "entity_type": "coalition",
             "entity_id": None,
-            "name": "Sans coalition",
+            "name": "No coalition",
             "color": "hsl(0 0% 100%)",
             "system_ids": [],
         }
