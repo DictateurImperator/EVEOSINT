@@ -1163,6 +1163,80 @@
     ctx.restore();
   }
 
+  function heatDisplayCap() {
+    if (!currentHeatPayload) return 0;
+    if (heatAutoScale && heatAutoScale.checked) {
+      return Number(currentHeatPayload.max_value || 0);
+    }
+    const manual = Number(heatCap && heatCap.value);
+    return Number.isFinite(manual) && manual > 0
+      ? manual
+      : Number(currentHeatPayload.max_value || 0);
+  }
+
+  function heatRatio(value) {
+    const cap = heatDisplayCap();
+    if (!(cap > 0)) return 0;
+    return Math.max(0, Math.min(1, Number(value || 0) / cap));
+  }
+
+  function heatFill(ratio) {
+    const intensity = Math.max(0, Math.min(1, Number(ratio || 0)));
+    const alpha = Math.min(1, .08 + intensity * .92);
+    return "rgba(255,76,40," + alpha.toFixed(3) + ")";
+  }
+
+  function drawHeat() {
+    if (activeMode !== "heat" || !heatBySystem.size) return;
+
+    heatBySystem.forEach((entry, systemId) => {
+      const node = nodeById.get(String(systemId));
+      if (!node) return;
+
+      const ratio = heatRatio(entry.value);
+      if (ratio <= 0) return;
+
+      const p = worldToScreen(node);
+      const worldRadius = 10 + Math.sqrt(ratio) * 34;
+      const radius = Math.max(3, worldRadius * scale);
+      if (
+        p.x < -radius * 2 || p.x > cssWidth + radius * 2
+        || p.y < -radius * 2 || p.y > cssHeight + radius * 2
+      ) return;
+
+      ctx.save();
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, radius * 1.5, 0, Math.PI * 2);
+      ctx.fillStyle = "rgba(255,76,40," + Math.min(.22, ratio * .22).toFixed(3) + ")";
+      ctx.filter = "blur(" + Math.max(4, radius * .45).toFixed(1) + "px)";
+      ctx.fill();
+      ctx.restore();
+
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, radius, 0, Math.PI * 2);
+      ctx.fillStyle = heatFill(ratio);
+      ctx.fill();
+    });
+  }
+
+  function formatHeatValue(value) {
+    const numeric = Number(value || 0);
+    if (heatMetric === "isk") {
+      try {
+        return new Intl.NumberFormat(undefined, {
+          maximumFractionDigits:0,
+        }).format(numeric) + " ISK";
+      } catch (_) {
+        return Math.round(numeric) + " ISK";
+      }
+    }
+    try {
+      return new Intl.NumberFormat().format(Math.round(numeric)) + " kills";
+    } catch (_) {
+      return Math.round(numeric) + " kills";
+    }
+  }
+
   function drawInfluenceLabels() {
     if (activeMode !== "influence" || !influenceGroups.length) return;
 
@@ -1227,6 +1301,29 @@
     ctx.lineWidth = 3;
     ctx.strokeStyle = "rgba(3,8,15,.32)";
     ctx.fillStyle = "rgba(188,205,226,.14)";
+
+    if (activeMode === "heat" && heatBySystem.size) {
+      heatBySystem.forEach((entry, systemId) => {
+        const node = nodeById.get(String(systemId));
+        if (!node) return;
+        const ratio = heatRatio(entry.value);
+        if (ratio <= 0) return;
+        const radius = 10 + Math.sqrt(ratio) * 34;
+
+        svg.appendChild(svgElement("circle", {
+          cx:node._x,
+          cy:node._y,
+          r:radius * 1.45,
+          fill:"rgba(255,76,40," + Math.min(.18, ratio * .18).toFixed(3) + ")",
+        }));
+        svg.appendChild(svgElement("circle", {
+          cx:node._x,
+          cy:node._y,
+          r:radius,
+          fill:heatFill(ratio),
+        }));
+      });
+    }
 
     regionLabels.forEach(label => {
       if (!label.name) return;
@@ -1334,6 +1431,7 @@
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, cssWidth, cssHeight);
     drawGrid();
+    drawHeat();
     drawInfluence();
     drawRegionLabels();
     drawAnoikisLayout();
@@ -1444,12 +1542,17 @@
     const influenceGroup = activeMode === "influence"
       ? influenceBySystem.get(String(node.id))
       : null;
+    const heatEntry = activeMode === "heat"
+      ? heatBySystem.get(String(node.id))
+      : null;
     tooltip.innerHTML =
       "<strong>" + escapeHtml(node.name) + "</strong>" +
       "<br><span class=\"muted\">" + escapeHtml(node.region_name || "") +
       " · " + escapeHtml(node.constellation_name || "") + "</span>" +
       "<br>Security: " + secText +
-      (influenceGroup ? "<br>Influence: " + escapeHtml(influenceGroup.name || "") : "");
+      (influenceGroup ? "<br>Influence: " + escapeHtml(influenceGroup.name || "") : "") +
+      (heatEntry ? "<br>" + (heatMetric === "isk" ? "ISK: " : "Kills: ") +
+        escapeHtml(formatHeatValue(heatEntry.value)) : "");
     tooltip.style.display = "block";
     const left = Math.min(shellRect.width - 280, Math.max(8, clientX - shellRect.left + 14));
     const top = Math.min(shellRect.height - 80, Math.max(8, clientY - shellRect.top + 14));
