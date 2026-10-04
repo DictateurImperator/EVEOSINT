@@ -1418,9 +1418,20 @@ def _fight_heat_resolve_coalition(rules, coalition_id, day, cache, stack=frozens
 
 
 def _fight_heat_coalition_segments(rules, coalition_id, from_dt, to_dt):
+    relevant_coalitions = set()
+    stack = [int(coalition_id)]
+    while stack:
+        current_id = stack.pop()
+        if current_id in relevant_coalitions:
+            continue
+        relevant_coalitions.add(current_id)
+        for rule in rules.get(current_id, []):
+            if rule["member_type"] == "coalition":
+                stack.append(int(rule["member_id"]))
+
     boundaries = {from_dt, to_dt}
-    for rule_list in rules.values():
-        for rule in rule_list:
+    for relevant_id in relevant_coalitions:
+        for rule in rules.get(relevant_id, []):
             if rule["valid_from"] is not None:
                 boundary = datetime.combine(
                     rule["valid_from"],
