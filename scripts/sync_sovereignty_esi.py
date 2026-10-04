@@ -19,6 +19,11 @@ import psycopg2
 from psycopg2.extras import execute_values
 import requests
 
+try:
+    from sovereignty_scope import load_claimable_sov_systems
+except ModuleNotFoundError:
+    from scripts.sovereignty_scope import load_claimable_sov_systems
+
 ROOT = Path(__file__).resolve().parents[1]
 CONFIG_PATH = ROOT / "config" / "db.json"
 ESI_URL = "https://esi.evetech.net/sovereignty/systems"
@@ -415,7 +420,30 @@ def replace_map(conn, rows, response, previous, record_history):
         )
         for system_id, owner in rows.items()
     ]
-    changes = build_changes(previous, rows, observed) if record_history else []
+    if record_history:
+        claimable_ids = set(load_claimable_sov_systems(conn))
+        if len(claimable_ids) < 1000:
+            raise RuntimeError(
+                "SDE conquerable-nullsec scope looks incomplete (%d systems)"
+                % len(claimable_ids)
+            )
+        history_previous = {
+            system_id: owner
+            for system_id, owner in previous.items()
+            if system_id in claimable_ids
+        }
+        history_rows = {
+            system_id: owner
+            for system_id, owner in rows.items()
+            if system_id in claimable_ids
+        }
+        changes = build_changes(
+            history_previous,
+            history_rows,
+            observed,
+        )
+    else:
+        changes = []
 
     # Changes, current state and cache metadata are one transaction. A failed
     # write cannot leave history ahead of current_map or vice versa.

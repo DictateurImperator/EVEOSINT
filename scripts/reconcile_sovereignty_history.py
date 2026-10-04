@@ -20,6 +20,11 @@ from pathlib import Path
 import psycopg2
 from psycopg2.extras import execute_values
 
+try:
+    from sovereignty_scope import load_claimable_sov_systems
+except ModuleNotFoundError:
+    from scripts.sovereignty_scope import load_claimable_sov_systems
+
 ROOT = Path(__file__).resolve().parents[1]
 CONFIG_PATH = ROOT / "config" / "db.json"
 LOG = logging.getLogger("sov_reconcile")
@@ -137,6 +142,14 @@ def _load_latest_reconciled_state(conn):
 def reconcile(conn, force=False):
     ensure_table(conn)
 
+    claimable_ids = set(load_claimable_sov_systems(conn))
+    if len(claimable_ids) < 1000:
+        raise RuntimeError(
+            "SDE conquerable-nullsec scope looks incomplete (%d systems)"
+            % len(claimable_ids)
+        )
+    claimable_list = sorted(claimable_ids)
+
     with conn.cursor() as cur:
         cur.execute("""
             SELECT COUNT(*)
@@ -233,6 +246,7 @@ def reconcile(conn, force=False):
                     LEFT JOIN sovereignty.dotlan_system_sync ds
                       ON ds.system_id = mc.system_id
                     WHERE mc.change_type IN ('GAIN', 'LOST')
+                      AND mc.system_id = ANY(%s)
                       AND (
                           ds.fetched_at IS NULL
                           OR mc.source_observed_at > ds.fetched_at
@@ -313,7 +327,7 @@ def reconcile(conn, force=False):
                     faction_id = EXCLUDED.faction_id,
                     ownership_model = EXCLUDED.ownership_model,
                     observed_at = EXCLUDED.observed_at
-            """)
+            """, (claimable_list,))
             esi_change_rows = cur.rowcount
 
     conn.commit()
@@ -330,8 +344,9 @@ def reconcile(conn, force=False):
                 faction_id,
                 observed_at
             FROM sovereignty.current_map
+            WHERE system_id = ANY(%s)
             ORDER BY system_id
-        """)
+        """, (claimable_list,))
         current_rows = cur.fetchall()
 
     corrections = []
@@ -430,7 +445,7 @@ def reconcile(conn, force=False):
 
     LOG.info(
         "SOV_RECONCILE done rows=%d range=%s..%s dotlan=%d esi=%d "
-        "gain=%d lost=%d imported_dotlan=%d imported_esi=%d corrections=%d",
+        "gain=%d lost=%d imported_dotlan=%d imported_esi=%d corrections=%d scope=%d",
         total,
         min_event,
         max_event,
@@ -441,6 +456,7 @@ def reconcile(conn, force=False):
         dotlan_rows,
         esi_change_rows,
         len(corrections),
+        len(claimable_ids),
     )
 
 
