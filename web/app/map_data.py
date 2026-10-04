@@ -404,9 +404,6 @@ def _is_shattered_wormhole(topology, system_id, class_id):
     if class_id not in {1, 2, 3, 4, 5, 6}:
         return False
 
-    # Standard shattered systems have no moons. Prefer the current SDE moon
-    # data when available; the canonical Rhea shattered ID range is only a
-    # fallback for installations whose SDE predates mapMoons import.
     if topology.get("wormhole_moon_data_available"):
         return int(system_id) not in topology["wormhole_systems_with_moons"]
 
@@ -441,8 +438,6 @@ def _anoikis_layout(topology):
         elif class_id in {1, 2, 3, 4, 5, 6}:
             bucket = f"c{class_id}"
         else:
-            # Thera / Drifter / other exceptional spaces are deliberately not
-            # mixed into the C1-C6 constellation layout.
             continue
 
         buckets[bucket].append((system_id, system, class_id, shattered))
@@ -581,7 +576,6 @@ def _anoikis_layout(topology):
 def get_eve_2d_map():
     topology = _topology()
 
-    # CCP's in-game New Eden map uses this solar-system ID range.
     visible_system_ids = {
         system_id
         for system_id in topology["systems"]
