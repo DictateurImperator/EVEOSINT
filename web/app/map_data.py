@@ -1,4 +1,5 @@
 import colorsys
+import math
 from datetime import date
 from functools import lru_cache
 
@@ -76,9 +77,11 @@ def _topology():
         faction_rows = _load_table(conn, "sde_factions")
 
         wormhole_systems_with_moons = set()
+        wormhole_moon_data_available = False
         with conn.cursor() as cur:
             cur.execute("SELECT to_regclass('public.sde_mapmoons')")
             if cur.fetchone()[0] is not None:
+                wormhole_moon_data_available = True
                 cur.execute("""
                     SELECT DISTINCT NULLIF(data->>'solarSystemID', '')::bigint
                     FROM public.sde_mapmoons
@@ -205,6 +208,7 @@ def _topology():
         "constellation_system_ids": constellation_system_ids,
         "system_neighbors": system_neighbors,
         "wormhole_systems_with_moons": wormhole_systems_with_moons,
+        "wormhole_moon_data_available": wormhole_moon_data_available,
     }
 
 
@@ -376,6 +380,204 @@ def get_universe_map():
     }
 
 
+def _effective_wormhole_class_id(topology, system):
+    class_id = system.get("wormhole_class_id")
+    if class_id is not None:
+        return int(class_id)
+
+    constellation = topology["constellations"].get(
+        system.get("constellation_id")
+    ) or {}
+    class_id = constellation.get("wormhole_class_id")
+    if class_id is not None:
+        return int(class_id)
+
+    region = topology["regions"].get(system.get("region_id")) or {}
+    class_id = region.get("wormhole_class_id")
+    return int(class_id) if class_id is not None else None
+
+
+def _is_shattered_wormhole(topology, system_id, class_id):
+    if class_id == 13:
+        return True
+
+    if class_id not in {1, 2, 3, 4, 5, 6}:
+        return False
+
+    # Standard shattered systems have no moons. Prefer the current SDE moon
+    # data when available; the canonical Rhea shattered ID range is only a
+    # fallback for installations whose SDE predates mapMoons import.
+    if topology.get("wormhole_moon_data_available"):
+        return int(system_id) not in topology["wormhole_systems_with_moons"]
+
+    return 31_002_505 <= int(system_id) <= 31_002_604
+
+
+def _anoikis_layout(topology):
+    buckets = {
+        "c1": [],
+        "c2": [],
+        "c3": [],
+        "c4": [],
+        "c5": [],
+        "c6": [],
+        "shattered": [],
+    }
+
+    for system_id, system in topology["systems"].items():
+        system_id = int(system_id)
+        if not (31_000_000 <= system_id <= 31_999_999):
+            continue
+
+        class_id = _effective_wormhole_class_id(topology, system)
+        shattered = _is_shattered_wormhole(
+            topology,
+            system_id,
+            class_id,
+        )
+
+        if shattered:
+            bucket = "shattered"
+        elif class_id in {1, 2, 3, 4, 5, 6}:
+            bucket = f"c{class_id}"
+        else:
+            # Thera / Drifter / other exceptional spaces are deliberately not
+            # mixed into the C1-C6 constellation layout.
+            continue
+
+        buckets[bucket].append((system_id, system, class_id, shattered))
+
+    block_specs = {
+        "c1": ("C1", 0.0, 0.0, 540.0, 360.0),
+        "c2": ("C2", 600.0, 0.0, 540.0, 360.0),
+        "c3": ("C3", 1200.0, 0.0, 540.0, 360.0),
+        "c4": ("C4", 0.0, 420.0, 540.0, 360.0),
+        "c5": ("C5", 600.0, 420.0, 540.0, 360.0),
+        "c6": ("C6", 1200.0, 420.0, 540.0, 360.0),
+        "shattered": ("SHATTERED", 0.0, 840.0, 1740.0, 320.0),
+    }
+
+    nodes = []
+    class_groups = []
+    constellation_groups = []
+
+    for bucket_key in ("c1", "c2", "c3", "c4", "c5", "c6", "shattered"):
+        label, box_x, box_y, box_w, box_h = block_specs[bucket_key]
+        members = buckets[bucket_key]
+        if not members:
+            continue
+
+        by_constellation = {}
+        for item in members:
+            system_id, system, class_id, shattered = item
+            constellation_id = system.get("constellation_id")
+            by_constellation.setdefault(constellation_id, []).append(item)
+
+        constellation_ids = sorted(
+            by_constellation,
+            key=lambda constellation_id: (
+                (
+                    topology["constellations"].get(constellation_id) or {}
+                ).get("name") or "",
+                int(constellation_id or 0),
+            ),
+        )
+
+        usable_w = box_w - 36.0
+        usable_h = box_h - 58.0
+        constellation_count = max(1, len(constellation_ids))
+        cols = max(
+            1,
+            int(math.ceil(math.sqrt(
+                constellation_count * usable_w / max(usable_h, 1.0)
+            ))),
+        )
+        rows = int(math.ceil(constellation_count / cols))
+        cell_w = usable_w / cols
+        cell_h = usable_h / max(rows, 1)
+
+        for constellation_index, constellation_id in enumerate(constellation_ids):
+            col = constellation_index % cols
+            row = constellation_index // cols
+            cell_x = box_x + 18.0 + col * cell_w
+            cell_y = box_y + 40.0 + row * cell_h
+            constellation = (
+                topology["constellations"].get(constellation_id) or {}
+            )
+            systems = sorted(
+                by_constellation[constellation_id],
+                key=lambda item: (item[1].get("name") or "", item[0]),
+            )
+
+            constellation_groups.append({
+                "id": constellation_id,
+                "name": constellation.get("name") or (
+                    f"Constellation {constellation_id}"
+                ),
+                "bucket": bucket_key,
+                "class_label": label,
+                "x": cell_x,
+                "y": cell_y,
+                "width": cell_w,
+                "height": cell_h,
+                "system_count": len(systems),
+            })
+
+            system_count = len(systems)
+            sys_cols = max(1, int(math.ceil(math.sqrt(system_count))))
+            sys_rows = int(math.ceil(system_count / sys_cols))
+            pad_x = min(12.0, cell_w * 0.12)
+            pad_y = min(13.0, cell_h * 0.18)
+            inner_w = max(4.0, cell_w - pad_x * 2.0)
+            inner_h = max(4.0, cell_h - pad_y * 2.0)
+
+            for system_index, (system_id, system, class_id, shattered) in enumerate(systems):
+                sys_col = system_index % sys_cols
+                sys_row = system_index // sys_cols
+                layout_x = cell_x + pad_x + (
+                    (sys_col + 0.5) * inner_w / sys_cols
+                )
+                layout_y = cell_y + pad_y + (
+                    (sys_row + 0.5) * inner_h / max(sys_rows, 1)
+                )
+                region = topology["regions"].get(system.get("region_id")) or {}
+                nodes.append({
+                    "id": system_id,
+                    "name": system["name"],
+                    "layout_x": layout_x,
+                    "layout_y": layout_y,
+                    "security": system.get("security"),
+                    "region_id": system.get("region_id"),
+                    "region_name": region.get("name"),
+                    "constellation_id": constellation_id,
+                    "constellation_name": constellation.get("name"),
+                    "wormhole_class_id": class_id,
+                    "wormhole_group": label,
+                    "shattered": bool(shattered),
+                    "space": "anoikis",
+                    "url": f"/map/system/{system_id}",
+                })
+
+        class_groups.append({
+            "key": bucket_key,
+            "label": label,
+            "x": box_x,
+            "y": box_y,
+            "width": box_w,
+            "height": box_h,
+            "system_count": len(members),
+            "constellation_count": len(constellation_ids),
+        })
+
+    return {
+        "nodes": nodes,
+        "classes": class_groups,
+        "constellations": constellation_groups,
+        "width": 1740.0,
+        "height": 1160.0,
+    }
+
+
 def get_eve_2d_map():
     topology = _topology()
 
@@ -402,6 +604,7 @@ def get_eve_2d_map():
             "region_name": region.get("name"),
             "constellation_id": system.get("constellation_id"),
             "constellation_name": constellation.get("name"),
+            "space": "new_eden",
             "url": f"/map/system/{system_id}",
         })
 
@@ -411,12 +614,25 @@ def get_eve_2d_map():
         if source_id in visible_system_ids and target_id in visible_system_ids
     ]
 
+    anoikis = _anoikis_layout(topology)
+
     return {
         "scope": "eve_2d",
         "title": "New Eden · 2D EVE Map",
-        "subtitle": f"{len(nodes)} systems · {len(edges)} stargate connections",
+        "subtitle": (
+            f"{len(nodes)} New Eden systems · "
+            f"{len(edges)} stargate connections · "
+            f"{len(anoikis['nodes'])} Anoikis systems"
+        ),
         "nodes": nodes,
         "edges": edges,
+        "anoikis_nodes": anoikis["nodes"],
+        "anoikis_classes": anoikis["classes"],
+        "anoikis_constellations": anoikis["constellations"],
+        "anoikis_layout": {
+            "width": anoikis["width"],
+            "height": anoikis["height"],
+        },
         "breadcrumbs": [
             {"label": "New Eden", "url": "/map"},
             {"label": "2D EVE Map", "url": "/map/eve-2d"},
