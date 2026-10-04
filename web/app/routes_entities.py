@@ -46,7 +46,7 @@ from .entities import (
 from .db import db
 from .coalitions import coalition_logo_url, get_coalition, list_coalitions, list_coalition_overviews, list_memberships
 from .layout import app_context
-from .map_data import MapDataError, get_constellation_map, get_eve_2d_influence, get_eve_2d_map, get_location_preview, get_region_map, get_system_map, get_universe_map
+from .map_data import MapDataError, get_constellation_map, get_eve_2d_fight_heat, get_eve_2d_influence, get_eve_2d_map, get_location_preview, get_region_map, get_system_map, get_universe_map
 from .main_objects import templates
 from .population_intelligence import (
     get_alliance_population_history,
@@ -250,6 +250,44 @@ def map_eve_2d_influence(
             "influence_date_invalid",
             "influence_date_before_history",
             "influence_grouping_invalid",
+        } else 503
+        return JSONResponse({"error": code}, status_code=status)
+    return JSONResponse(payload)
+
+
+@router.get("/api/map/eve-2d/heat")
+def map_eve_2d_heat(
+    request: Request,
+    source: str = Query("api"),
+    metric: str = Query("kills"),
+    from_value: str | None = Query(None, alias="from"),
+    to_value: str | None = Query(None, alias="to"),
+):
+    user = require_login(request)
+    redirect = require_permission_or_redirect(user, "entities.view")
+    if redirect:
+        return redirect
+
+    query = request.query_params
+    try:
+        payload = get_eve_2d_fight_heat(
+            source=source,
+            metric=metric,
+            from_value=from_value,
+            to_value=to_value,
+            ship_include=query.getlist("ship_include"),
+            ship_exclude=query.getlist("ship_exclude"),
+            entity_include=query.getlist("entity_include"),
+            entity_exclude=query.getlist("entity_exclude"),
+        )
+    except MapDataError as exc:
+        code = str(exc)
+        status = 400 if code in {
+            "fight_heat_source_invalid",
+            "fight_heat_metric_invalid",
+            "fight_heat_isk_unavailable",
+            "fight_heat_datetime_invalid",
+            "fight_heat_range_invalid",
         } else 503
         return JSONResponse({"error": code}, status_code=status)
     return JSONResponse(payload)
@@ -777,6 +815,59 @@ def global_killboard_search(
             if item.get("entity_type") in {"character", "corporation", "alliance"}
         ]
         return JSONResponse({"results": results[:limit]})
+
+    if kind == "heat_entity":
+        alliance_results = [
+            item for item in search_entities(query, limit=min(limit, 12))
+            if item.get("entity_type") == "alliance"
+        ]
+
+        coalition_results = []
+        with db() as conn:
+            with conn.cursor() as cur:
+                needle = f"%{query}%"
+                if query.isdigit():
+                    cur.execute(
+                        """
+                        SELECT coalition_id, name, short_name
+                        FROM entities.coalitions
+                        WHERE coalition_id = %s
+                           OR name ILIKE %s
+                           OR COALESCE(short_name, '') ILIKE %s
+                        ORDER BY lower(name), coalition_id
+                        LIMIT %s
+                        """,
+                        (int(query), needle, needle, limit),
+                    )
+                else:
+                    cur.execute(
+                        """
+                        SELECT coalition_id, name, short_name
+                        FROM entities.coalitions
+                        WHERE name ILIKE %s
+                           OR COALESCE(short_name, '') ILIKE %s
+                        ORDER BY lower(name), coalition_id
+                        LIMIT %s
+                        """,
+                        (needle, needle, limit),
+                    )
+                for coalition_id, name, short_name in cur.fetchall():
+                    coalition_results.append({
+                        "entity_type": "coalition",
+                        "entity_id": int(coalition_id),
+                        "name": name or short_name or f"Coalition {coalition_id}",
+                        "label": name or short_name or f"Coalition {coalition_id}",
+                        "subtitle": "Coalition",
+                        "image_url": coalition_logo_url(coalition_id) or "",
+                    })
+
+        combined = alliance_results + coalition_results
+        combined.sort(key=lambda item: (
+            str(item.get("label") or item.get("name") or "").casefold(),
+            str(item.get("entity_type") or ""),
+            int(item.get("entity_id") or 0),
+        ))
+        return JSONResponse({"results": combined[:limit]})
 
     if kind == "zone":
         return JSONResponse({
