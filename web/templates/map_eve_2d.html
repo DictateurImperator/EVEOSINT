@@ -323,7 +323,13 @@
   const payload = JSON.parse(dataEl.textContent || "{}");
   const nodes = Array.isArray(payload.nodes) ? payload.nodes : [];
   const edges = Array.isArray(payload.edges) ? payload.edges : [];
-  const nodeById = new Map(nodes.map(node => [String(node.id), node]));
+  const anoikisNodes = Array.isArray(payload.anoikis_nodes) ? payload.anoikis_nodes : [];
+  const anoikisClasses = Array.isArray(payload.anoikis_classes) ? payload.anoikis_classes : [];
+  const anoikisConstellations = Array.isArray(payload.anoikis_constellations)
+    ? payload.anoikis_constellations : [];
+  const anoikisLayout = payload.anoikis_layout || {};
+  const allNodes = nodes.concat(anoikisNodes);
+  const nodeById = new Map(allNodes.map(node => [String(node.id), node]));
   const ctx = canvas.getContext("2d", {alpha:true});
 
   if (!nodes.length || !ctx) return;
@@ -340,13 +346,54 @@
 
   const rawWidth = Math.max(1e-9, maxX - minX);
   const rawHeight = Math.max(1e-9, maxY - minY);
-  const WORLD_WIDTH = 1800;
-  const WORLD_HEIGHT = Math.max(850, WORLD_WIDTH * rawHeight / rawWidth);
+  const NEW_EDEN_WIDTH = 1800;
+  const NEW_EDEN_HEIGHT = Math.max(850, NEW_EDEN_WIDTH * rawHeight / rawWidth);
 
   nodes.forEach(node => {
-    node._x = ((Number(node.x || 0) - minX) / rawWidth) * WORLD_WIDTH;
-    node._y = ((maxY - Number(node.y || 0)) / rawHeight) * WORLD_HEIGHT;
+    node._x = ((Number(node.x || 0) - minX) / rawWidth) * NEW_EDEN_WIDTH;
+    node._y = ((maxY - Number(node.y || 0)) / rawHeight) * NEW_EDEN_HEIGHT;
   });
+
+  const ANOIKIS_GAP = 420;
+  const ANOIKIS_WIDTH = Math.max(1, Number(anoikisLayout.width || 1740));
+  const ANOIKIS_HEIGHT = Math.max(1, Number(anoikisLayout.height || 1160));
+  const ANOIKIS_BASE_X = NEW_EDEN_WIDTH + ANOIKIS_GAP;
+  const ANOIKIS_BASE_Y = Math.max(0, (NEW_EDEN_HEIGHT - ANOIKIS_HEIGHT) / 2);
+
+  anoikisNodes.forEach(node => {
+    node._x = ANOIKIS_BASE_X + Number(node.layout_x || 0);
+    node._y = ANOIKIS_BASE_Y + Number(node.layout_y || 0);
+  });
+
+  const WORLD_WIDTH = ANOIKIS_BASE_X + ANOIKIS_WIDTH;
+  const WORLD_HEIGHT = Math.max(
+    NEW_EDEN_HEIGHT,
+    ANOIKIS_BASE_Y + ANOIKIS_HEIGHT
+  );
+
+  const regionLabels = Array.from(
+    nodes.reduce((groups, node) => {
+      const key = String(node.region_id || "");
+      if (!key) return groups;
+      if (!groups.has(key)) {
+        groups.set(key, {
+          name: node.region_name || "",
+          totalX: 0,
+          totalY: 0,
+          count: 0,
+        });
+      }
+      const group = groups.get(key);
+      group.totalX += node._x;
+      group.totalY += node._y;
+      group.count += 1;
+      return groups;
+    }, new Map()).values()
+  ).map(group => ({
+    name: group.name,
+    _x: group.totalX / Math.max(1, group.count),
+    _y: group.totalY / Math.max(1, group.count),
+  }));
 
   const edgePairs = edges.map(edge => [
     nodeById.get(String(edge.source)),
@@ -530,7 +577,7 @@
     if (!influenceGroups.length) return;
 
     const surfaceWidth = 560;
-    const surfaceHeight = Math.max(260, Math.round(surfaceWidth * WORLD_HEIGHT / WORLD_WIDTH));
+    const surfaceHeight = Math.max(260, Math.round(surfaceWidth * NEW_EDEN_HEIGHT / NEW_EDEN_WIDTH));
     const count = surfaceWidth * surfaceHeight;
 
     const NO_OWNER = -1;
@@ -551,7 +598,7 @@
     // Neutral systems project an invisible circle that cannot be painted over.
     // Stargates are NEVER used in this calculation.
     const radiusWorld = 52;
-    const radiusPx = radiusWorld * surfaceWidth / WORLD_WIDTH;
+    const radiusPx = radiusWorld * surfaceWidth / NEW_EDEN_WIDTH;
     const radiusSq = radiusPx * radiusPx;
     const radiusCells = Math.ceil(radiusPx);
 
@@ -568,8 +615,8 @@
         ? (groupIndexById.get(String(group.id)) ?? NEUTRAL_OWNER)
         : NEUTRAL_OWNER;
 
-      const gx = node._x * (surfaceWidth - 1) / WORLD_WIDTH;
-      const gy = node._y * (surfaceHeight - 1) / WORLD_HEIGHT;
+      const gx = node._x * (surfaceWidth - 1) / NEW_EDEN_WIDTH;
+      const gy = node._y * (surfaceHeight - 1) / NEW_EDEN_HEIGHT;
       const minGX = Math.max(0, Math.floor(gx - radiusCells));
       const maxGX = Math.min(surfaceWidth - 1, Math.ceil(gx + radiusCells));
       const minGY = Math.max(0, Math.floor(gy - radiusCells));
@@ -642,8 +689,8 @@
   function drawInfluence() {
     if (activeMode !== "influence" || !influenceSurface) return;
 
-    const drawWidth = WORLD_WIDTH * scale;
-    const drawHeight = WORLD_HEIGHT * scale;
+    const drawWidth = NEW_EDEN_WIDTH * scale;
+    const drawHeight = NEW_EDEN_HEIGHT * scale;
 
     ctx.save();
     ctx.imageSmoothingEnabled = true;
@@ -713,11 +760,126 @@
     ctx.restore();
   }
 
+  function drawRegionLabels() {
+    if (!regionLabels.length) return;
+
+    ctx.save();
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.font = "italic 700 18px Georgia, 'Times New Roman', serif";
+    ctx.lineWidth = 3;
+    ctx.strokeStyle = "rgba(3,8,15,.32)";
+    ctx.fillStyle = "rgba(188,205,226,.14)";
+
+    regionLabels.forEach(label => {
+      if (!label.name) return;
+      const p = worldToScreen(label);
+      if (p.x < -180 || p.x > cssWidth + 180 || p.y < -60 || p.y > cssHeight + 60) return;
+      ctx.strokeText(label.name.toUpperCase(), p.x, p.y);
+      ctx.fillText(label.name.toUpperCase(), p.x, p.y);
+    });
+
+    ctx.restore();
+  }
+
+  function anoikisRectToScreen(item) {
+    return {
+      x: offsetX + (ANOIKIS_BASE_X + Number(item.x || 0)) * scale,
+      y: offsetY + (ANOIKIS_BASE_Y + Number(item.y || 0)) * scale,
+      width: Number(item.width || 0) * scale,
+      height: Number(item.height || 0) * scale,
+    };
+  }
+
+  function drawAnoikisLayout() {
+    if (!anoikisClasses.length) return;
+
+    const titleX = offsetX + (ANOIKIS_BASE_X + ANOIKIS_WIDTH / 2) * scale;
+    const titleY = offsetY + (ANOIKIS_BASE_Y - 28) * scale;
+
+    ctx.save();
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.font = "italic 800 26px Georgia, 'Times New Roman', serif";
+    ctx.fillStyle = "rgba(196,184,255,.22)";
+    ctx.fillText("ANOIKIS", titleX, titleY);
+
+    anoikisClasses.forEach(group => {
+      const rect = anoikisRectToScreen(group);
+      if (
+        rect.x > cssWidth + 80 || rect.x + rect.width < -80
+        || rect.y > cssHeight + 80 || rect.y + rect.height < -80
+      ) return;
+
+      ctx.beginPath();
+      ctx.rect(rect.x, rect.y, rect.width, rect.height);
+      ctx.fillStyle = group.key === "shattered"
+        ? "rgba(126,105,168,.035)"
+        : "rgba(101,119,153,.025)";
+      ctx.fill();
+      ctx.strokeStyle = group.key === "shattered"
+        ? "rgba(184,157,230,.20)"
+        : "rgba(117,142,178,.14)";
+      ctx.lineWidth = 1;
+      if (group.key === "shattered") ctx.setLineDash([5, 5]);
+      else ctx.setLineDash([]);
+      ctx.stroke();
+
+      ctx.setLineDash([]);
+      ctx.font = "italic 800 22px Georgia, 'Times New Roman', serif";
+      ctx.fillStyle = group.key === "shattered"
+        ? "rgba(210,189,244,.22)"
+        : "rgba(177,194,216,.18)";
+      ctx.fillText(
+        group.label || "",
+        rect.x + rect.width / 2,
+        rect.y + 17
+      );
+    });
+
+    if (scale >= .34) {
+      anoikisConstellations.forEach(group => {
+        const rect = anoikisRectToScreen(group);
+        if (
+          rect.x > cssWidth + 50 || rect.x + rect.width < -50
+          || rect.y > cssHeight + 50 || rect.y + rect.height < -50
+        ) return;
+
+        ctx.beginPath();
+        ctx.rect(
+          rect.x + 1,
+          rect.y + 1,
+          Math.max(0, rect.width - 2),
+          Math.max(0, rect.height - 2)
+        );
+        ctx.strokeStyle = "rgba(137,151,179,.10)";
+        ctx.lineWidth = 1;
+        ctx.stroke();
+
+        if (scale >= .55) {
+          ctx.font = "600 9px system-ui, sans-serif";
+          ctx.fillStyle = "rgba(161,174,198,.32)";
+          ctx.textAlign = "left";
+          ctx.fillText(
+            group.name || "",
+            rect.x + 4,
+            rect.y + 8
+          );
+          ctx.textAlign = "center";
+        }
+      });
+    }
+
+    ctx.restore();
+  }
+
   function draw() {
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, cssWidth, cssHeight);
     drawGrid();
     drawInfluence();
+    drawRegionLabels();
+    drawAnoikisLayout();
 
     ctx.beginPath();
     ctx.strokeStyle = "rgba(104,132,170,.34)";
@@ -733,7 +895,7 @@
     ctx.stroke();
 
     const radius = Math.max(1.15, Math.min(3.1, 1.25 * Math.sqrt(scale)));
-    nodes.forEach(node => {
+    allNodes.forEach(node => {
       const p = worldToScreen(node);
       if (p.x < -8 || p.x > cssWidth + 8 || p.y < -8 || p.y > cssHeight + 8) return;
       ctx.beginPath();
@@ -747,7 +909,7 @@
     if (scale >= 3.2) {
       ctx.font = "10px system-ui, sans-serif";
       ctx.fillStyle = "rgba(218,229,242,.78)";
-      nodes.forEach(node => {
+      allNodes.forEach(node => {
         const p = worldToScreen(node);
         if (p.x < -80 || p.x > cssWidth + 80 || p.y < -20 || p.y > cssHeight + 20) return;
         ctx.fillText(node.name || "", p.x + 5, p.y - 4);
@@ -779,7 +941,7 @@
     let best = null;
     let bestSq = maxSq;
 
-    for (const node of nodes) {
+    for (const node of allNodes) {
       const p = worldToScreen(node);
       const dx = p.x - x;
       const dy = p.y - y;
