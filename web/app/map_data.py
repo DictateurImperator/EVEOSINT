@@ -565,6 +565,18 @@ def _apply_persistent_influence_colors(
         if group.get("entity_id") is not None
     }
     if not entity_groups:
+        if selected_date == latest_date:
+            with db() as conn:
+                with conn.cursor() as cur:
+                    _ensure_influence_color_tables(cur)
+                    cur.execute("SELECT pg_advisory_xact_lock(184624, 2)")
+                    cur.execute("""
+                        UPDATE sovereignty.influence_color_assignments
+                        SET valid_to = %s
+                        WHERE entity_type = %s
+                          AND valid_to IS NULL
+                    """, (selected_date, entity_type))
+                conn.commit()
         return
 
     entity_ids = sorted(entity_groups)
