@@ -2624,21 +2624,29 @@
   }
 
   function setMode(mode) {
-    activeMode = mode === "influence" ? "influence" : "systems";
+    activeMode = mode === "influence"
+      ? "influence"
+      : (mode === "heat" ? "heat" : "systems");
     modeButtons.forEach(button => {
       button.classList.toggle("active", button.dataset.eve2dMode === activeMode);
     });
     if (influenceControls) influenceControls.hidden = activeMode !== "influence";
+    if (heatControls) heatControls.hidden = activeMode !== "heat";
     if (rankingPanel) rankingPanel.hidden = activeMode !== "influence";
 
     stopEvolution();
+    stopHeatEvolution();
     changeOverlay = new Map();
 
     if (activeMode === "influence") {
       if (cinematicEnabled) refreshCinematic();
       else loadInfluence(influenceDate && influenceDate.value ? influenceDate.value : null);
+    } else if (activeMode === "heat") {
+      ++influenceRequestToken;
+      loadHeat();
     } else {
       ++influenceRequestToken;
+      ++heatRequestToken;
       renderCurrentView();
     }
   }
@@ -2646,6 +2654,96 @@
   modeButtons.forEach(button => {
     button.addEventListener("click", () => setMode(button.dataset.eve2dMode));
   });
+
+  heatSourceButtons.forEach(button => {
+    button.addEventListener("click", () => {
+      const next = String(button.dataset.heatSource || "api");
+      heatSource = ["api", "total", "hidden"].includes(next) ? next : "api";
+      heatSourceButtons.forEach(item => {
+        item.classList.toggle("active", item.dataset.heatSource === heatSource);
+      });
+      syncHeatMetricAvailability();
+      stopHeatEvolution();
+      if (activeMode === "heat") loadHeat();
+    });
+  });
+
+  heatMetricButtons.forEach(button => {
+    button.addEventListener("click", () => {
+      const next = String(button.dataset.heatMetric || "kills");
+      if (next === "isk" && heatSource === "api") return;
+      heatMetric = next === "isk" ? "isk" : "kills";
+      syncHeatMetricAvailability();
+      stopHeatEvolution();
+      if (activeMode === "heat") loadHeat();
+    });
+  });
+
+  [heatFrom, heatTo].forEach(input => {
+    if (!input) return;
+    input.addEventListener("change", () => {
+      stopHeatEvolution();
+      if (activeMode === "heat" && !(heatEvolutionToggle && heatEvolutionToggle.checked)) {
+        loadHeat();
+      }
+    });
+  });
+
+  if (heatAutoScale) {
+    heatAutoScale.addEventListener("change", () => {
+      if (heatScaleValue) heatScaleValue.hidden = heatAutoScale.checked;
+      if (!heatAutoScale.checked && heatCap && currentHeatPayload) {
+        if (!(Number(heatCap.value) > 0)) {
+          heatCap.value = String(Math.ceil(Number(currentHeatPayload.max_value || 0)));
+        }
+      }
+      renderCurrentView();
+    });
+  }
+
+  if (heatCap) {
+    heatCap.addEventListener("input", () => {
+      if (activeMode === "heat") renderCurrentView();
+    });
+  }
+
+  if (heatEvolutionToggle) {
+    heatEvolutionToggle.addEventListener("change", () => {
+      stopHeatEvolution();
+      if (heatEvolutionControls) {
+        heatEvolutionControls.hidden = heatEvolutionToggle.checked !== true;
+      }
+    });
+  }
+
+  if (heatPlay) {
+    heatPlay.addEventListener("click", startHeatEvolution);
+  }
+
+  if (heatApplyFilters) {
+    heatApplyFilters.addEventListener("click", () => {
+      stopHeatEvolution();
+      if (activeMode === "heat") loadHeat();
+    });
+  }
+
+  if (heatClearFilters) {
+    heatClearFilters.addEventListener("click", () => {
+      heatFilters = {entity: [], ship: []};
+      renderAllHeatTerms();
+      stopHeatEvolution();
+      if (activeMode === "heat") loadHeat();
+    });
+  }
+
+  document.addEventListener("click", event => {
+    if (heatControls && heatControls.contains(event.target)) return;
+    document.querySelectorAll("[data-heat-results]").forEach(box => {
+      box.classList.remove("show");
+    });
+  });
+
+  syncHeatMetricAvailability();
 
   groupingButtons.forEach(button => {
     button.addEventListener("click", () => {
