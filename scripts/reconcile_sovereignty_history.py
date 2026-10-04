@@ -37,21 +37,24 @@ def connect():
     )
 
 
+def _sov_owner_key(owner):
+    owner = owner or (None, None, None)
+    alliance_id = owner[0]
+    faction_id = owner[2]
+
+    if alliance_id is not None:
+        return ("alliance", int(alliance_id))
+    if faction_id is not None:
+        return ("faction", int(faction_id))
+    return ("unclaimed", None)
+
+
 def _has_owner(owner):
-    return owner is not None and any(value is not None for value in owner)
+    return _sov_owner_key(owner)[0] != "unclaimed"
 
 
 def _same_sov_owner(left, right):
-    left = left or (None, None, None)
-    right = right or (None, None, None)
-
-    left_alliance = left[0]
-    right_alliance = right[0]
-    if left_alliance is not None or right_alliance is not None:
-        return left_alliance == right_alliance
-
-    # Corporation changes are irrelevant for sovereignty ownership.
-    return left[2] == right[2]
+    return _sov_owner_key(left) == _sov_owner_key(right)
 
 
 def ensure_table(conn):
@@ -112,7 +115,6 @@ def _load_latest_reconciled_state(conn):
                 system_id,
                 action,
                 alliance_id,
-                corporation_id,
                 faction_id
             FROM sovereignty.reconciled_map
             ORDER BY system_id, event_at DESC, event_id DESC
@@ -120,11 +122,11 @@ def _load_latest_reconciled_state(conn):
         rows = cur.fetchall()
 
     state = {}
-    for system_id, action, alliance_id, corporation_id, faction_id in rows:
+    for system_id, action, alliance_id, faction_id in rows:
         if action == "GAIN":
             state[int(system_id)] = (
                 alliance_id,
-                corporation_id,
+                None,
                 faction_id,
             )
         else:
@@ -210,6 +212,78 @@ def reconcile(conn, force=False):
 
         if changes_exists:
             cur.execute("""
+                WITH grouped AS (
+                    SELECT
+                        mc.system_id,
+                        mc.source_observed_at,
+                        MAX(mc.old_alliance_id) FILTER (
+                            WHERE mc.change_type = 'LOST'
+                        ) AS old_alliance_id,
+                        MAX(mc.old_faction_id) FILTER (
+                            WHERE mc.change_type = 'LOST'
+                        ) AS old_faction_id,
+                        MAX(mc.new_alliance_id) FILTER (
+                            WHERE mc.change_type = 'GAIN'
+                        ) AS new_alliance_id,
+                        MAX(mc.new_faction_id) FILTER (
+                            WHERE mc.change_type = 'GAIN'
+                        ) AS new_faction_id,
+                        MIN(mc.detected_at) AS detected_at
+                    FROM sovereignty.map_changes mc
+                    LEFT JOIN sovereignty.dotlan_system_sync ds
+                      ON ds.system_id = mc.system_id
+                    WHERE mc.change_type IN ('GAIN', 'LOST')
+                      AND (
+                          ds.fetched_at IS NULL
+                          OR mc.source_observed_at > ds.fetched_at
+                      )
+                    GROUP BY mc.system_id, mc.source_observed_at
+                ),
+                effective AS (
+                    SELECT *
+                    FROM grouped
+                    WHERE
+                        CASE
+                            WHEN old_alliance_id IS NOT NULL
+                                THEN 'alliance:' || old_alliance_id::text
+                            WHEN old_faction_id IS NOT NULL
+                                THEN 'faction:' || old_faction_id::text
+                            ELSE 'unclaimed'
+                        END
+                        <>
+                        CASE
+                            WHEN new_alliance_id IS NOT NULL
+                                THEN 'alliance:' || new_alliance_id::text
+                            WHEN new_faction_id IS NOT NULL
+                                THEN 'faction:' || new_faction_id::text
+                            ELSE 'unclaimed'
+                        END
+                ),
+                canonical_events AS (
+                    SELECT
+                        system_id,
+                        source_observed_at AS event_at,
+                        'LOST'::text AS action,
+                        old_alliance_id AS alliance_id,
+                        old_faction_id AS faction_id,
+                        detected_at
+                    FROM effective
+                    WHERE old_alliance_id IS NOT NULL
+                       OR old_faction_id IS NOT NULL
+
+                    UNION ALL
+
+                    SELECT
+                        system_id,
+                        source_observed_at AS event_at,
+                        'GAIN'::text AS action,
+                        new_alliance_id AS alliance_id,
+                        new_faction_id AS faction_id,
+                        detected_at
+                    FROM effective
+                    WHERE new_alliance_id IS NOT NULL
+                       OR new_faction_id IS NOT NULL
+                )
                 INSERT INTO sovereignty.reconciled_map (
                     system_id,
                     event_at,
@@ -222,36 +296,20 @@ def reconcile(conn, force=False):
                     observed_at
                 )
                 SELECT
-                    mc.system_id,
-                    mc.source_observed_at,
-                    mc.change_type,
-                    CASE
-                        WHEN mc.change_type = 'GAIN' THEN mc.new_alliance_id
-                        ELSE mc.old_alliance_id
-                    END,
-                    CASE
-                        WHEN mc.change_type = 'GAIN' THEN mc.new_corporation_id
-                        ELSE mc.old_corporation_id
-                    END,
-                    CASE
-                        WHEN mc.change_type = 'GAIN' THEN mc.new_faction_id
-                        ELSE mc.old_faction_id
-                    END,
+                    system_id,
+                    event_at,
+                    action,
+                    alliance_id,
+                    NULL,
+                    faction_id,
                     'esi',
                     'sovhub',
-                    mc.detected_at
-                FROM sovereignty.map_changes mc
-                LEFT JOIN sovereignty.dotlan_system_sync ds
-                  ON ds.system_id = mc.system_id
-                WHERE mc.change_type IN ('GAIN', 'LOST')
-                  AND (
-                      ds.fetched_at IS NULL
-                      OR mc.source_observed_at > ds.fetched_at
-                  )
-                ORDER BY mc.source_observed_at, mc.change_id
+                    detected_at
+                FROM canonical_events
+                ORDER BY event_at, system_id, action
                 ON CONFLICT (system_id, event_at, action, source) DO UPDATE SET
                     alliance_id = EXCLUDED.alliance_id,
-                    corporation_id = EXCLUDED.corporation_id,
+                    corporation_id = NULL,
                     faction_id = EXCLUDED.faction_id,
                     ownership_model = EXCLUDED.ownership_model,
                     observed_at = EXCLUDED.observed_at
@@ -269,7 +327,6 @@ def reconcile(conn, force=False):
             SELECT
                 system_id,
                 alliance_id,
-                corporation_id,
                 faction_id,
                 observed_at
             FROM sovereignty.current_map
@@ -281,13 +338,12 @@ def reconcile(conn, force=False):
     for (
         system_id,
         alliance_id,
-        corporation_id,
         faction_id,
         observed_at,
     ) in current_rows:
         system_id = int(system_id)
         old_owner = reconciled_state.get(system_id, (None, None, None))
-        new_owner = (alliance_id, corporation_id, faction_id)
+        new_owner = (alliance_id, None, faction_id)
 
         if _same_sov_owner(old_owner, new_owner):
             continue
@@ -298,7 +354,7 @@ def reconcile(conn, force=False):
                 observed_at,
                 "LOST",
                 old_owner[0],
-                old_owner[1],
+                None,
                 old_owner[2],
                 "esi",
                 "sovhub",
@@ -311,7 +367,7 @@ def reconcile(conn, force=False):
                 observed_at,
                 "GAIN",
                 new_owner[0],
-                new_owner[1],
+                None,
                 new_owner[2],
                 "esi",
                 "sovhub",
@@ -335,12 +391,20 @@ def reconcile(conn, force=False):
                 VALUES %s
                 ON CONFLICT (system_id, event_at, action, source) DO UPDATE SET
                     alliance_id = EXCLUDED.alliance_id,
-                    corporation_id = EXCLUDED.corporation_id,
+                    corporation_id = NULL,
                     faction_id = EXCLUDED.faction_id,
                     ownership_model = EXCLUDED.ownership_model,
                     observed_at = EXCLUDED.observed_at
             """, corrections, page_size=1000)
         conn.commit()
+
+    with conn.cursor() as cur:
+        cur.execute("""
+            UPDATE sovereignty.reconciled_map
+            SET corporation_id = NULL
+            WHERE corporation_id IS NOT NULL
+        """)
+    conn.commit()
 
     with conn.cursor() as cur:
         cur.execute("""

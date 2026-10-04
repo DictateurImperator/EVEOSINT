@@ -292,8 +292,7 @@ def normalize(payload):
 
         if isinstance(alliance, dict):
             alliance_id = _positive_id(alliance.get("alliance_id"), "alliance_id")
-            corporation_id = _positive_id(alliance.get("corporation_id"), "corporation_id")
-            owner = (alliance_id, corporation_id, None)
+            owner = (alliance_id, None, None)
         elif isinstance(faction, dict):
             faction_id = _positive_id(faction.get("faction_id"), "faction_id")
             owner = (None, None, faction_id)
@@ -331,8 +330,20 @@ def get_state(conn):
     return row[0], row[1], stored_count, row[3]
 
 
+def _sov_owner_key(owner):
+    owner = owner or (None, None, None)
+    alliance_id = owner[0]
+    faction_id = owner[2]
+
+    if alliance_id is not None:
+        return ("alliance", int(alliance_id))
+    if faction_id is not None:
+        return ("faction", int(faction_id))
+    return ("unclaimed", None)
+
+
 def _has_owner(owner):
-    return owner is not None and any(value is not None for value in owner)
+    return _sov_owner_key(owner)[0] != "unclaimed"
 
 
 def build_changes(previous, current, source_observed_at):
@@ -341,14 +352,15 @@ def build_changes(previous, current, source_observed_at):
         old_owner = previous.get(system_id)
         new_owner = current.get(system_id)
 
-        if old_owner == new_owner:
+        # SOV ownership is alliance/faction only. Corporation changes are ignored.
+        if _sov_owner_key(old_owner) == _sov_owner_key(new_owner):
             continue
 
         if _has_owner(old_owner):
             changes.append((
                 system_id,
                 "LOST",
-                old_owner[0], old_owner[1], old_owner[2],
+                old_owner[0], None, old_owner[2],
                 None, None, None,
                 source_observed_at,
             ))
@@ -358,7 +370,7 @@ def build_changes(previous, current, source_observed_at):
                 system_id,
                 "GAIN",
                 None, None, None,
-                new_owner[0], new_owner[1], new_owner[2],
+                new_owner[0], None, new_owner[2],
                 source_observed_at,
             ))
 
@@ -396,7 +408,7 @@ def replace_map(conn, rows, response, previous, record_history):
         (
             system_id,
             owner[0],
-            owner[1],
+            None,
             owner[2],
             not _has_owner(owner),
             observed,
@@ -447,11 +459,11 @@ def replace_map(conn, rows, response, previous, record_history):
             ) in changes:
                 if action == "GAIN":
                     alliance_id = new_alliance_id
-                    corporation_id = new_corporation_id
+                    corporation_id = None
                     faction_id = new_faction_id
                 else:
                     alliance_id = old_alliance_id
-                    corporation_id = old_corporation_id
+                    corporation_id = None
                     faction_id = old_faction_id
 
                 reconciled_values.append((

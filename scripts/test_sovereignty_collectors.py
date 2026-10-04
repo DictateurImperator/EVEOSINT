@@ -30,7 +30,7 @@ class EsiSnapshotTests(unittest.TestCase):
                 },
             ]
         })
-        self.assertEqual(rows[30004759], (1354830081, 98000001, None))
+        self.assertEqual(rows[30004759], (1354830081, None, None))
         self.assertEqual(rows[30004760], (None, None, 500001))
         self.assertEqual(rows[30004761], (None, None, None))
 
@@ -91,6 +91,19 @@ class EsiDeltaTests(unittest.TestCase):
         self.assertEqual(by_system[30000004][0][2:8], (None, None, None, 1004, None, None))
         self.assertTrue(all(row[8] == observed for row in changes))
         self.assertNotIn("TRANSFER", [row[1] for row in changes])
+
+    def test_corporation_change_is_not_sovereignty_change(self):
+        from datetime import datetime, timezone
+
+        observed = datetime(2026, 10, 3, 12, 0, tzinfo=timezone.utc)
+        previous = {
+            30000001: (1001, 2001, None),
+        }
+        current = {
+            30000001: (1001, 9999, None),
+        }
+
+        self.assertEqual(build_changes(previous, current, observed), [])
 
     def test_claimed_unclaimed_transitions(self):
         from datetime import datetime, timezone
