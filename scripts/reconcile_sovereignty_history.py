@@ -41,6 +41,19 @@ def _has_owner(owner):
     return owner is not None and any(value is not None for value in owner)
 
 
+def _same_sov_owner(left, right):
+    left = left or (None, None, None)
+    right = right or (None, None, None)
+
+    left_alliance = left[0]
+    right_alliance = right[0]
+    if left_alliance is not None or right_alliance is not None:
+        return left_alliance == right_alliance
+
+    # Corporation changes are irrelevant for sovereignty ownership.
+    return left[2] == right[2]
+
+
 def ensure_table(conn):
     with conn.cursor() as cur:
         cur.execute("CREATE SCHEMA IF NOT EXISTS sovereignty")
@@ -276,7 +289,7 @@ def reconcile(conn, force=False):
         old_owner = reconciled_state.get(system_id, (None, None, None))
         new_owner = (alliance_id, corporation_id, faction_id)
 
-        if old_owner == new_owner:
+        if _same_sov_owner(old_owner, new_owner):
             continue
 
         if _has_owner(old_owner):
