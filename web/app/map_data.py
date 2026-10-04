@@ -1,3 +1,4 @@
+import colorsys
 from datetime import date
 from functools import lru_cache
 
@@ -412,12 +413,318 @@ def get_eve_2d_map():
     }
 
 
-def _influence_color(group_id):
-    value = abs(int(group_id))
-    if value == 1354830081:  # Goonswarm Federation
-        return "hsl(52 92% 56%)"
-    hue = (value * 137.508) % 360
-    return f"hsl({hue:.1f} 62% 58%)"
+YELLOW_INFLUENCE_COLOR = ("hsl(52 92% 56%)", 52.0, 92.0, 56.0)
+
+
+def _ensure_influence_color_tables(cur):
+    cur.execute("""
+        CREATE SCHEMA IF NOT EXISTS sovereignty
+    """)
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS sovereignty.influence_color_assignments (
+            assignment_id BIGSERIAL PRIMARY KEY,
+            entity_type TEXT NOT NULL
+                CHECK (entity_type IN ('alliance', 'coalition')),
+            entity_id BIGINT NOT NULL,
+            color TEXT NOT NULL,
+            color_hue DOUBLE PRECISION NOT NULL,
+            color_saturation DOUBLE PRECISION NOT NULL,
+            color_lightness DOUBLE PRECISION NOT NULL,
+            valid_from DATE NOT NULL,
+            valid_to DATE,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            CHECK (valid_to IS NULL OR valid_to >= valid_from)
+        )
+    """)
+    cur.execute("""
+        CREATE UNIQUE INDEX IF NOT EXISTS sov_influence_color_active_entity_idx
+        ON sovereignty.influence_color_assignments (entity_type, entity_id)
+        WHERE valid_to IS NULL
+    """)
+    cur.execute("""
+        CREATE INDEX IF NOT EXISTS sov_influence_color_history_idx
+        ON sovereignty.influence_color_assignments (
+            entity_type, entity_id, valid_from, valid_to
+        )
+    """)
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS sovereignty.influence_color_state (
+            entity_type TEXT PRIMARY KEY
+                CHECK (entity_type IN ('alliance', 'coalition')),
+            initialized_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )
+    """)
+
+
+def _influence_color_candidates():
+    # Large fixed palette. Allocation is persisted, so IDs keep their colour
+    # until they lose all SOV. Freed colours can then be reused.
+    candidates = []
+    for saturation, lightness, offset in (
+        (76.0, 56.0, 0.0),
+        (82.0, 68.0, 5.0),
+        (68.0, 45.0, 10.0),
+    ):
+        for hue in range(0, 360, 15):
+            value = float((hue + offset) % 360)
+            candidates.append((
+                f"hsl({value:.0f} {saturation:.0f}% {lightness:.0f}%)",
+                value,
+                saturation,
+                lightness,
+            ))
+    return candidates
+
+
+INFLUENCE_COLOR_CANDIDATES = _influence_color_candidates()
+
+
+def _color_rgb(hue, saturation, lightness):
+    red, green, blue = colorsys.hls_to_rgb(
+        (float(hue) % 360.0) / 360.0,
+        float(lightness) / 100.0,
+        float(saturation) / 100.0,
+    )
+    return red, green, blue
+
+
+def _pick_influence_color(used_colors, entity_id):
+    used_rgb = [
+        _color_rgb(hue, saturation, lightness)
+        for hue, saturation, lightness in used_colors
+    ]
+    start = abs(int(entity_id)) % len(INFLUENCE_COLOR_CANDIDATES)
+    ordered = (
+        INFLUENCE_COLOR_CANDIDATES[start:]
+        + INFLUENCE_COLOR_CANDIDATES[:start]
+    )
+
+    best = None
+    best_score = -1.0
+    for candidate in ordered:
+        _color, hue, saturation, lightness = candidate
+        rgb = _color_rgb(hue, saturation, lightness)
+
+        if not used_rgb:
+            return candidate
+
+        score = min(
+            (rgb[0] - other[0]) ** 2
+            + (rgb[1] - other[1]) ** 2
+            + (rgb[2] - other[2]) ** 2
+            for other in used_rgb
+        )
+        if score > best_score:
+            best_score = score
+            best = candidate
+
+    return best or ordered[0]
+
+
+def _load_influence_assignments(cur, entity_type, entity_ids, selected_date):
+    if not entity_ids:
+        return {}
+
+    cur.execute("""
+        SELECT
+            entity_id,
+            color,
+            color_hue,
+            color_saturation,
+            color_lightness
+        FROM sovereignty.influence_color_assignments
+        WHERE entity_type = %s
+          AND entity_id = ANY(%s)
+          AND valid_from <= %s
+          AND (valid_to IS NULL OR %s < valid_to)
+        ORDER BY assignment_id
+    """, (entity_type, entity_ids, selected_date, selected_date))
+
+    return {
+        int(entity_id): {
+            "color": color,
+            "components": (
+                float(hue),
+                float(saturation),
+                float(lightness),
+            ),
+        }
+        for entity_id, color, hue, saturation, lightness in cur.fetchall()
+    }
+
+
+def _apply_persistent_influence_colors(
+    groups,
+    entity_type,
+    selected_date,
+    latest_date,
+):
+    entity_groups = {
+        int(group["entity_id"]): group
+        for group in groups
+        if group.get("entity_id") is not None
+    }
+    if not entity_groups:
+        return
+
+    entity_ids = sorted(entity_groups)
+    with db() as conn:
+        with conn.cursor() as cur:
+            _ensure_influence_color_tables(cur)
+            cur.execute("SELECT pg_advisory_xact_lock(184624, 2)")
+
+            if selected_date == latest_date:
+                # An entity owns its colour only while it owns at least one
+                # sovereignty system in this grouping mode.
+                cur.execute("""
+                    UPDATE sovereignty.influence_color_assignments
+                    SET valid_to = %s
+                    WHERE entity_type = %s
+                      AND valid_to IS NULL
+                      AND NOT (entity_id = ANY(%s))
+                """, (selected_date, entity_type, entity_ids))
+
+                assignments = _load_influence_assignments(
+                    cur,
+                    entity_type,
+                    entity_ids,
+                    selected_date,
+                )
+
+                # One-time initial seeds. Once an entity later reaches zero SOV,
+                # this seed is never applied again: it receives a normal new
+                # colour if it comes back.
+                cur.execute("""
+                    SELECT 1
+                    FROM sovereignty.influence_color_state
+                    WHERE entity_type = %s
+                """, (entity_type,))
+                initialized = cur.fetchone() is not None
+
+                if not initialized:
+                    seed_id = None
+                    if entity_type == "alliance":
+                        if 1354830081 in entity_groups:  # Goonswarm Federation
+                            seed_id = 1354830081
+                    else:
+                        for entity_id, group in entity_groups.items():
+                            if "imperium" in str(group.get("name") or "").casefold():
+                                seed_id = entity_id
+                                break
+
+                    if seed_id is not None and seed_id not in assignments:
+                        color, hue, saturation, lightness = YELLOW_INFLUENCE_COLOR
+                        cur.execute("""
+                            INSERT INTO sovereignty.influence_color_assignments (
+                                entity_type,
+                                entity_id,
+                                color,
+                                color_hue,
+                                color_saturation,
+                                color_lightness,
+                                valid_from
+                            )
+                            VALUES (%s, %s, %s, %s, %s, %s, %s)
+                        """, (
+                            entity_type,
+                            seed_id,
+                            color,
+                            hue,
+                            saturation,
+                            lightness,
+                            selected_date,
+                        ))
+
+                    cur.execute("""
+                        INSERT INTO sovereignty.influence_color_state (
+                            entity_type,
+                            initialized_at
+                        )
+                        VALUES (%s, NOW())
+                        ON CONFLICT (entity_type) DO NOTHING
+                    """, (entity_type,))
+
+                    assignments = _load_influence_assignments(
+                        cur,
+                        entity_type,
+                        entity_ids,
+                        selected_date,
+                    )
+
+                used_colors = [
+                    row["components"]
+                    for row in assignments.values()
+                ]
+
+                missing_ids = [
+                    entity_id
+                    for entity_id in entity_ids
+                    if entity_id not in assignments
+                ]
+                for entity_id in missing_ids:
+                    color, hue, saturation, lightness = _pick_influence_color(
+                        used_colors,
+                        entity_id,
+                    )
+                    cur.execute("""
+                        INSERT INTO sovereignty.influence_color_assignments (
+                            entity_type,
+                            entity_id,
+                            color,
+                            color_hue,
+                            color_saturation,
+                            color_lightness,
+                            valid_from
+                        )
+                        VALUES (%s, %s, %s, %s, %s, %s, %s)
+                    """, (
+                        entity_type,
+                        entity_id,
+                        color,
+                        hue,
+                        saturation,
+                        lightness,
+                        selected_date,
+                    ))
+                    assignments[entity_id] = {
+                        "color": color,
+                        "components": (hue, saturation, lightness),
+                    }
+                    used_colors.append((hue, saturation, lightness))
+            else:
+                assignments = _load_influence_assignments(
+                    cur,
+                    entity_type,
+                    entity_ids,
+                    selected_date,
+                )
+
+                # Dates older than the colour table itself have no factual
+                # assignment to recover. Keep those historical views usable
+                # without inventing persisted history.
+                used_colors = [
+                    row["components"]
+                    for row in assignments.values()
+                ]
+                for entity_id in entity_ids:
+                    if entity_id in assignments:
+                        continue
+                    color, hue, saturation, lightness = _pick_influence_color(
+                        used_colors,
+                        entity_id,
+                    )
+                    assignments[entity_id] = {
+                        "color": color,
+                        "components": (hue, saturation, lightness),
+                    }
+                    used_colors.append((hue, saturation, lightness))
+
+        conn.commit()
+
+    for entity_id, group in entity_groups.items():
+        row = assignments.get(entity_id)
+        if row:
+            group["color"] = row["color"]
 
 
 def get_eve_2d_influence(target_date=None, grouping="coalition"):
@@ -560,7 +867,7 @@ def get_eve_2d_influence(target_date=None, grouping="coalition"):
                     "entity_type": "alliance",
                     "entity_id": int(alliance_id),
                     "name": alliance_names.get(int(alliance_id), f"Alliance {alliance_id}"),
-                    "color": _influence_color(int(alliance_id)),
+                    "color": None,
                     "system_ids": [],
                 }
             groups[group_id]["system_ids"].append(int(system_id))
@@ -647,7 +954,7 @@ def get_eve_2d_influence(target_date=None, grouping="coalition"):
                 "entity_type": "coalition",
                 "entity_id": coalition_id,
                 "name": coalitions[coalition_id]["name"],
-                "color": _influence_color(coalition_id),
+                "color": None,
                 "system_ids": [],
             }
             groups[group_id] = group
@@ -679,6 +986,14 @@ def get_eve_2d_influence(target_date=None, grouping="coalition"):
         for group in groups.values()
         if group["system_ids"]
     ]
+
+    _apply_persistent_influence_colors(
+        result_groups,
+        grouping,
+        selected_date,
+        latest_date,
+    )
+
     result_groups.sort(key=lambda item: (-len(item["system_ids"]), item["name"].casefold()))
 
     return {
