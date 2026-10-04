@@ -1563,6 +1563,22 @@
       }
     }
 
+    let previousColors = new Map();
+    prepared.forEach(payload => {
+      const currentColors = new Map();
+      const groups = Array.isArray(payload && payload.groups) ? payload.groups : [];
+      groups.forEach(group => {
+        const groupId = String(group && group.id || "");
+        if (groupId && previousColors.has(groupId)) {
+          group.color = previousColors.get(groupId);
+        }
+        if (groupId && group.color) {
+          currentColors.set(groupId, group.color);
+        }
+      });
+      previousColors = currentColors;
+    });
+
     cinematicSeries = prepared;
     cinematicSeriesKey = key;
     return cinematicSeries;
