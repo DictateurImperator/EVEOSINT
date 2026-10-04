@@ -97,7 +97,7 @@ def _load_color_rows():
                             event_at DESC,
                             event_id DESC
                     )
-                    SELECT DISTINCT
+                    SELECT
                         a.alliance_id,
                         a.name
                     FROM latest_system_state s
@@ -105,6 +105,7 @@ def _load_color_rows():
                       ON a.alliance_id = s.alliance_id
                     WHERE s.action = 'GAIN'
                       AND s.alliance_id IS NOT NULL
+                    GROUP BY a.alliance_id, a.name
                     ORDER BY lower(a.name), a.alliance_id
                 """)
                 alliance_rows = cur.fetchall()
