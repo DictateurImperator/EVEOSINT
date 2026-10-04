@@ -363,6 +363,17 @@ def reconcile(conn, force=False):
         if _same_sov_owner(old_owner, new_owner):
             continue
 
+        LOG.info(
+            "SOV_RECONCILE correction system=%d observed_at=%s "
+            "old_alliance=%s old_faction=%s new_alliance=%s new_faction=%s",
+            system_id,
+            observed_at,
+            old_owner[0],
+            old_owner[2],
+            new_owner[0],
+            new_owner[2],
+        )
+
         if _has_owner(old_owner):
             corrections.append((
                 system_id,
