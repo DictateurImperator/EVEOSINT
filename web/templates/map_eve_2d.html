@@ -86,7 +86,7 @@
     z-index:4;
     top:14px;
     left:14px;
-    width:250px;
+    width:310px;
     padding:12px;
     border:1px solid rgba(111,137,173,.26);
     border-radius:10px;
@@ -289,6 +289,186 @@
   .eve2d-cinematic-actions input {
     min-width:0;
   }
+  .eve2d-heat-controls {
+    margin-top:10px;
+    padding-top:10px;
+    border-top:1px solid rgba(111,137,173,.17);
+  }
+  .eve2d-heat-controls[hidden] { display:none; }
+  .eve2d-heat-controls label {
+    display:block;
+    margin-bottom:5px;
+    font-size:.72rem;
+    color:#8ea0b7;
+  }
+  .eve2d-heat-source {
+    display:grid;
+    grid-template-columns:repeat(3,1fr);
+    gap:6px;
+    margin-bottom:9px;
+  }
+  .eve2d-heat-metric {
+    display:grid;
+    grid-template-columns:1fr 1fr;
+    gap:6px;
+    margin-bottom:9px;
+  }
+  .eve2d-heat-range {
+    display:grid;
+    grid-template-columns:1fr 1fr;
+    gap:6px;
+    margin-bottom:9px;
+  }
+  .eve2d-heat-range input { min-width:0; }
+  .eve2d-heat-scale {
+    display:grid;
+    grid-template-columns:auto minmax(0,1fr);
+    align-items:end;
+    gap:8px;
+    margin-top:8px;
+  }
+  .eve2d-heat-scale-value[hidden] { display:none; }
+  .eve2d-heat-evolution {
+    margin-top:10px;
+    padding-top:10px;
+    border-top:1px solid rgba(111,137,173,.17);
+  }
+  .eve2d-heat-evolution-controls {
+    display:grid;
+    grid-template-columns:1fr 1fr auto;
+    gap:6px;
+    align-items:end;
+    margin-top:8px;
+  }
+  .eve2d-heat-evolution-controls[hidden] { display:none; }
+  .eve2d-heat-advanced {
+    margin-top:10px;
+    padding-top:10px;
+    border-top:1px solid rgba(111,137,173,.17);
+  }
+  .eve2d-heat-advanced-panel {
+    display:grid;
+    gap:9px;
+    margin-top:8px;
+  }
+  .eve2d-heat-advanced-panel[hidden] { display:none; }
+  .eve2d-heat-family {
+    border:1px solid rgba(111,137,173,.16);
+    border-radius:8px;
+    padding:8px;
+    background:rgba(255,255,255,.018);
+  }
+  .eve2d-heat-family-title {
+    margin-bottom:6px;
+    font-size:.7rem;
+    font-weight:800;
+    color:#b7c6d9;
+  }
+  .eve2d-heat-search-wrap { position:relative; }
+  .eve2d-heat-results {
+    position:absolute;
+    z-index:20;
+    left:0;
+    right:0;
+    top:calc(100% + 3px);
+    display:none;
+    max-height:240px;
+    overflow:auto;
+    border:1px solid rgba(111,137,173,.3);
+    border-radius:7px;
+    background:#08111e;
+    box-shadow:0 10px 30px rgba(0,0,0,.4);
+  }
+  .eve2d-heat-results.show { display:block; }
+  .eve2d-heat-result {
+    display:flex;
+    gap:7px;
+    align-items:center;
+    padding:6px 7px;
+    cursor:pointer;
+    border-bottom:1px solid rgba(111,137,173,.1);
+  }
+  .eve2d-heat-result:hover { background:rgba(70,130,210,.14); }
+  .eve2d-heat-result img,
+  .eve2d-heat-term img {
+    width:26px;
+    height:26px;
+    object-fit:contain;
+    border-radius:4px;
+    background:rgba(255,255,255,.05);
+    flex:0 0 26px;
+  }
+  .eve2d-heat-result-name {
+    min-width:0;
+    overflow:hidden;
+    text-overflow:ellipsis;
+    white-space:nowrap;
+    color:#dce7f5;
+    font-size:.72rem;
+    font-weight:700;
+  }
+  .eve2d-heat-result-meta {
+    color:#788aa1;
+    font-size:.62rem;
+  }
+  .eve2d-heat-terms {
+    display:grid;
+    gap:5px;
+    margin-top:6px;
+  }
+  .eve2d-heat-term {
+    display:grid;
+    grid-template-columns:30px 26px minmax(0,1fr) 78px 20px;
+    gap:5px;
+    align-items:center;
+    padding:5px;
+    border:1px solid rgba(111,137,173,.14);
+    border-radius:7px;
+    background:rgba(2,6,23,.38);
+  }
+  .eve2d-heat-term.minus { border-color:rgba(248,113,113,.28); }
+  .eve2d-heat-sign {
+    width:30px;
+    height:28px;
+    padding:0;
+    font-weight:900;
+  }
+  .eve2d-heat-term-name {
+    min-width:0;
+    overflow:hidden;
+    text-overflow:ellipsis;
+    white-space:nowrap;
+    font-size:.68rem;
+    color:#d7e3f3;
+  }
+  .eve2d-heat-role {
+    min-width:0;
+    padding:.18rem .3rem;
+    font-size:.62rem;
+  }
+  .eve2d-heat-remove {
+    border:0;
+    background:transparent;
+    color:#fca5a5;
+    font-weight:900;
+    padding:0;
+  }
+  .eve2d-heat-empty {
+    color:#65758c;
+    font-size:.65rem;
+    padding:3px 0;
+  }
+  .eve2d-heat-actions {
+    display:flex;
+    gap:6px;
+    align-items:center;
+  }
+  .eve2d-heat-status {
+    min-height:16px;
+    margin-top:7px;
+    color:#788aa1;
+    font-size:.68rem;
+  }
   .eve2d-static-host {
     position:absolute;
     inset:0;
@@ -342,6 +522,7 @@
       <div class="eve2d-mode-list">
         <button class="eve2d-mode-option active" type="button" data-eve2d-mode="systems">Systems</button>
         <button class="eve2d-mode-option" type="button" data-eve2d-mode="influence">Influence</button>
+        <button class="eve2d-mode-option" type="button" data-eve2d-mode="heat">Fight Heat Map</button>
       </div>
       <div class="eve2d-common-controls">
         <label class="eve2d-check-label" for="eve2dInteractive">
@@ -363,7 +544,7 @@
         <div class="eve2d-cinematic-toggle">
           <label class="eve2d-check-label" for="eve2dCinematic">
             <input type="checkbox" id="eve2dCinematic">
-            <span>Cinematic mode</span>
+            <span>Evolution mode</span>
           </label>
         </div>
 
@@ -396,6 +577,91 @@
 
         <div class="eve2d-influence-status" id="eve2dInfluenceStatus"></div>
       </div>
+
+      <div class="eve2d-heat-controls" id="eve2dHeatControls" hidden>
+        <label>Source</label>
+        <div class="eve2d-heat-source">
+          <button class="eve2d-group-option active" type="button" data-heat-source="api">Killboard</button>
+          <button class="eve2d-group-option" type="button" data-heat-source="total">Total</button>
+          <button class="eve2d-group-option" type="button" data-heat-source="hidden">Hidden</button>
+        </div>
+
+        <label>Value</label>
+        <div class="eve2d-heat-metric">
+          <button class="eve2d-group-option active" type="button" data-heat-metric="kills">Kills</button>
+          <button class="eve2d-group-option" type="button" data-heat-metric="isk" disabled title="ISK is not available in Killboard mode yet">ISK</button>
+        </div>
+
+        <div class="eve2d-heat-range">
+          <div>
+            <label for="eve2dHeatFrom">From · UTC</label>
+            <input class="form-control form-control-sm" type="datetime-local" id="eve2dHeatFrom">
+          </div>
+          <div>
+            <label for="eve2dHeatTo">To · UTC</label>
+            <input class="form-control form-control-sm" type="datetime-local" id="eve2dHeatTo">
+          </div>
+        </div>
+
+        <div class="eve2d-heat-scale">
+          <label class="eve2d-check-label" for="eve2dHeatAutoScale">
+            <input type="checkbox" id="eve2dHeatAutoScale" checked>
+            <span>Auto scale</span>
+          </label>
+          <div class="eve2d-heat-scale-value" id="eve2dHeatScaleValue" hidden>
+            <label for="eve2dHeatCap">100% threshold</label>
+            <input class="form-control form-control-sm" type="number" min="0" step="1" id="eve2dHeatCap">
+          </div>
+        </div>
+
+        <div class="eve2d-heat-evolution">
+          <label class="eve2d-check-label" for="eve2dHeatEvolution">
+            <input type="checkbox" id="eve2dHeatEvolution">
+            <span>Evolution mode</span>
+          </label>
+          <div class="eve2d-heat-evolution-controls" id="eve2dHeatEvolutionControls" hidden>
+            <div>
+              <label for="eve2dHeatWindowHours">Window · hours</label>
+              <input class="form-control form-control-sm" type="number" min="1" step="1" value="24" id="eve2dHeatWindowHours">
+            </div>
+            <div>
+              <label for="eve2dHeatFps">Images / second</label>
+              <input class="form-control form-control-sm" type="number" min="1" max="30" step="1" value="4" id="eve2dHeatFps">
+            </div>
+            <button class="btn btn-sm btn-outline-primary" type="button" id="eve2dHeatPlay">Play</button>
+          </div>
+        </div>
+
+        <div class="eve2d-heat-advanced">
+          <button class="btn btn-sm btn-outline-secondary w-100" type="button" id="eve2dHeatAdvancedToggle">Advanced filters</button>
+          <div class="eve2d-heat-advanced-panel" id="eve2dHeatAdvancedPanel" hidden>
+            <section class="eve2d-heat-family">
+              <div class="eve2d-heat-family-title">Alliance / Coalition</div>
+              <div class="eve2d-heat-search-wrap">
+                <input class="form-control form-control-sm" type="search" placeholder="Search alliance or coalition…" autocomplete="off" data-heat-search="entity">
+                <div class="eve2d-heat-results" data-heat-results="entity"></div>
+              </div>
+              <div class="eve2d-heat-terms" data-heat-terms="entity"></div>
+            </section>
+
+            <section class="eve2d-heat-family">
+              <div class="eve2d-heat-family-title">Ships / Structures</div>
+              <div class="eve2d-heat-search-wrap">
+                <input class="form-control form-control-sm" type="search" placeholder="Search ship or structure…" autocomplete="off" data-heat-search="ship">
+                <div class="eve2d-heat-results" data-heat-results="ship"></div>
+              </div>
+              <div class="eve2d-heat-terms" data-heat-terms="ship"></div>
+            </section>
+
+            <div class="eve2d-heat-actions">
+              <button class="btn btn-sm btn-primary" type="button" id="eve2dHeatApplyFilters">Apply filters</button>
+              <button class="btn btn-sm btn-outline-light" type="button" id="eve2dHeatClearFilters">Clear</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="eve2d-heat-status" id="eve2dHeatStatus"></div>
+      </div>
     </div>
     <div class="eve2d-ranking-panel" id="eve2dRankingPanel" hidden>
       <div class="eve2d-ranking-head">
@@ -420,6 +686,24 @@
   const staticHost = document.getElementById("eve2dStaticHost");
   const tooltip = document.getElementById("eve2dTooltip");
   const influenceControls = document.getElementById("eve2dInfluenceControls");
+  const heatControls = document.getElementById("eve2dHeatControls");
+  const heatFrom = document.getElementById("eve2dHeatFrom");
+  const heatTo = document.getElementById("eve2dHeatTo");
+  const heatAutoScale = document.getElementById("eve2dHeatAutoScale");
+  const heatScaleValue = document.getElementById("eve2dHeatScaleValue");
+  const heatCap = document.getElementById("eve2dHeatCap");
+  const heatEvolutionToggle = document.getElementById("eve2dHeatEvolution");
+  const heatEvolutionControls = document.getElementById("eve2dHeatEvolutionControls");
+  const heatWindowHours = document.getElementById("eve2dHeatWindowHours");
+  const heatFps = document.getElementById("eve2dHeatFps");
+  const heatPlay = document.getElementById("eve2dHeatPlay");
+  const heatAdvancedToggle = document.getElementById("eve2dHeatAdvancedToggle");
+  const heatAdvancedPanel = document.getElementById("eve2dHeatAdvancedPanel");
+  const heatApplyFilters = document.getElementById("eve2dHeatApplyFilters");
+  const heatClearFilters = document.getElementById("eve2dHeatClearFilters");
+  const heatStatus = document.getElementById("eve2dHeatStatus");
+  const heatSourceButtons = Array.from(document.querySelectorAll("[data-heat-source]"));
+  const heatMetricButtons = Array.from(document.querySelectorAll("[data-heat-metric]"));
   const influenceDate = document.getElementById("eve2dInfluenceDate");
   const singleDateControls = document.getElementById("eve2dSingleDateControls");
   const interactiveToggle = document.getElementById("eve2dInteractive");
@@ -535,6 +819,14 @@
   let pointerX = 0;
   let pointerY = 0;
   let activeMode = "systems";
+  let heatSource = "api";
+  let heatMetric = "kills";
+  let heatBySystem = new Map();
+  let currentHeatPayload = null;
+  let heatRequestToken = 0;
+  let heatEvolutionPlaying = false;
+  let heatEvolutionRunToken = 0;
+  let heatFilters = {entity: [], ship: []};
   let influenceGroups = [];
   let influenceBySystem = new Map();
   let influenceSurface = null;
