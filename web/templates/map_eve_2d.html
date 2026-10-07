@@ -1814,9 +1814,12 @@
 
   function appendHeatFilterParams(params) {
     heatFilters.ship.forEach(term => {
+      const isGroup = term.entity_type === "ship_group";
+      const value = isGroup ? String(term.group_name || "") : String(term.entity_id);
+      if (!value) return;
       params.append(
         term.sign > 0 ? "ship_include" : "ship_exclude",
-        (term.role || "both") + ":" + term.entity_id
+        (term.role || "both") + ":" + (isGroup ? "group" : "type") + ":" + value
       );
     });
     heatFilters.entity.forEach(term => {
@@ -2050,13 +2053,23 @@
   }
 
   function addHeatTerm(kind, item) {
-    const entityType = kind === "ship" ? "ship" : String(item.entity_type || "");
+    const entityType = kind === "ship"
+      ? (item.entity_type === "ship_group" ? "ship_group" : "ship")
+      : String(item.entity_type || "");
     const entityId = Number(item.entity_id);
+    const groupName = entityType === "ship_group"
+      ? String(item.group_name || item.name || item.label || "").trim()
+      : "";
     if (!Number.isFinite(entityId) || !entityType) return;
+    if (entityType === "ship_group" && !groupName) return;
 
-    const exists = heatFilters[kind].some(term =>
-      term.entity_type === entityType && Number(term.entity_id) === entityId
-    );
+    const exists = heatFilters[kind].some(term => {
+      if (term.entity_type !== entityType) return false;
+      if (entityType === "ship_group") {
+        return String(term.group_name || "").toLowerCase() === groupName.toLowerCase();
+      }
+      return Number(term.entity_id) === entityId;
+    });
     if (exists) return;
 
     heatFilters[kind].push({
@@ -2064,6 +2077,7 @@
       role:"both",
       entity_type:entityType,
       entity_id:entityId,
+      group_name:groupName,
       name:item.name || item.label || (entityType + " " + entityId),
       label:item.label || item.name || (entityType + " " + entityId),
       image_url:item.image_url || "",
