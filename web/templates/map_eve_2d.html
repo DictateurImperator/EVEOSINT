@@ -2133,7 +2133,7 @@
       heatSearchTimers[kind] = setTimeout(async () => {
         if (heatSearchAborters[kind]) heatSearchAborters[kind].abort();
         heatSearchAborters[kind] = new AbortController();
-        const searchKind = kind === "entity" ? "heat_entity" : "ship";
+        const searchKind = kind === "entity" ? "heat_entity" : "heat_ship";
 
         try {
           const response = await fetch(
