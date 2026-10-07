@@ -2028,6 +2028,12 @@ def _filtered_entity_killmail_month_entries(
     if filters.get("date_to"):
         clauses.append("base.killmail_time < (%s::date + INTERVAL '1 day')")
         params.append(filters["date_to"])
+    if filters.get("datetime_from"):
+        clauses.append("base.killmail_time >= %s::timestamptz")
+        params.append(filters["datetime_from"])
+    if filters.get("datetime_to"):
+        clauses.append("base.killmail_time < %s::timestamptz")
+        params.append(filters["datetime_to"])
 
     scan_before = filters.get("scan_before")
     scan_row = filters.get("scan_row")
