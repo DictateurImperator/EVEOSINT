@@ -381,19 +381,30 @@ def _ship_filter_sql(column, series):
     return "(" + " AND ".join(clauses) + ")", params
 
 
-def _participant_filter_sql(alias, series):
+def _participant_filter_sql(alias, series, *, victim=False):
     clauses = []
     params = []
+
+    corporation_column = (
+        f"{alias}.victim_corporation_id"
+        if victim
+        else f"{alias}.corporation_id"
+    )
+    alliance_column = (
+        f"{alias}.victim_alliance_id"
+        if victim
+        else f"{alias}.alliance_id"
+    )
 
     corp_plus, corp_minus = _split_terms(series.get("corporations"))
     corp_plus = [int(value) for value in corp_plus if value is not None]
     corp_minus = [int(value) for value in corp_minus if value is not None]
 
     if corp_plus:
-        clauses.append(f"{alias}.corporation_id = ANY(%s)")
+        clauses.append(f"{corporation_column} = ANY(%s)")
         params.append(corp_plus)
     if corp_minus:
-        clauses.append(f"({alias}.corporation_id IS NULL OR NOT ({alias}.corporation_id = ANY(%s)))")
+        clauses.append(f"({corporation_column} IS NULL OR NOT ({corporation_column} = ANY(%s)))")
         params.append(corp_minus)
 
     alliance_plus, alliance_minus = _split_terms(series.get("alliances"))
@@ -405,27 +416,26 @@ def _participant_filter_sql(alias, series):
     if alliance_plus_ids or plus_none:
         parts = []
         if alliance_plus_ids:
-            parts.append(f"{alias}.alliance_id = ANY(%s)")
+            parts.append(f"{alliance_column} = ANY(%s)")
             params.append(alliance_plus_ids)
         if plus_none:
-            parts.append(f"{alias}.alliance_id IS NULL")
+            parts.append(f"{alliance_column} IS NULL")
         clauses.append("(" + " OR ".join(parts) + ")")
 
     if alliance_minus_ids or minus_none:
         parts = []
         if alliance_minus_ids:
-            parts.append(f"{alias}.alliance_id = ANY(%s)")
+            parts.append(f"{alliance_column} = ANY(%s)")
             params.append(alliance_minus_ids)
         if minus_none:
-            parts.append(f"{alias}.alliance_id IS NULL")
+            parts.append(f"{alliance_column} IS NULL")
         excluded = "(" + " OR ".join(parts) + ")"
         if minus_none:
             clauses.append(f"NOT {excluded}")
         else:
-            clauses.append(f"({alias}.alliance_id IS NULL OR NOT {excluded})")
+            clauses.append(f"({alliance_column} IS NULL OR NOT {excluded})")
 
     return clauses, params
-
 
 def _resolve_zone_sets(conn, series):
     plus_terms = []
@@ -497,7 +507,11 @@ def _event_branch_sql(side, relation, kill_relation, period_start, period_end, s
     ]
     params = [period_start, period_end + timedelta(days=1)]
 
-    participant_clauses, participant_params = _participant_filter_sql(participant_alias, series)
+    participant_clauses, participant_params = _participant_filter_sql(
+        participant_alias,
+        series,
+        victim=(side == "victim"),
+    )
     clauses.extend(participant_clauses)
     params.extend(participant_params)
 
