@@ -918,30 +918,58 @@ def global_killboard_search(
 
     if kind == "ship":
         needle = query.lower()
-        items = []
-        for item in get_killmail_ship_options():
+        options = get_killmail_ship_options()
+        group_matches = {}
+        ship_matches = []
+
+        for item in options:
+            group_name = str(item.get("group_name") or "").strip()
+            if group_name and needle in group_name.lower():
+                key = group_name.lower()
+                if key not in group_matches:
+                    group_matches[key] = {
+                        "entity_type": "ship_group",
+                        "entity_id": int(item["entity_id"]),
+                        "group_name": group_name,
+                        "name": group_name,
+                        "label": group_name,
+                        "subtitle": "Ship class",
+                        "image_url": item.get("image_url"),
+                        "is_structure": bool(item.get("is_structure")),
+                    }
+
             haystack = " ".join([
                 str(item.get("entity_id") or ""),
                 str(item.get("name") or ""),
-                str(item.get("group_name") or ""),
+                group_name,
                 str(item.get("ship_display_size") or item.get("ship_size") or ""),
                 str(item.get("selection_faction") or item.get("faction_name") or ""),
                 str(item.get("category_name") or ""),
             ]).lower()
             if needle not in haystack:
                 continue
-            items.append({
+            ship_matches.append({
                 "entity_type": "ship",
                 "entity_id": int(item["entity_id"]),
                 "name": item.get("name") or f"Type {item['entity_id']}",
                 "label": item.get("name") or f"Type {item['entity_id']}",
-                "subtitle": item.get("group_name") or ("Structure" if item.get("is_structure") else "Ship"),
+                "subtitle": group_name or ("Structure" if item.get("is_structure") else "Ship"),
                 "image_url": item.get("image_url"),
                 "is_structure": bool(item.get("is_structure")),
             })
-            if len(items) >= limit:
-                break
-        return JSONResponse({"results": items})
+
+        groups = sorted(
+            group_matches.values(),
+            key=lambda item: str(item.get("label") or "").casefold(),
+        )
+        ships = sorted(
+            ship_matches,
+            key=lambda item: (
+                0 if str(item.get("label") or "").casefold().startswith(needle) else 1,
+                str(item.get("label") or "").casefold(),
+            ),
+        )
+        return JSONResponse({"results": (groups + ships)[:limit]})
 
     return JSONResponse({"results": [], "error": "invalid_kind"}, status_code=400)
 
