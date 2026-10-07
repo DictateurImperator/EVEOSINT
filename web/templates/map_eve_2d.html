@@ -1304,29 +1304,6 @@
     ctx.strokeStyle = "rgba(3,8,15,.32)";
     ctx.fillStyle = "rgba(188,205,226,.14)";
 
-    if (activeMode === "heat" && heatBySystem.size) {
-      heatBySystem.forEach((entry, systemId) => {
-        const node = nodeById.get(String(systemId));
-        if (!node) return;
-        const ratio = heatRatio(entry.value);
-        if (ratio <= 0) return;
-        const radius = 10 + Math.sqrt(ratio) * 34;
-
-        svg.appendChild(svgElement("circle", {
-          cx:node._x,
-          cy:node._y,
-          r:radius * 1.45,
-          fill:"rgba(255,76,40," + Math.min(.18, ratio * .18).toFixed(3) + ")",
-        }));
-        svg.appendChild(svgElement("circle", {
-          cx:node._x,
-          cy:node._y,
-          r:radius,
-          fill:heatFill(ratio),
-        }));
-      });
-    }
-
     regionLabels.forEach(label => {
       if (!label.name) return;
       const p = worldToScreen(label);
@@ -1632,6 +1609,30 @@
       });
       image.setAttribute("href", influenceSurface.toDataURL("image/png"));
       svg.appendChild(image);
+    }
+
+    if (activeMode === "heat" && heatBySystem.size) {
+      heatBySystem.forEach((entry, systemId) => {
+        const node = nodeById.get(String(systemId));
+        if (!node || node.space === "anoikis") return;
+
+        const ratio = heatRatio(entry.value);
+        if (ratio <= 0) return;
+        const radius = 10 + Math.sqrt(ratio) * 34;
+
+        svg.appendChild(svgElement("circle", {
+          cx:node._x,
+          cy:node._y,
+          r:radius * 1.45,
+          fill:"rgba(255,76,40," + Math.min(.18, ratio * .18).toFixed(3) + ")",
+        }));
+        svg.appendChild(svgElement("circle", {
+          cx:node._x,
+          cy:node._y,
+          r:radius,
+          fill:heatFill(ratio),
+        }));
+      });
     }
 
     regionLabels.forEach(label => {
