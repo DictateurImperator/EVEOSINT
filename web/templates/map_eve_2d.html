@@ -1765,6 +1765,34 @@
       });
     }
 
+    if (activeMode === "heat" && heatBySystem.size) {
+      heatBySystem.forEach((entry, systemId) => {
+        const node = nodeById.get(String(systemId));
+        if (!node || node.space === "anoikis") return;
+
+        const ratio = heatRatio(entry.value);
+        if (ratio <= 0) return;
+
+        const link = svgElement("a", {
+          href:heatKillboardUrl(node),
+          cursor:"pointer",
+        });
+        link.appendChild(svgElement("title", {}, 
+          (node.name || ("System " + node.id)) +
+          " · " + formatHeatValue(entry.value) +
+          " · Open filtered Killboard"
+        ));
+        link.appendChild(svgElement("circle", {
+          cx:node._x,
+          cy:node._y,
+          r:Math.max(12, Math.min(28, 10 + Math.sqrt(ratio) * 34)),
+          fill:"transparent",
+          "pointer-events":"all",
+        }));
+        svg.appendChild(link);
+      });
+    }
+
     staticHost.replaceChildren(svg);
     staticSvg = svg;
     if (resetView) fitStaticMap();
@@ -1804,6 +1832,40 @@
     const parsed = new Date(value);
     if (!Number.isFinite(parsed.getTime())) return "";
     return parsed.toISOString().slice(0, 16);
+  }
+
+  function heatKillboardUrl(node) {
+    if (!node || !heatBySystem.has(String(node.id))) {
+      return node && node.url ? node.url : "#";
+    }
+
+    const params = new URLSearchParams();
+    const source = String(
+      (currentHeatPayload && currentHeatPayload.source) || heatSource || "api"
+    );
+    params.set("mode", source);
+
+    const exactFrom = heatInputValue(
+      currentHeatPayload && currentHeatPayload.from
+        ? currentHeatPayload.from
+        : (heatFrom && heatFrom.value)
+    );
+    const exactTo = heatInputValue(
+      currentHeatPayload && currentHeatPayload.to
+        ? currentHeatPayload.to
+        : (heatTo && heatTo.value)
+    );
+
+    if (exactFrom) {
+      params.set("datetime_from", exactFrom);
+      params.set("date_from", exactFrom.slice(0, 10));
+    }
+    if (exactTo) {
+      params.set("datetime_to", exactTo);
+      params.set("date_to", exactTo.slice(0, 10));
+    }
+
+    return "/system/" + encodeURIComponent(String(node.id)) + "?" + params.toString();
   }
 
   function stopHeatEvolution() {
@@ -2915,7 +2977,11 @@
 
     if (!moved) {
       const target = nearestNode(event.clientX, event.clientY);
-      if (target && target.url) window.location.href = target.url;
+      if (target && activeMode === "heat" && heatBySystem.has(String(target.id))) {
+        window.location.href = heatKillboardUrl(target);
+      } else if (target && target.url) {
+        window.location.href = target.url;
+      }
     }
   });
 
