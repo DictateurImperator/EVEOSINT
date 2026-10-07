@@ -589,6 +589,8 @@ def _killmail_filters_from_request(request):
         "participation": query.get("participation", "both"),
         "date_from": query.get("date_from"),
         "date_to": query.get("date_to"),
+        "datetime_from": query.get("datetime_from"),
+        "datetime_to": query.get("datetime_to"),
         "affiliation_corporation_ids": query.getlist("affiliation_corporation_ids"),
         "affiliation_alliance_ids": query.getlist("affiliation_alliance_ids"),
         "involved_corporation_ids": query.getlist("involved_corporation_ids"),
@@ -615,6 +617,8 @@ def _killmail_filters_have_user_filters(filters):
         str(filters.get("participation") or "both") != "both"
         or filters.get("date_from")
         or filters.get("date_to")
+        or filters.get("datetime_from")
+        or filters.get("datetime_to")
         or filters.get("affiliation_corporation_ids")
         or filters.get("affiliation_alliance_ids")
         or filters.get("involved_corporation_ids")
