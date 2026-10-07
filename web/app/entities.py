@@ -1279,6 +1279,8 @@ def _normalize_killmail_filters(filters):
         "participation": scalar("participation", {"both", "kills", "losses"}, "both"),
         "date_from": parsed_date("date_from"),
         "date_to": parsed_date("date_to"),
+        "datetime_from": parsed_datetime("datetime_from"),
+        "datetime_to": parsed_datetime("datetime_to"),
         "affiliation_corporation_ids": ids("affiliation_corporation_ids"),
         "affiliation_alliance_ids": ids("affiliation_alliance_ids"),
         "involved_corporation_ids": ids("involved_corporation_ids"),
@@ -1299,10 +1301,18 @@ def _normalize_killmail_filters(filters):
     }
     if result["date_from"] and result["date_to"] and result["date_from"] > result["date_to"]:
         raise EntityError("killmail_filter_date_range_invalid")
+    if (
+        result["datetime_from"]
+        and result["datetime_to"]
+        and result["datetime_from"] >= result["datetime_to"]
+    ):
+        raise EntityError("killmail_filter_datetime_range_invalid")
     result["active"] = bool(
         result["participation"] != "both"
         or result["date_from"]
         or result["date_to"]
+        or result["datetime_from"]
+        or result["datetime_to"]
         or result["affiliation_corporation_ids"]
         or result["affiliation_alliance_ids"]
         or result["involved_corporation_ids"]
@@ -2319,6 +2329,12 @@ def _filtered_entity_killmail_page_entries(conn, entity_type, entity_id, page, p
     if filters["date_to"]:
         clauses.append("base.killmail_time < (%s::date + INTERVAL '1 day')")
         params.append(filters["date_to"])
+    if filters.get("datetime_from"):
+        clauses.append("base.killmail_time >= %s::timestamptz")
+        params.append(filters["datetime_from"])
+    if filters.get("datetime_to"):
+        clauses.append("base.killmail_time < %s::timestamptz")
+        params.append(filters["datetime_to"])
 
     if entity_type == "character" and filters["affiliation_corporation_ids"]:
         clauses.append("((base.side = 'loss' AND km.victim_corporation_id = ANY(%s)) OR (base.side = 'kill' AND EXISTS (SELECT 1 FROM rawkm.killmail_attackers owna WHERE owna.killmail_id = base.killmail_id AND owna.killmail_time = base.killmail_time AND owna.character_id = %s AND owna.corporation_id = ANY(%s))))")
@@ -3147,6 +3163,12 @@ def _global_killmail_page_entries(conn, page=1, per_page=100, filters=None):
     if normalized_filters["date_to"]:
         clauses.append("km.killmail_time < (%s::date + INTERVAL '1 day')")
         params.append(normalized_filters["date_to"])
+    if normalized_filters.get("datetime_from"):
+        clauses.append("km.killmail_time >= %s::timestamptz")
+        params.append(normalized_filters["datetime_from"])
+    if normalized_filters.get("datetime_to"):
+        clauses.append("km.killmail_time < %s::timestamptz")
+        params.append(normalized_filters["datetime_to"])
 
     def legacy_involved(kind, values):
         victim = f"km.victim_{kind}_id = ANY(%s)"
@@ -4966,6 +4988,12 @@ def _group_entity_mer_killmails(conn, entity_type, entity_id, page=1, per_page=1
     if normalized_filters["date_to"]:
         clauses.append("m.kill_datetime < (%s::date + INTERVAL '1 day')")
         params.append(normalized_filters["date_to"])
+    if normalized_filters.get("datetime_from"):
+        clauses.append("m.kill_datetime >= %s::timestamptz")
+        params.append(normalized_filters["datetime_from"])
+    if normalized_filters.get("datetime_to"):
+        clauses.append("m.kill_datetime < %s::timestamptz")
+        params.append(normalized_filters["datetime_to"])
 
     if entity_type == "corporation" and normalized_filters["affiliation_alliance_ids"]:
         clauses.append(
@@ -5146,7 +5174,9 @@ def _group_entity_mer_killmails(conn, entity_type, entity_id, page=1, per_page=1
         resume_row = normalized_filters.get("scan_row")
 
         if scan_before is None:
-            if normalized_filters["date_to"]:
+            if normalized_filters.get("datetime_to"):
+                scan_before = normalized_filters["datetime_to"]
+            elif normalized_filters["date_to"]:
                 scan_before = datetime.combine(
                     normalized_filters["date_to"] + timedelta(days=1),
                     datetime.min.time(),
@@ -5155,7 +5185,9 @@ def _group_entity_mer_killmails(conn, entity_type, entity_id, page=1, per_page=1
             else:
                 scan_before = datetime.now(timezone.utc) + timedelta(seconds=1)
 
-        if normalized_filters["date_from"]:
+        if normalized_filters.get("datetime_from"):
+            scan_floor = normalized_filters["datetime_from"]
+        elif normalized_filters["date_from"]:
             scan_floor = datetime.combine(
                 normalized_filters["date_from"],
                 datetime.min.time(),
