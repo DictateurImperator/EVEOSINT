@@ -1312,20 +1312,75 @@ def _fight_heat_normalize_role(value):
 def _fight_heat_ship_terms(values):
     terms = []
     for raw in values or []:
-        parts = str(raw or "").split(":", 1)
-        if len(parts) != 2:
+        parts = str(raw or "").split(":", 2)
+        if len(parts) == 2:
+            try:
+                type_id = int(parts[1])
+            except (TypeError, ValueError):
+                continue
+            if type_id <= 0:
+                continue
+            terms.append({
+                "role": _fight_heat_normalize_role(parts[0]),
+                "type_id": type_id,
+            })
             continue
-        try:
-            type_id = int(parts[1])
-        except (TypeError, ValueError):
+        if len(parts) != 3:
             continue
-        if type_id <= 0:
-            continue
-        terms.append({
-            "role": _fight_heat_normalize_role(parts[0]),
-            "type_id": type_id,
-        })
+
+        role = _fight_heat_normalize_role(parts[0])
+        kind = str(parts[1] or "").strip().lower()
+        value = str(parts[2] or "").strip()
+
+        if kind == "type":
+            try:
+                type_id = int(value)
+            except (TypeError, ValueError):
+                continue
+            if type_id <= 0:
+                continue
+            terms.append({"role": role, "type_id": type_id})
+        elif kind == "group" and value:
+            terms.append({"role": role, "group_name": value})
     return terms
+
+
+def _fight_heat_resolve_ship_groups(cur, terms):
+    group_names = sorted({
+        str(term.get("group_name") or "").strip()
+        for term in terms
+        if term.get("group_name")
+    })
+    if not group_names:
+        return terms
+
+    cur.execute(
+        """
+        SELECT group_name, array_agg(entity_id ORDER BY entity_id)
+        FROM sde_work.ship_entities
+        WHERE lower(group_name) = ANY(%s)
+        GROUP BY group_name
+        """,
+        ([name.lower() for name in group_names],),
+    )
+    group_type_ids = {
+        str(group_name or "").strip().lower(): [
+            int(value) for value in (type_ids or [])
+        ]
+        for group_name, type_ids in cur.fetchall()
+    }
+
+    resolved = []
+    for term in terms:
+        if "type_id" in term:
+            resolved.append(term)
+            continue
+        group_name = str(term.get("group_name") or "").strip()
+        resolved.append({
+            "role": term["role"],
+            "type_ids": group_type_ids.get(group_name.lower(), []),
+        })
+    return resolved
 
 
 def _fight_heat_entity_terms(values):
@@ -1583,13 +1638,14 @@ def _fight_heat_term_predicate(
     from_dt,
     to_dt,
 ):
-    if "type_id" in term:
+    if "type_id" in term or "type_ids" in term:
+        type_ids = [term["type_id"]] if "type_id" in term else list(term.get("type_ids") or [])
         return _fight_heat_side_predicate(
             source,
             alias,
             term["role"],
             "ship",
-            [term["type_id"]],
+            type_ids,
         )
 
     if term["entity_type"] == "alliance":
@@ -1747,6 +1803,9 @@ def get_eve_2d_fight_heat(
                 if coalition_needed
                 else {}
             )
+
+            normalized_ship_include = _fight_heat_resolve_ship_groups(cur, normalized_ship_include)
+            normalized_ship_exclude = _fight_heat_resolve_ship_groups(cur, normalized_ship_exclude)
 
             _fight_heat_append_builder_terms(
                 clauses,
