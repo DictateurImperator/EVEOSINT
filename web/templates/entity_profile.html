@@ -728,6 +728,9 @@
       var isLocationContext = root.dataset.locationContext === '1';
       var advancedParams = new URLSearchParams();
       var linkedParams = new URLSearchParams(window.location.search || '');
+      if (['api', 'total', 'hidden'].includes(linkedParams.get('mode'))) {
+        killmailMode = linkedParams.get('mode');
+      }
       [
         'participation','date_from','date_to','datetime_from','datetime_to',
         'affiliation_corporation_ids','affiliation_alliance_ids',
