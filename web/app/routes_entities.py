@@ -916,7 +916,7 @@ def global_killboard_search(
             )
         })
 
-    if kind == "ship":
+    if kind == "heat_ship":
         needle = query.lower()
         options = get_killmail_ship_options()
         group_matches = {}
@@ -970,6 +970,33 @@ def global_killboard_search(
             ),
         )
         return JSONResponse({"results": (groups + ships)[:limit]})
+
+    if kind == "ship":
+        needle = query.lower()
+        items = []
+        for item in get_killmail_ship_options():
+            haystack = " ".join([
+                str(item.get("entity_id") or ""),
+                str(item.get("name") or ""),
+                str(item.get("group_name") or ""),
+                str(item.get("ship_display_size") or item.get("ship_size") or ""),
+                str(item.get("selection_faction") or item.get("faction_name") or ""),
+                str(item.get("category_name") or ""),
+            ]).lower()
+            if needle not in haystack:
+                continue
+            items.append({
+                "entity_type": "ship",
+                "entity_id": int(item["entity_id"]),
+                "name": item.get("name") or f"Type {item['entity_id']}",
+                "label": item.get("name") or f"Type {item['entity_id']}",
+                "subtitle": item.get("group_name") or ("Structure" if item.get("is_structure") else "Ship"),
+                "image_url": item.get("image_url"),
+                "is_structure": bool(item.get("is_structure")),
+            })
+            if len(items) >= limit:
+                break
+        return JSONResponse({"results": items})
 
     return JSONResponse({"results": [], "error": "invalid_kind"}, status_code=400)
 
