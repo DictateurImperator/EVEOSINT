@@ -729,7 +729,7 @@
       var advancedParams = new URLSearchParams();
       var linkedParams = new URLSearchParams(window.location.search || '');
       [
-        'participation','date_from','date_to',
+        'participation','date_from','date_to','datetime_from','datetime_to',
         'affiliation_corporation_ids','affiliation_alliance_ids',
         'involved_corporation_ids','involved_alliance_ids','involved_role',
         'type_ids','type_role','module_type_ids',
@@ -759,7 +759,7 @@
         var active = false;
         params.forEach(function(value, key) {
           if ([
-            'date_from','date_to',
+            'date_from','date_to','datetime_from','datetime_to',
             'affiliation_corporation_ids','affiliation_alliance_ids',
             'involved_corporation_ids','involved_alliance_ids','involved_role',
             'type_ids','type_role','module_type_ids',
