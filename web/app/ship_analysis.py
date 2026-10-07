@@ -437,6 +437,7 @@ def _participant_filter_sql(alias, series, *, victim=False):
 
     return clauses, params
 
+
 def _resolve_zone_sets(conn, series):
     plus_terms = []
     minus_terms = []
