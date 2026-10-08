@@ -2315,6 +2315,15 @@ def _filtered_entity_killmail_page_entries(conn, entity_type, entity_id, page, p
             victim_scope_predicate = f"km.{victim_column} = %s"
             attacker_scope_predicate = f"ka.{attacker_column} = %s"
             base_params = [entity_id, entity_id]
+    elif entity_type == "system":
+        if isinstance(entity_id, (list, tuple, set)):
+            scope_value = sorted({int(value) for value in entity_id if value is not None})
+            victim_scope_predicate = "km.solar_system_id = ANY(%s)"
+            base_params = [scope_value]
+        else:
+            victim_scope_predicate = "km.solar_system_id = %s"
+            base_params = [int(entity_id)]
+        attacker_scope_predicate = None
     else:
         raise EntityError("entity_type_invalid")
 
@@ -2324,10 +2333,11 @@ def _filtered_entity_killmail_page_entries(conn, entity_type, entity_id, page, p
     params = list(base_params)
     clauses = []
 
-    if filters["participation"] == "kills":
-        clauses.append("base.side = 'kill'")
-    elif filters["participation"] == "losses":
-        clauses.append("base.side = 'loss'")
+    if entity_type != "system":
+        if filters["participation"] == "kills":
+            clauses.append("base.side = 'kill'")
+        elif filters["participation"] == "losses":
+            clauses.append("base.side = 'loss'")
 
     if filters["date_from"]:
         clauses.append("base.killmail_time >= %s::date")
@@ -2409,6 +2419,21 @@ def _filtered_entity_killmail_page_entries(conn, entity_type, entity_id, page, p
         ORDER BY base.killmail_time DESC, base.killmail_id DESC
         LIMIT %s OFFSET %s
     """
+    if entity_type == "system":
+        # Location killboards treat every killmail in the system as a kill.
+        # Query the scoped killmails directly: no all-attacker UNION is needed.
+        system_clauses = [victim_scope_predicate] + [
+            clause.replace("base.killmail_time", "km.killmail_time")
+                  .replace("base.killmail_id", "km.killmail_id")
+            for clause in clauses
+        ]
+        query = f"""
+            SELECT 'kill'::text AS side, km.killmail_id, km.killmail_time
+            FROM rawkm.killmails km
+            WHERE {' AND '.join(system_clauses)}
+            ORDER BY km.killmail_time DESC, km.killmail_id DESC
+            LIMIT %s OFFSET %s
+        """
     params.extend([per_page + 1, offset])
     with conn.cursor() as cur:
         cur.execute("SET LOCAL statement_timeout = '120000ms'")
@@ -4287,17 +4312,18 @@ def _group_entity_killmails(conn, entity_type, entity_id, page=1, per_page=100, 
 
     try:
         ids_started = perf_counter()
-        page_entries, has_next, page, per_page = _entity_killmail_page_entries(
-            conn,
-            entity_type,
-            entity_id,
-            page=page,
-            per_page=per_page,
-            timing_marks=timing_marks,
-        )
         if normalized_filters["active"]:
             page_entries, has_next, page, per_page = _filtered_entity_killmail_page_entries(
                 conn, entity_type, entity_id, page, per_page, normalized_filters
+            )
+        else:
+            page_entries, has_next, page, per_page = _entity_killmail_page_entries(
+                conn,
+                entity_type,
+                entity_id,
+                page=page,
+                per_page=per_page,
+                timing_marks=timing_marks,
             )
         timing_marks["ids_ms"] = round((perf_counter() - ids_started) * 1000, 1)
         timing_marks["page_entries"] = len(page_entries)
