@@ -1,0 +1,60 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-start flex-wrap gap-3 mb-4">
+  <div>
+    <h1 class="h3 fw-bold mb-1">Web Logs</h1>
+    <div class="muted-line">Last 200 lines from the eveosint-web systemd journal.</div>
+  </div>
+  <div class="d-flex align-items-center gap-2">
+    <a class="btn btn-outline-secondary" href="/admin/web-logs">Refresh</a>
+    <button type="button" class="btn btn-outline-light" id="webLogsCopy" {% if not journal_text %}disabled{% endif %}>Copy logs</button>
+  </div>
+</div>
+
+{% if journal_error %}
+<div class="alert alert-warning" role="alert">
+  Unable to read the complete web journal: {{ journal_error }}
+</div>
+{% endif %}
+
+<section class="content-card p-3">
+  <div class="d-flex justify-content-between align-items-center mb-2">
+    <span class="muted-line small">journalctl -u eveosint-web -n 200 --no-pager</span>
+    <span class="muted-line small" id="webLogsCopyStatus" role="status" aria-live="polite"></span>
+  </div>
+  <pre id="webLogsContent" class="border border-secondary-subtle rounded-3 p-3 mb-0 small" style="white-space:pre;overflow:auto;max-height:70vh;user-select:text;">{{ journal_text or "No journal entries available." }}</pre>
+</section>
+
+<script>
+(() => {
+  const button = document.getElementById("webLogsCopy");
+  const source = document.getElementById("webLogsContent");
+  const status = document.getElementById("webLogsCopyStatus");
+  if (!button || !source || !status) return;
+
+  button.addEventListener("click", async () => {
+    const content = source.textContent;
+    try {
+      if (!navigator.clipboard || !navigator.clipboard.writeText) throw new Error("Clipboard API unavailable");
+      await navigator.clipboard.writeText(content);
+      status.textContent = "Copied.";
+    } catch (_) {
+      const area = document.createElement("textarea");
+      area.value = content;
+      area.style.position = "fixed";
+      area.style.left = "-9999px";
+      document.body.appendChild(area);
+      area.select();
+      try {
+        status.textContent = document.execCommand("copy") ? "Copied." : "Copy failed. Select the text manually.";
+      } catch (_) {
+        status.textContent = "Copy failed. Select the text manually.";
+      } finally {
+        area.remove();
+      }
+    }
+  });
+})();
+</script>
+{% endblock %}
