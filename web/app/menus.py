@@ -184,6 +184,23 @@ def build_context_menu(user, active_module, active_menu_key):
                     break
             items.insert(insert_at, git_item)
 
+    if active_module == "admin" and "admin.system.view" in user.get("permissions", set()):
+        if not any(item.get("menu_key") == "admin.web_logs" for item in items):
+            web_logs_item = {
+                "id": None,
+                "menu_key": "admin.web_logs",
+                "label": "Web Logs",
+                "href": "/admin/web-logs",
+                "icon": "≡",
+                "permission_key": "admin.system.view",
+            }
+            insert_at = len(items)
+            for index, item in enumerate(items):
+                if item.get("menu_key") == "admin.system":
+                    insert_at = index + 1
+                    break
+            items.insert(insert_at, web_logs_item)
+
     if active_module == "admin" and "admin.jobs.view" in user.get("permissions", set()):
         if not any(item.get("menu_key") == "admin.update_pipeline" for item in items):
             pipeline_item = {
