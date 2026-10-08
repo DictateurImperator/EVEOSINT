@@ -1298,6 +1298,10 @@ def _normalize_killmail_filters(filters):
         "builder_entity_exclude": entity_terms("builder_entity_exclude"),
         "builder_zone_include": zone_terms("builder_zone_include"),
         "builder_zone_exclude": zone_terms("builder_zone_exclude"),
+        "heat_ship_include": raw_list("heat_ship_include"),
+        "heat_ship_exclude": raw_list("heat_ship_exclude"),
+        "heat_entity_include": raw_list("heat_entity_include"),
+        "heat_entity_exclude": raw_list("heat_entity_exclude"),
     }
     if result["date_from"] and result["date_to"] and result["date_from"] > result["date_to"]:
         raise EntityError("killmail_filter_date_range_invalid")
@@ -1325,6 +1329,10 @@ def _normalize_killmail_filters(filters):
         or result["builder_entity_exclude"]
         or result["builder_zone_include"]
         or result["builder_zone_exclude"]
+        or result["heat_ship_include"]
+        or result["heat_ship_exclude"]
+        or result["heat_entity_include"]
+        or result["heat_entity_exclude"]
     )
     return result
 
@@ -1585,6 +1593,62 @@ def _append_killmail_builder_clauses(
             clauses.append(f"NOT ({victim_alias}.solar_system_id = ANY(%s))")
             params.append(system_ids)
 
+
+
+def _append_heatmap_location_filters(conn, filters, clauses, params, source, alias, time_column):
+    """Apply precisely the heat-map inclusion/exclusion rules to location killmails."""
+    keys = (
+        "heat_ship_include", "heat_ship_exclude",
+        "heat_entity_include", "heat_entity_exclude",
+    )
+    if not any(filters.get(key) for key in keys):
+        return
+
+    from .map_data import (
+        _fight_heat_append_builder_terms,
+        _fight_heat_entity_terms,
+        _fight_heat_load_coalition_rules,
+        _fight_heat_resolve_ship_groups,
+        _fight_heat_ship_terms,
+    )
+
+    ship_include = _fight_heat_ship_terms(filters["heat_ship_include"])
+    ship_exclude = _fight_heat_ship_terms(filters["heat_ship_exclude"])
+    entity_include = _fight_heat_entity_terms(filters["heat_entity_include"])
+    entity_exclude = _fight_heat_entity_terms(filters["heat_entity_exclude"])
+
+    needs_coalitions = any(
+        term["entity_type"] == "coalition"
+        for term in entity_include + entity_exclude
+    )
+    with conn.cursor() as cur:
+        ship_include = _fight_heat_resolve_ship_groups(cur, ship_include)
+        ship_exclude = _fight_heat_resolve_ship_groups(cur, ship_exclude)
+        coalition_rules = _fight_heat_load_coalition_rules(cur) if needs_coalitions else {}
+
+    # The heat-map link provides exact UTC datetimes. Date-only bounds remain
+    # supported for ordinary links and for historical coalition membership.
+    from_dt = filters.get("datetime_from")
+    to_dt = filters.get("datetime_to")
+    if from_dt is None and filters.get("date_from"):
+        from_dt = datetime.combine(filters["date_from"], datetime.min.time(), tzinfo=timezone.utc)
+    if to_dt is None and filters.get("date_to"):
+        to_dt = datetime.combine(
+            filters["date_to"] + timedelta(days=1), datetime.min.time(), tzinfo=timezone.utc
+        )
+    if from_dt is None:
+        from_dt = datetime(2007, 1, 1, tzinfo=timezone.utc)
+    if to_dt is None:
+        to_dt = datetime.now(timezone.utc) + timedelta(days=1)
+
+    _fight_heat_append_builder_terms(
+        clauses, params, source, alias, time_column,
+        ship_include, ship_exclude, coalition_rules, from_dt, to_dt,
+    )
+    _fight_heat_append_builder_terms(
+        clauses, params, source, alias, time_column,
+        entity_include, entity_exclude, coalition_rules, from_dt, to_dt,
+    )
 
 
 def _type_only_entity_killmail_page_entries(conn, entity_type, entity_id, page, per_page, filters):
@@ -2427,6 +2491,9 @@ def _filtered_entity_killmail_page_entries(conn, entity_type, entity_id, page, p
                   .replace("base.killmail_id", "km.killmail_id")
             for clause in clauses
         ]
+        _append_heatmap_location_filters(
+            conn, filters, system_clauses, params, "api", "km", "killmail_time"
+        )
         query = f"""
             SELECT 'kill'::text AS side, km.killmail_id, km.killmail_time
             FROM rawkm.killmails km
@@ -5161,6 +5228,11 @@ def _group_entity_mer_killmails(conn, entity_type, entity_id, page=1, per_page=1
         if zone_ids:
             clauses.append("NOT (m.solar_system_id = ANY(%s))")
             params.append(zone_ids)
+
+    if location_scope:
+        _append_heatmap_location_filters(
+            conn, normalized_filters, clauses, params, "total", "m", "kill_datetime"
+        )
 
     select_sql = f"""
         SELECT
