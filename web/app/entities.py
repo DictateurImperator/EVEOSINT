@@ -2207,6 +2207,10 @@ def _filtered_entity_killmail_month_entries(
         victim_alias="km",
         attacker_table_sql=attacker_relation,
     )
+    if scope["entity_type"] == "system":
+        _append_heatmap_location_filters(
+            conn, filters, clauses, params, "api", "km", "killmail_time"
+        )
 
     where_sql = (
         "WHERE " + " AND ".join(clauses)
