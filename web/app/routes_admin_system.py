@@ -1,3 +1,5 @@
+import subprocess
+
 from fastapi import APIRouter, Form, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
@@ -32,6 +34,58 @@ def admin_system(request: Request):
     context.update({"system": get_system_snapshot()})
 
     return templates.TemplateResponse(request=request, name="admin_system.html", context=context)
+
+
+
+
+@router.get("/admin/web-logs", response_class=HTMLResponse)
+def admin_web_logs(request: Request):
+    user = require_login(request)
+    redirect = require_permission_or_redirect(user, "admin.system.view")
+    if redirect:
+        return redirect
+
+    journal_text = ""
+    journal_error = None
+    try:
+        result = subprocess.run(
+            ["journalctl", "-u", "eveosint-web", "-n", "200", "--no-pager"],
+            capture_output=True,
+            text=True,
+            errors="replace",
+            timeout=10,
+            check=False,
+        )
+        journal_text = result.stdout.rstrip("\n")
+        if result.returncode != 0:
+            journal_error = result.stderr.strip() or "journalctl failed."
+        elif not journal_text or journal_text.strip() == "-- No entries --":
+            journal_error = (
+                result.stderr.strip()
+                or "No entries visible. Check the web service user's journal permissions."
+            )
+            journal_text = ""
+    except subprocess.TimeoutExpired:
+        journal_error = "Reading the journal timed out."
+    except OSError as exc:
+        journal_error = f"Cannot run journalctl: {exc}"
+
+    context = app_context(
+        request=request,
+        user=user,
+        title="EVEOSINT - Web Logs",
+        active_module="admin",
+        active_menu_key="admin.web_logs",
+    )
+    context.update({
+        "journal_text": journal_text,
+        "journal_error": journal_error,
+    })
+    return templates.TemplateResponse(
+        request=request,
+        name="admin_web_logs.html",
+        context=context,
+    )
 
 
 
