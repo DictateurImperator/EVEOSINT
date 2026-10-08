@@ -1865,6 +1865,23 @@
       params.set("date_to", exactTo.slice(0, 10));
     }
 
+    heatFilters.ship.forEach(term => {
+      const role = term.role || "both";
+      const sign = term.sign > 0 ? "include" : "exclude";
+      if (term.entity_type === "ship_group") {
+        if (term.group_name) params.append("heat_ship_group_" + sign, role + ":" + term.group_name);
+      } else if (term.entity_id) {
+        params.append("builder_ship_" + sign, role + ":" + term.entity_id);
+      }
+    });
+    heatFilters.entity.forEach(term => {
+      if (!term.entity_id || !term.entity_type) return;
+      params.append(
+        term.sign > 0 ? "builder_entity_include" : "builder_entity_exclude",
+        (term.role || "both") + ":" + term.entity_type + ":" + term.entity_id
+      );
+    });
+
     return "/system/" + encodeURIComponent(String(node.id)) + "?" + params.toString();
   }
 
