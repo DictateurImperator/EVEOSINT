@@ -585,6 +585,41 @@ def entity_search_redirect(request: Request):
 
 def _killmail_filters_from_request(request):
     query = request.query_params
+    ship_group_filters = {"include": [], "exclude": []}
+    for sign in ship_group_filters:
+        for raw in query.getlist("heat_ship_group_" + sign):
+            role, sep, group_name = raw.partition(":")
+            if not sep or role not in {"both", "attacker", "victim"} or not group_name.strip():
+                raise EntityError("killmail_filter_invalid:heat_ship_group_" + sign)
+            ship_group_filters[sign].append((role, group_name.strip()))
+
+    resolved_group_filters = {"include": [], "exclude": []}
+    if any(ship_group_filters.values()):
+        group_names = sorted({
+            name.lower()
+            for group_filters in ship_group_filters.values()
+            for _, name in group_filters
+        })
+        with db() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT lower(group_name), entity_id
+                    FROM sde_work.ship_entities
+                    WHERE lower(group_name) = ANY(%s)
+                    """,
+                    (group_names,),
+                )
+                group_type_ids = {}
+                for name, type_id in cur.fetchall():
+                    group_type_ids.setdefault(name, []).append(int(type_id))
+        for sign, group_filters in ship_group_filters.items():
+            for role, name in group_filters:
+                resolved_group_filters[sign].extend(
+                    f"{role}:{type_id}"
+                    for type_id in group_type_ids.get(name.lower(), [])
+                )
+
     return {
         "participation": query.get("participation", "both"),
         "date_from": query.get("date_from"),
@@ -599,8 +634,8 @@ def _killmail_filters_from_request(request):
         "type_ids": query.getlist("type_ids"),
         "type_role": query.get("type_role", "both"),
         "module_type_ids": query.getlist("module_type_ids"),
-        "builder_ship_include": query.getlist("builder_ship_include"),
-        "builder_ship_exclude": query.getlist("builder_ship_exclude"),
+        "builder_ship_include": query.getlist("builder_ship_include") + resolved_group_filters["include"],
+        "builder_ship_exclude": query.getlist("builder_ship_exclude") + resolved_group_filters["exclude"],
         "builder_entity_include": query.getlist("builder_entity_include"),
         "builder_entity_exclude": query.getlist("builder_entity_exclude"),
         "builder_zone_include": query.getlist("builder_zone_include"),
