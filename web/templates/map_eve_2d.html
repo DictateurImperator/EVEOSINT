@@ -2920,11 +2920,65 @@
   }, {passive:false});
 
   if (staticHost) {
+    let staticDragging = false;
+    let staticMoved = false;
+    let staticStartX = 0;
+    let staticStartY = 0;
+    let staticOriginX = 0;
+    let staticOriginY = 0;
+    let staticPointerId = null;
+
+    staticHost.style.touchAction = "none";
+    staticHost.style.cursor = "grab";
+
     staticHost.addEventListener("wheel", event => {
       if (interactiveEnabled) return;
       event.preventDefault();
       zoomStaticMap(event.deltaY < 0 ? 1.18 : .84);
     }, {passive:false});
+
+    staticHost.addEventListener("pointerdown", event => {
+      if (interactiveEnabled || event.button !== 0 || !staticSvg) return;
+      staticDragging = true;
+      staticMoved = false;
+      staticPointerId = event.pointerId;
+      staticStartX = event.clientX;
+      staticStartY = event.clientY;
+      staticOriginX = staticViewBox.x;
+      staticOriginY = staticViewBox.y;
+    });
+
+    staticHost.addEventListener("pointermove", event => {
+      if (!staticDragging || staticPointerId !== event.pointerId || !staticSvg) return;
+      const dx = event.clientX - staticStartX;
+      const dy = event.clientY - staticStartY;
+      if (!staticMoved && Math.abs(dx) + Math.abs(dy) <= 3) return;
+      if (!staticMoved) {
+        staticMoved = true;
+        staticHost.setPointerCapture(event.pointerId);
+        staticHost.style.cursor = "grabbing";
+      }
+      const rect = staticSvg.getBoundingClientRect();
+      staticViewBox.x = staticOriginX - dx * staticViewBox.width / rect.width;
+      staticViewBox.y = staticOriginY - dy * staticViewBox.height / rect.height;
+      applyStaticViewBox();
+    });
+
+    const stopStaticDrag = event => {
+      if (!staticDragging || staticPointerId !== event.pointerId) return;
+      staticDragging = false;
+      staticPointerId = null;
+      staticHost.style.cursor = "grab";
+      if (staticHost.hasPointerCapture(event.pointerId)) staticHost.releasePointerCapture(event.pointerId);
+    };
+    staticHost.addEventListener("pointerup", stopStaticDrag);
+    staticHost.addEventListener("pointercancel", stopStaticDrag);
+    staticHost.addEventListener("click", event => {
+      if (!staticMoved) return;
+      event.preventDefault();
+      event.stopPropagation();
+      staticMoved = false;
+    }, true);
   }
 
   canvas.addEventListener("pointerdown", event => {
