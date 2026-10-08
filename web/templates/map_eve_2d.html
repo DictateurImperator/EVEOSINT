@@ -1587,6 +1587,7 @@
 
   function renderStaticSvg(resetView=false) {
     if (!staticHost) return;
+    const preparedHeatQuery = activeMode === "heat" ? heatKillboardQuery() : null;
 
     const svg = svgElement("svg", {
       xmlns:SVG_NS,
@@ -1774,7 +1775,7 @@
         if (ratio <= 0) return;
 
         const link = svgElement("a", {
-          href:heatKillboardUrl(node),
+          href:heatKillboardUrl(node, preparedHeatQuery),
           cursor:"pointer",
         });
         link.appendChild(svgElement("title", {}, 
@@ -1834,11 +1835,15 @@
     return parsed.toISOString().slice(0, 16);
   }
 
-  function heatKillboardUrl(node) {
+  function heatKillboardUrl(node, preparedQuery=null) {
     if (!node || !heatBySystem.has(String(node.id))) {
       return node && node.url ? node.url : "#";
     }
+    return "/system/" + encodeURIComponent(String(node.id)) + "?" +
+      (preparedQuery !== null ? preparedQuery : heatKillboardQuery());
+  }
 
+  function heatKillboardQuery() {
     const params = new URLSearchParams();
     const source = String(
       (currentHeatPayload && currentHeatPayload.source) || heatSource || "api"
@@ -1865,7 +1870,8 @@
       params.set("date_to", exactTo.slice(0, 10));
     }
 
-    return "/system/" + encodeURIComponent(String(node.id)) + "?" + params.toString();
+    appendHeatFilterParams(params, "heat_");
+    return params.toString();
   }
 
   function stopHeatEvolution() {
@@ -1874,19 +1880,19 @@
     if (heatPlay) heatPlay.textContent = "Play";
   }
 
-  function appendHeatFilterParams(params) {
+  function appendHeatFilterParams(params, prefix="") {
     heatFilters.ship.forEach(term => {
       const isGroup = term.entity_type === "ship_group";
       const value = isGroup ? String(term.group_name || "") : String(term.entity_id);
       if (!value) return;
       params.append(
-        term.sign > 0 ? "ship_include" : "ship_exclude",
+        prefix + (term.sign > 0 ? "ship_include" : "ship_exclude"),
         (term.role || "both") + ":" + (isGroup ? "group" : "type") + ":" + value
       );
     });
     heatFilters.entity.forEach(term => {
       params.append(
-        term.sign > 0 ? "entity_include" : "entity_exclude",
+        prefix + (term.sign > 0 ? "entity_include" : "entity_exclude"),
         (term.role || "both") + ":" + term.entity_type + ":" + term.entity_id
       );
     });
