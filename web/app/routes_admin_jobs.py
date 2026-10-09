@@ -14,6 +14,7 @@ from .jobs import (
     run_character_skill_inference_job,
     run_sovereignty_esi_job,
     run_sde_job,
+    run_killmail_forensics_setup_job,
 )
 from .layout import app_context
 from .main_objects import templates
@@ -329,3 +330,27 @@ def admin_jobs_log(request: Request, job_key: str):
         return PlainTextResponse("Log indisponible.", status_code=404)
 
     return PlainTextResponse(content, media_type="text/plain; charset=utf-8")
+
+
+@router.post("/admin/jobs/killmail-forensics-setup/run")
+def admin_jobs_run_forensics_setup(request: Request):
+    user = require_login(request)
+    redirect = require_permission_or_redirect(user, "admin.jobs.run")
+    if redirect:
+        return redirect
+    try:
+        ok, message = run_killmail_forensics_setup_job()
+        audit_log(
+            request, "admin_job_run", user_id=user["id"], username=user["username"],
+            target_type="job", target_id="setup_killmail_forensics", details=message,
+        )
+    except JobError as exc:
+        audit_log(
+            request, "admin_job_run_failed", user_id=user["id"], username=user["username"],
+            target_type="job", target_id="setup_killmail_forensics", details=str(exc),
+        )
+        return _error_redirect(exc)
+    return RedirectResponse(
+        url="/admin/jobs?success=job_started" if ok else "/admin/jobs?error=job_failed",
+        status_code=302,
+    )

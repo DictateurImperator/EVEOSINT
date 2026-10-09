@@ -36,6 +36,7 @@
     boxes().forEach(function (box) { box.checked = selected.has(keyFor(refFor(box))); });
     root.querySelector('[data-forensics-selected-count]').textContent = selected.size;
     clearSelection.disabled = !selected.size;
+    root.querySelector('[data-forensics-investigate]').disabled = !selected.size;
     selectVisible.disabled = busy || !boxes().length;
     root.querySelector('[data-forensics-selection-details]').hidden = !selected.size;
     list.replaceChildren();
@@ -132,6 +133,9 @@
     if (!more) return;
     event.preventDefault();
     if (!busy) load(false, {scan_before: more.dataset.scanBefore, scan_month: more.dataset.scanMonth, scan_row: more.dataset.scanRow});
+  });
+  root.querySelector('[data-forensics-investigate]').addEventListener('click', function () {
+    root.dispatchEvent(new CustomEvent('forensics:investigate', {bubbles:true, detail:{references:Array.from(selected.values())}}));
   });
   selectVisible.addEventListener('click', function () {
     boxes().forEach(function (box) { var ref = refFor(box); selected.set(keyFor(ref), ref); });

@@ -151,7 +151,7 @@ def _normalize_job(raw_job):
     log_path = raw_job.get("log_path")
     enabled = bool(raw_job.get("enabled", True))
 
-    if job_type not in {"sde", "killmails", "recent_kill_pilots_affiliation", "character_skill_inference", "population_alliances_init", "population_alliances_daily", "sovereignty_esi"}:
+    if job_type not in {"sde", "killmails", "recent_kill_pilots_affiliation", "character_skill_inference", "population_alliances_init", "population_alliances_daily", "sovereignty_esi", "killmail_forensics_setup"}:
         raise JobError(f"job_type_invalid:{key}")
 
     if not isinstance(command, list) or not command:
@@ -238,6 +238,21 @@ def load_jobs_config():
             )
         )
 
+    if not any(job["key"] == "setup_killmail_forensics" for job in jobs):
+        jobs.append(
+            _normalize_job({
+                "key": "setup_killmail_forensics",
+                "label": "Forensics · Create investigation tables (run once)",
+                "type": "killmail_forensics_setup",
+                "command": [
+                    sys.executable,
+                    str(Path(__file__).resolve().parents[2] / "scripts/setup_killmail_forensics.py"),
+                ],
+                "log_path": str(Path.home() / "eveosint/data/logs/killmail_forensics_setup.log"),
+                "enabled": True,
+            })
+        )
+
     allowed_keys = {
         "sync_sde",
         "sync_killmails",
@@ -246,6 +261,7 @@ def load_jobs_config():
         "population_alliances_init",
         "population_alliances_daily",
         "sync_sovereignty_esi",
+        "setup_killmail_forensics",
     }
     unexpected = {job["key"] for job in jobs} - allowed_keys
     if unexpected:
@@ -463,4 +479,11 @@ def run_sovereignty_esi_job():
     if job["type"] != "sovereignty_esi":
         raise JobError("job_type_mismatch:sync_sovereignty_esi")
 
+    return _start_process(job, job["command"])
+
+
+def run_killmail_forensics_setup_job():
+    job = get_job("setup_killmail_forensics")
+    if job["type"] != "killmail_forensics_setup":
+        raise JobError("job_type_mismatch:setup_killmail_forensics")
     return _start_process(job, job["command"])

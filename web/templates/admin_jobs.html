@@ -83,6 +83,11 @@
               Mettre à jour la SOV ESI
             </button>
           </form>
+        {% elif job.type == "killmail_forensics_setup" %}
+          <p class="muted-line small">Run once after deploying Killmail Forensics. Re-running preserves existing investigations.</p>
+          <form method="post" action="/admin/jobs/killmail-forensics-setup/run" class="mb-3">
+            <button class="btn btn-primary" type="submit" {% if job.running or not job.enabled %}disabled{% endif %}>Create Forensics tables</button>
+          </form>
         {% elif job.type == "sde" %}
           <form method="post" action="/admin/jobs/sde/run" class="mb-3">
             <button type="submit" class="btn btn-primary" {% if not job.enabled or job.running %}disabled{% endif %}>

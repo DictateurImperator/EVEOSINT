@@ -7,7 +7,7 @@
     <h1 class="h3 fw-bold mb-1">Killmail Forensics</h1>
     <div class="muted-line">Investigate losses recorded in the MER but missing from zKillboard.</div>
   </div>
-  <span class="badge text-bg-info">Dev</span>
+  <a class="btn btn-outline-info" href="/admin/killmail-forensics/recovered">Recovered killmails</a>
 </div>
 
 <section aria-labelledby="hiddenKillmailsTitle" id="forensics-workspace" data-selection-user="{{ user.id }}">
@@ -18,6 +18,7 @@
     <div class="d-flex flex-wrap align-items-center justify-content-between gap-2">
       <div aria-live="polite"><strong data-forensics-selected-count>0</strong> killmails selected</div>
       <div class="d-flex gap-2">
+        <button type="button" class="btn btn-sm btn-primary" data-forensics-investigate disabled>Investigate selected</button>
         <button type="button" class="btn btn-sm btn-outline-primary" data-forensics-select-visible disabled>Select displayed</button>
         <button type="button" class="btn btn-sm btn-outline-light" data-forensics-clear disabled>Clear selection</button>
       </div>
@@ -34,9 +35,22 @@
   <div class="content-card p-3 p-md-4" data-forensics-results aria-busy="true"></div>
 </section>
 
-<section class="content-card p-3 p-md-4 mt-4" aria-labelledby="hashReconstructionTitle">
-  <h2 id="hashReconstructionTitle" class="h5 mb-3">Hash reconstruction <span class="badge text-bg-warning">TODO</span></h2>
-  <p class="muted-line mb-0">The selected killmails will be used for the next investigation steps. The reconstruction method is still to be defined.</p>
+<section class="content-card p-3 p-md-4 mt-4" id="forensics-investigations" aria-labelledby="investigationTitle">
+  <div class="d-flex flex-wrap justify-content-between gap-2 mb-3">
+    <h2 id="investigationTitle" class="h5">Hash reconstruction</h2>
+    <div class="d-flex gap-2">
+      <label class="visually-hidden" for="forensics-sort">Sort investigations</label>
+      <select class="form-select form-select-sm" id="forensics-sort"><option value="attempts">Fewest remaining attempts first</option><option value="date">Newest kills first</option></select>
+      <button class="btn btn-sm btn-outline-light" type="button" data-investigations-refresh>Refresh</button>
+      <button class="btn btn-sm btn-outline-danger" type="button" data-investigations-stop hidden>Stop validation</button>
+    </div>
+  </div>
+  <p class="muted-line small">Pilot percentages are relative scores among listed hypotheses, not calibrated certainty. Hover a candidate for evidence. Current inferred skills and historical ship usage are scored separately. Known combatants are selected first for the final blow; other corporation members remain available when widening the search. Keep this tab open during CCP validation; stopping retains completed tests.</p>
+  <div role="status" aria-live="polite" data-investigations-status></div>
+  <div class="alert alert-danger" role="alert" data-investigations-error hidden></div>
+  <div class="table-responsive" data-investigations-table></div>
+  <div class="d-flex gap-2 mt-3"><button class="btn btn-sm btn-outline-light" type="button" data-investigations-prev disabled>Previous</button><button class="btn btn-sm btn-outline-light" type="button" data-investigations-next disabled>Next</button></div>
 </section>
+{% include "forensics_investigations_script.html" %}
 {% include "admin_killmail_forensics_script.html" %}
 {% endblock %}
