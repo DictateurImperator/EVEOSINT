@@ -124,6 +124,7 @@
     <table class="killmail-table">
       <thead>
         <tr>
+          {% if killmail_selectable %}<th scope="col">Select</th>{% endif %}
           <th>Time</th>
           <th>Ship</th>
           <th>Location</th>
@@ -135,9 +136,12 @@
       <tbody>
         {% if groups %}
           {% for group in groups %}
-            <tr class="killmail-date-row" data-killmail-date="{{ group.date }}"><td colspan="6">{{ group.date }}</td></tr>
+            <tr class="killmail-date-row" data-killmail-date="{{ group.date }}"><td colspan="{{ 7 if killmail_selectable else 6 }}">{{ group.date }}</td></tr>
             {% for km in group["items"] %}
             <tr class="{% if km.is_loss %}killmail-row-loss{% else %}killmail-row-kill{% endif %}">
+              {% if killmail_selectable %}
+              <td><input type="checkbox" class="form-check-input" data-forensics-ref="{{ km.selection_ref|tojson|forceescape }}" aria-label="Select hidden killmail at {{ km.killmail_time.isoformat() }} (MER {{ km.source_month }}, row {{ km.source_row }})"></td>
+              {% endif %}
               <td class="killmail-time-cell">
                 <span class="killmail-status {% if km.is_loss %}killmail-status-loss{% else %}killmail-status-kill{% endif %}">{% if km.is_loss %}✖{% else %}✔{% endif %}</span>
                 <span>{{ km.time_label }}</span>
@@ -238,7 +242,7 @@
             {% endfor %}
           {% endfor %}
         {% else %}
-          <tr class="killmail-empty-result"><td colspan="6" class="muted-line">{% if pagination and pagination.progressive %}No killmails found in the scanned period.{% else %}No killmails found.{% endif %}</td></tr>
+          <tr class="killmail-empty-result"><td colspan="{{ 7 if killmail_selectable else 6 }}" class="muted-line">{% if pagination and pagination.progressive %}No killmails found in the scanned period.{% else %}No killmails found.{% endif %}</td></tr>
         {% endif %}
       </tbody>
     </table>

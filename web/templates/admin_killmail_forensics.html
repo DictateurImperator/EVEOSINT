@@ -1,17 +1,42 @@
 {% extends "base.html" %}
 
 {% block content %}
+{% include "killmail_table_styles.html" %}
 <div class="d-flex justify-content-between align-items-start gap-3 mb-4">
   <div>
     <h1 class="h3 fw-bold mb-1">Killmail Forensics</h1>
     <div class="muted-line">Investigate losses recorded in the MER but missing from zKillboard.</div>
   </div>
-  <span class="badge text-bg-warning">TODO</span>
+  <span class="badge text-bg-info">Dev</span>
 </div>
 
-<section class="content-card p-3 p-md-4" aria-labelledby="hashReconstructionTitle">
-  <h2 id="hashReconstructionTitle" class="h5 mb-3">Hash reconstruction</h2>
-  <p class="mb-2">This workspace will be used to reconstruct killmail hashes and attempt to retrieve the corresponding full killmails from ESI.</p>
-  <p class="muted-line mb-0">TODO: define the reconstruction method and investigation workflow.</p>
+<section aria-labelledby="hiddenKillmailsTitle" id="forensics-workspace" data-selection-user="{{ user.id }}">
+  <h2 id="hiddenKillmailsTitle" class="h5">Select hidden killmails</h2>
+  <p class="muted-line">Browse unmatched MER losses with the killboard filters. MER data includes ships, locations, corporations and alliances; character IDs are unavailable.</p>
+  {% include "killboard_filters.html" %}
+  <div class="content-card p-3 mb-3">
+    <div class="d-flex flex-wrap align-items-center justify-content-between gap-2">
+      <div aria-live="polite"><strong data-forensics-selected-count>0</strong> killmails selected</div>
+      <div class="d-flex gap-2">
+        <button type="button" class="btn btn-sm btn-outline-primary" data-forensics-select-visible disabled>Select displayed</button>
+        <button type="button" class="btn btn-sm btn-outline-light" data-forensics-clear disabled>Clear selection</button>
+      </div>
+    </div>
+    <p class="muted-line small mb-0 mt-2">Selections are kept in this browser tab while you browse and change filters.</p>
+    <div class="muted-line small" data-forensics-storage-warning hidden>Browser storage is unavailable. Your selection will be kept until this page is reloaded.</div>
+    <details class="mt-2" data-forensics-selection-details hidden>
+      <summary>Selected killmails</summary>
+      <ul class="list-unstyled mt-2 mb-0" data-forensics-selection-list></ul>
+    </details>
+  </div>
+  <div class="muted-line mb-2" role="status" data-forensics-search-status>Loading hidden killmails…</div>
+  <div class="alert alert-danger" role="alert" data-forensics-error hidden></div>
+  <div class="content-card p-3 p-md-4" data-forensics-results aria-busy="true"></div>
 </section>
+
+<section class="content-card p-3 p-md-4 mt-4" aria-labelledby="hashReconstructionTitle">
+  <h2 id="hashReconstructionTitle" class="h5 mb-3">Hash reconstruction <span class="badge text-bg-warning">TODO</span></h2>
+  <p class="muted-line mb-0">The selected killmails will be used for the next investigation steps. The reconstruction method is still to be defined.</p>
+</section>
+{% include "admin_killmail_forensics_script.html" %}
 {% endblock %}

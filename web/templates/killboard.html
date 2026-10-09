@@ -1,48 +1,7 @@
 {% extends "base.html" %}
 
 {% block content %}
-<style>
-  .killmail-table-wrap { overflow-x:auto; }
-  .killmail-table { width:100%; border-collapse:collapse; font-size:.92rem; }
-  .killmail-table th { color:rgba(255,255,255,.78); font-weight:700; text-align:left; border-bottom:1px solid rgba(255,255,255,.18); padding:.45rem .55rem; white-space:nowrap; }
-  .killmail-table td { border-bottom:1px solid rgba(255,255,255,.10); padding:.35rem .55rem; vertical-align:middle; }
-  .killmail-date-row td { background:rgba(0,0,0,.55); color:rgba(255,255,255,.78); font-weight:800; font-style:italic; padding:.45rem .55rem; }
-  .killmail-row-kill { background:rgba(0,90,20,.34); }
-  .killmail-row-loss { background:rgba(120,0,0,.42); }
-  .killmail-time-cell { white-space:nowrap; width:86px; }
-  .killmail-status { display:inline-block; width:1.1rem; font-weight:900; }
-  .killmail-status-kill { color:#9fd49f; }
-  .killmail-status-loss { color:#fca5a5; }
-  .killmail-isk { color:#22d3ee; display:block; margin-left:1.1rem; margin-top:.1rem; }
-  .killmail-ship-cell { width:84px; min-width:84px; }
-  .killmail-ship-box { display:inline-flex; align-items:center; justify-content:center; }
-  .killmail-type-icon { width:64px; height:64px; border-radius:.45rem; object-fit:cover; background:rgba(255,255,255,.08); flex:0 0 auto; }
-  .killmail-pilot-icons { display:flex; align-items:center; gap:.35rem; }
-  .killmail-pilot-icon { width:44px; height:44px; border-radius:.45rem; object-fit:cover; background:rgba(255,255,255,.08); flex:0 0 auto; }
-  .killmail-pilot-cell { min-width:155px; }
-  .killmail-pilot-box { display:flex; align-items:center; gap:.55rem; }
-  .killmail-damage { white-space:nowrap; line-height:1.2; }
-  .killmail-damage-main { font-weight:800; color:#f8fafc; }
-  .killmail-damage-percent { color:#22d3ee; font-size:.86rem; }
-  .killmail-entity-box { display:flex; align-items:center; gap:.55rem; min-width:260px; }
-  .killmail-entity-icon { width:56px; height:56px; border-radius:.45rem; object-fit:cover; background:rgba(255,255,255,.08); flex:0 0 auto; display:inline-flex; align-items:center; justify-content:center; }
-  .killmail-main-icon-stack { position:relative; width:64px; height:56px; flex:0 0 auto; }
-  .killmail-main-icon-stack > .text-decoration-none:first-child .killmail-entity-icon,
-  .killmail-main-icon-stack > .killmail-entity-icon:first-child { position:absolute; left:0; top:0; }
-  .killmail-secondary-entity-icon { position:absolute; right:0; bottom:-3px; width:24px; height:24px; border-radius:.3rem; object-fit:cover; background:rgba(2,6,23,.92); border:1px solid rgba(148,163,184,.45); }
-  .killmail-portrait-icon { width:24px; height:24px; border-radius:.3rem; object-fit:cover; background:rgba(255,255,255,.08); flex:0 0 auto; }
-  .killmail-stack-portrait-icon { position:absolute; left:0; bottom:-3px; width:24px; height:24px; border-radius:.3rem; object-fit:cover; background:rgba(2,6,23,.92); border:1px solid rgba(148,163,184,.45); }
-  .killmail-character-line { display:flex; align-items:center; gap:.35rem; }
-  .killmail-empty-icon { background:rgba(255,255,255,.06); }
-  .killmail-entity-lines { line-height:1.35; min-width:0; }
-  .killmail-entity { color:#22d3ee; font-weight:600; }
-  .killmail-entity:hover { color:#7dd3fc; text-decoration:underline !important; }
-  .killmail-location { color:#22d3ee; min-width:210px; line-height:1.28; }
-  .killmail-location-row { display:flex; align-items:center; gap:.35rem; margin:.08rem 0; }
-  .killmail-location-icon { width:20px; height:20px; border-radius:.3rem; display:inline-flex; align-items:center; justify-content:center; flex:0 0 auto; background:rgba(255,255,255,.08); color:#bae6fd; font-weight:800; font-size:.7rem; }
-  .killmail-location-icon img { width:20px; height:20px; border-radius:.3rem; object-fit:cover; }
-  .killmail-external-link { color:#7cc7ff; font-size:.82rem; }
-</style>
+{% include "killmail_table_styles.html" %}
 
 <div class="d-flex justify-content-between align-items-start gap-3 mb-4">
   <div>

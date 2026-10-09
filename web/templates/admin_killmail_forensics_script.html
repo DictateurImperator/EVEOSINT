@@ -1,0 +1,154 @@
+<script>
+(function () {
+  var root = document.getElementById('forensics-workspace');
+  if (!root) return;
+  var results = root.querySelector('[data-forensics-results]');
+  var status = root.querySelector('[data-forensics-search-status]');
+  var errorBox = root.querySelector('[data-forensics-error]');
+  var selectVisible = root.querySelector('[data-forensics-select-visible]');
+  var clearSelection = root.querySelector('[data-forensics-clear]');
+  var list = root.querySelector('[data-forensics-selection-list]');
+  var selected = new Map();
+  var storageKey = 'eveosint.forensics.selection.' + root.dataset.selectionUser;
+  var filters = new URLSearchParams(window.location.search);
+  ['scan_before', 'scan_month', 'scan_row', 'page', 'limit'].forEach(function (key) { filters.delete(key); });
+  var controller;
+  var generation = 0;
+  var busy = false;
+
+  function validRef(ref) {
+    return ref && /^\d{4}-\d{2}-\d{2}T/.test(ref.kill_datetime || '') &&
+      /^\d{4}-\d{2}-\d{2}$/.test(ref.source_month || '') && Number.isSafeInteger(ref.source_row);
+  }
+  function keyFor(ref) { return JSON.stringify([ref.kill_datetime, ref.source_month, ref.source_row]); }
+  function boxes() { return Array.from(results.querySelectorAll('[data-forensics-ref]')); }
+  function refFor(box) { return JSON.parse(box.dataset.forensicsRef); }
+  function save() {
+    try { sessionStorage.setItem(storageKey, JSON.stringify(Array.from(selected.values()))); }
+    catch (error) { root.querySelector('[data-forensics-storage-warning]').hidden = false; }
+  }
+  try {
+    var restored = JSON.parse(sessionStorage.getItem(storageKey) || '[]');
+    if (Array.isArray(restored)) restored.filter(validRef).forEach(function (ref) { selected.set(keyFor(ref), ref); });
+  } catch (error) { root.querySelector('[data-forensics-storage-warning]').hidden = false; }
+
+  function updateSelection() {
+    boxes().forEach(function (box) { box.checked = selected.has(keyFor(refFor(box))); });
+    root.querySelector('[data-forensics-selected-count]').textContent = selected.size;
+    clearSelection.disabled = !selected.size;
+    selectVisible.disabled = busy || !boxes().length;
+    root.querySelector('[data-forensics-selection-details]').hidden = !selected.size;
+    list.replaceChildren();
+    selected.forEach(function (ref, key) {
+      var item = document.createElement('li');
+      item.className = 'd-flex flex-wrap align-items-center gap-2 mb-1';
+      var link = document.createElement('a');
+      link.textContent = ref.kill_datetime + ' · MER ' + ref.source_month + ' · row ' + ref.source_row;
+      link.href = '/kill/mer/' + encodeURIComponent(ref.source_month) + '/' + ref.source_row +
+        '/hidden?kill_datetime=' + encodeURIComponent(ref.kill_datetime);
+      var remove = document.createElement('button');
+      remove.type = 'button'; remove.className = 'btn btn-sm btn-outline-light';
+      remove.textContent = 'Remove'; remove.dataset.forensicsRemove = key;
+      item.append(link, remove); list.appendChild(item);
+    });
+  }
+  function setBusy(value) {
+    busy = value;
+    results.setAttribute('aria-busy', String(value));
+    results.querySelectorAll('[data-killmail-load-more]').forEach(function (link) {
+      link.classList.toggle('disabled', value);
+      link.setAttribute('aria-disabled', String(value));
+    });
+    selectVisible.disabled = value || !boxes().length;
+  }
+  function mergeResults(html, replace) {
+    if (replace || !results.querySelector('tbody')) { results.innerHTML = html; return; }
+    var fragment = document.createElement('div'); fragment.innerHTML = html;
+    var body = results.querySelector('tbody');
+    var incoming = fragment.querySelector('tbody');
+    var existingKeys = new Set(boxes().map(function (box) { return keyFor(refFor(box)); }));
+    var lastDate = Array.from(body.querySelectorAll('[data-killmail-date]')).pop();
+    var date = lastDate ? lastDate.dataset.killmailDate : null;
+    if (incoming && incoming.querySelector('[data-forensics-ref]')) {
+      body.querySelectorAll('.killmail-empty-result').forEach(function (row) { row.remove(); });
+      Array.from(incoming.children).forEach(function (row) {
+        if (row.hasAttribute('data-killmail-date')) {
+          if (row.dataset.killmailDate === date) return;
+          date = row.dataset.killmailDate;
+        } else {
+          var box = row.querySelector('[data-forensics-ref]');
+          if (!box || existingKeys.has(keyFor(refFor(box)))) return;
+          existingKeys.add(keyFor(refFor(box)));
+        }
+        body.appendChild(row);
+      });
+    }
+    results.querySelectorAll('[data-killmail-progressive-status]').forEach(function (node) { node.remove(); });
+    var progress = fragment.querySelector('[data-killmail-progressive-status]');
+    if (progress) results.appendChild(progress);
+  }
+  async function load(replace, cursor) {
+    if (controller) controller.abort();
+    controller = new AbortController();
+    var thisGeneration = ++generation;
+    var params = new URLSearchParams(filters);
+    if (cursor) ['scan_before', 'scan_month', 'scan_row'].forEach(function (key) {
+      if (cursor[key] !== '') params.set(key, cursor[key]);
+    });
+    errorBox.hidden = true; setBusy(true);
+    status.textContent = 'Searching hidden killmails…';
+    try {
+      var response = await fetch('/admin/killmail-forensics/data?' + params.toString(), {
+        credentials: 'same-origin', cache: 'no-store', signal: controller.signal,
+      });
+      var payload = await response.json();
+      if (thisGeneration !== generation) return;
+      if (!response.ok) throw new Error(payload.error || 'Hidden killmails could not be loaded.');
+      mergeResults(payload.html, replace);
+      updateSelection();
+      status.textContent = boxes().length + ' hidden killmails displayed.';
+    } catch (error) {
+      if (thisGeneration !== generation || error.name === 'AbortError') return;
+      errorBox.textContent = error.message || 'Hidden killmails could not be loaded. Please retry.';
+      errorBox.hidden = false;
+      var retry = document.createElement('button');
+      retry.type = 'button'; retry.className = 'btn btn-sm btn-outline-light ms-2'; retry.textContent = 'Retry';
+      retry.addEventListener('click', function () { load(replace, cursor); });
+      errorBox.appendChild(retry);
+      status.textContent = 'Search interrupted. Your selection is kept.';
+    } finally {
+      if (thisGeneration === generation) { setBusy(false); updateSelection(); }
+    }
+  }
+  results.addEventListener('change', function (event) {
+    var box = event.target.closest('[data-forensics-ref]');
+    if (!box) return;
+    var ref = refFor(box); var key = keyFor(ref);
+    if (box.checked) selected.set(key, ref); else selected.delete(key);
+    save(); updateSelection();
+  });
+  results.addEventListener('click', function (event) {
+    var more = event.target.closest('[data-killmail-load-more]');
+    if (!more) return;
+    event.preventDefault();
+    if (!busy) load(false, {scan_before: more.dataset.scanBefore, scan_month: more.dataset.scanMonth, scan_row: more.dataset.scanRow});
+  });
+  selectVisible.addEventListener('click', function () {
+    boxes().forEach(function (box) { var ref = refFor(box); selected.set(keyFor(ref), ref); });
+    save(); updateSelection();
+  });
+  clearSelection.addEventListener('click', function () { selected.clear(); save(); updateSelection(); });
+  list.addEventListener('click', function (event) {
+    var remove = event.target.closest('[data-forensics-remove]');
+    if (!remove) return;
+    selected.delete(remove.dataset.forensicsRemove); save(); updateSelection();
+  });
+  root.addEventListener('killboard:apply', function (event) {
+    filters = new URLSearchParams(event.detail.params);
+    history.replaceState(null, '', window.location.pathname + (filters.size ? '?' + filters.toString() : ''));
+    results.replaceChildren();
+    updateSelection(); load(true);
+  });
+  updateSelection(); load(true);
+})();
+</script>

@@ -70,6 +70,7 @@
 
 <div class="kb-filter-shell mb-3"
      data-killboard-filters
+     data-kb-search-url="{{ killboard_search_url|default('/killboard/search') }}"
      data-kb-context-family="{{ killboard_context_family|default('') }}"
      data-kb-context-type="{{ killboard_context_type|default('') }}"
      data-kb-context-id="{{ killboard_context_id|default('') }}">
@@ -128,7 +129,7 @@
           <div class="kb-family-default" data-kb-family-state>ALL</div>
         </div>
         <div class="kb-search-wrap">
-          <input class="form-control form-control-sm" type="search" placeholder="Alliance, corporation, player…" autocomplete="off" data-kb-search="entity">
+          <input class="form-control form-control-sm" type="search" placeholder="{{ killboard_entity_placeholder|default('Alliance, corporation, player…') }}" autocomplete="off" data-kb-search="entity">
           <div class="kb-search-results" data-kb-results="entity"></div>
         </div>
         <div class="kb-term-list" data-kb-terms="entity"></div>
@@ -364,7 +365,7 @@
           if (aborters[kind]) aborters[kind].abort();
           aborters[kind] = new AbortController();
           try {
-            var response = await fetch('/killboard/search?kind=' + encodeURIComponent(kind) + '&q=' + encodeURIComponent(q) + '&limit=15', {
+            var response = await fetch((root.dataset.kbSearchUrl || '/killboard/search') + '?kind=' + encodeURIComponent(kind) + '&q=' + encodeURIComponent(q) + '&limit=15', {
               credentials: 'same-origin', cache: 'no-store', signal: aborters[kind].signal
             });
             var payload = await response.json();

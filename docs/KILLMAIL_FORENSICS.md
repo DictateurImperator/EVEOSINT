@@ -1,7 +1,34 @@
 # Killmail Forensics research
 
-The admin workspace is currently a TODO page. No hash search, ESI retrieval,
-or database import is implemented yet.
+The admin workspace at `/admin/killmail-forensics` now supports browsing and
+selecting hidden MER rows (`resolved_km IS NULL`). It shares the killboard table,
+advanced filter builder and MER scan implementation. Dates, ships/structures,
+corporations, alliances and zones support the existing inclusion/exclusion and
+attacker/victim roles. Character and module filters cannot be evaluated from MER
+and are rejected in this workspace.
+
+Individual checkboxes and **Select displayed** add rows to the selection;
+**Clear selection** and the selected list's **Remove** buttons remove them.
+Loading more results, changing filters and reloading the tab keep the selection
+in user-scoped browser session storage. If storage is unavailable, selection
+continues in memory until the page is reloaded. The selection is not saved to the
+server. Each selected reference uses the MER primary key
+`(kill_datetime, source_month, source_row)`, never a presumed killmail ID.
+
+Both the page and its data/search endpoints require
+`admin.killmail_forensics.dev`. All new endpoints are read-only. Sparse searches
+use the existing bounded time-window scan and return a resumable cursor. A timed
+out resumed slice preserves all three cursor fields so retries cannot skip
+remaining rows with the same timestamp.
+
+Hash reconstruction remains TODO. No hash search, ESI retrieval, or database
+import is implemented yet.
+
+Offline checks: `python -m unittest scripts.test_killmail_forensics -v` with the
+web application's dependencies and `httpx`. The tests load isolated modules with
+DB/config substitutes; they never load production configuration or startup.
+Browser verification also covers selection, pagination, filter changes, tab
+reload, failed requests/retry and disabled browser storage.
 
 ## Hash construction
 

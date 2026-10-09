@@ -271,7 +271,7 @@ def search_killmail_locations(query, limit=15):
 
     return results
 
-def search_entities(query, limit=8):
+def search_entities(query, limit=8, include_characters=True):
     term = (query or "").strip()
     try:
         limit = int(limit)
@@ -303,7 +303,7 @@ def search_entities(query, limit=8):
                                    0 AS rank_score,
                                    0 AS type_rank
                             FROM entities.characters
-                            WHERE character_id = %s
+                            WHERE character_id = %s AND %s
                             UNION ALL
                             SELECT 'corporation'::text AS entity_type,
                                    corporation_id::bigint AS entity_id,
@@ -326,7 +326,7 @@ def search_entities(query, limit=8):
                         ORDER BY type_rank ASC
                         LIMIT %s
                         """,
-                        (numeric_id, numeric_id, numeric_id, limit),
+                        (numeric_id, bool(include_characters), numeric_id, numeric_id, limit),
                     )
                     rows = cur.fetchall()
                     if rows:
@@ -346,7 +346,7 @@ def search_entities(query, limit=8):
                                    END AS rank_score,
                                    0 AS type_rank
                             FROM entities.characters
-                            WHERE lower(COALESCE(name, '')) LIKE %s
+                            WHERE lower(COALESCE(name, '')) LIKE %s AND %s
                             ORDER BY rank_score ASC, lower(COALESCE(name, '')) ASC
                             LIMIT %s
                         )
@@ -395,7 +395,7 @@ def search_entities(query, limit=8):
                     LIMIT %s
                     """,
                     (
-                        needle, prefix, limit,
+                        needle, prefix, bool(include_characters), limit,
                         needle, needle, prefix, prefix, prefix, limit,
                         needle, needle, prefix, prefix, prefix, limit,
                         limit,
@@ -4936,6 +4936,8 @@ def _normalize_group_killmail_mode(mode):
 
 
 def _mer_group_scope(entity_type):
+    if entity_type == "global":
+        return {"global_scope": True}
     if str(entity_type or "").strip().lower() == "coalition":
         return {
             "coalition_scope": True,
@@ -4978,11 +4980,15 @@ def _mer_group_scope(entity_type):
 def _group_entity_mer_killmails(conn, entity_type, entity_id, page=1, per_page=100, filters=None, hidden_only=False):
     scope = _mer_group_scope(entity_type)
     normalized_filters = _normalize_killmail_filters(filters)
+    global_scope = bool(scope.get("global_scope"))
     location_scope = bool(scope.get("location_scope"))
     coalition_scope = bool(scope.get("coalition_scope"))
     multi_scope = isinstance(entity_id, (list, tuple, set))
 
-    if coalition_scope:
+    if global_scope:
+        scope_value = None
+        multi_ship_scope = False
+    elif coalition_scope:
         scope_value = _normalize_coalition_killmail_scope(entity_id)
         victim_scope_predicate = _coalition_mer_scope_predicate("victim")
         killer_scope_predicate = _coalition_mer_scope_predicate("killer")
@@ -5056,7 +5062,11 @@ def _group_entity_mer_killmails(conn, entity_type, entity_id, page=1, per_page=1
         }
 
     participation = normalized_filters["participation"]
-    if location_scope:
+    if global_scope:
+        side_sql = "'loss'::text"
+        clauses = ["TRUE"]
+        params = []
+    elif location_scope:
         # A location is where the fight happened, not one side of it. Every row is
         # intentionally rendered green in system/constellation/region killboards.
         side_sql = "'kill'::text"
@@ -5380,8 +5390,10 @@ def _group_entity_mer_killmails(conn, entity_type, entity_id, page=1, per_page=1
             scanned_to = next_before
         else:
             next_before = scanned_to
-            next_month = None
-            next_row = None
+            # If a resumed slice could not be searched, keep its complete
+            # cursor so a retry also includes remaining rows at this timestamp.
+            next_month = resume_month
+            next_row = resume_row
             scan_has_more = not scan_complete
 
         progressive_pagination = {
@@ -5613,6 +5625,40 @@ def _group_entity_mer_killmails(conn, entity_type, entity_id, page=1, per_page=1
             "timed_out": False,
         }
     return killmails, pagination
+
+
+def get_hidden_killmails_page(per_page=100, filters=None):
+    """Unmatched MER rows across all entities, with a resumable scan cursor."""
+    normalized = _normalize_killmail_filters(filters)
+    if normalized["module_type_ids"] or any(
+        term["entity_type"] == "character"
+        for key in ("builder_entity_include", "builder_entity_exclude")
+        for term in normalized[key]
+    ):
+        raise EntityError("MER data does not contain character IDs or modules. Use corporation, alliance or ship filters.")
+    if normalized["participation"] != "both" or any(normalized[key] for key in (
+        "affiliation_corporation_ids", "affiliation_alliance_ids", "heat_ship_include",
+        "heat_ship_exclude", "heat_entity_include", "heat_entity_exclude",
+    )):
+        raise EntityError("This filter is not supported in the hidden killmail workspace.")
+    with db() as conn:
+        killmails, pagination = _group_entity_mer_killmails(
+            conn, "global", None, per_page=per_page, filters=filters, hidden_only=True,
+        )
+    for km in killmails:
+        km["selection_ref"] = {
+            "kill_datetime": km["killmail_time"].isoformat(),
+            "source_month": km["source_month"].isoformat(),
+            "source_row": km["source_row"],
+        }
+    return {
+        "global_context": True,
+        "killmail_mode": "hidden",
+        "killmail_participation": "both",
+        "killmails": killmails,
+        "killmail_groups": _group_killmails_by_date(killmails),
+        "killmail_pagination": pagination,
+    }
 
 
 def get_mer_killmail_match_detail(source_month, source_row, kill_datetime_value=None):
