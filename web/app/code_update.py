@@ -442,7 +442,9 @@ def _decorate_targets(targets, current_sha):
         entry["is_current"] = bool(sha and current_sha and sha == current_sha)
         entry["can_update"] = False
         entry["can_rollback"] = False
+        entry["can_deploy"] = False
         if sha and current_sha and _commit_exists(sha) and sha != current_sha:
+            entry["can_deploy"] = True
             entry["can_update"] = _is_ancestor(current_sha, sha)
             entry["can_rollback"] = _is_ancestor(sha, current_sha)
         decorated.append(entry)
@@ -471,6 +473,8 @@ def get_code_update_snapshot(refresh=False):
         "update_target_groups": [],
         "rollback_targets": [],
         "rollback_target_groups": [],
+        "deploy_targets": [],
+        "deploy_allowed": False,
         "dirty": False,
         "tracked_changes": [],
         "blocking_tracked_files": [],
@@ -529,6 +533,7 @@ def get_code_update_snapshot(refresh=False):
         snapshot["remote_targets"] = targets
         snapshot["update_targets"] = [item for item in targets if item.get("can_update")]
         snapshot["rollback_targets"] = [item for item in targets if item.get("can_rollback")]
+        snapshot["deploy_targets"] = [item for item in targets if item.get("can_deploy")]
         snapshot["remote_target_groups"] = _group_branch_targets(targets)
         snapshot["update_target_groups"] = _group_branch_targets(snapshot["update_targets"])
         snapshot["rollback_target_groups"] = _group_branch_targets(snapshot["rollback_targets"])
@@ -576,6 +581,10 @@ def get_code_update_snapshot(refresh=False):
             bool(snapshot["rollback_targets"])
             and not deployment_active
         )
+        snapshot["deploy_allowed"] = (
+            bool(snapshot["deploy_targets"])
+            and not deployment_active
+        )
         return snapshot
     except CodeUpdateError:
         snapshot["state"] = "error"
@@ -583,7 +592,7 @@ def get_code_update_snapshot(refresh=False):
 
 
 def queue_code_action(action, target_ref):
-    if action not in {"update", "rollback"}:
+    if action not in {"deploy", "update", "rollback"}:
         raise CodeUpdateError("invalid_action")
 
     if _service_running():
@@ -710,7 +719,7 @@ def _perform_action(action, target_ref):
     elif action == "rollback":
         if not _is_ancestor(target_sha, previous_sha):
             raise CodeUpdateError("target_not_rollback")
-    else:
+    elif action != "deploy":
         raise CodeUpdateError("invalid_action")
 
     _write_status(
@@ -810,7 +819,7 @@ def run_pending_request():
         request_payload = _read_json(REQUEST_FILE, {})
         action = request_payload.get("action")
         target_ref = request_payload.get("target_ref")
-        if action not in {"update", "rollback"} or not target_ref:
+        if action not in {"deploy", "update", "rollback"} or not target_ref:
             raise CodeUpdateError("no_valid_update_request")
 
         try:

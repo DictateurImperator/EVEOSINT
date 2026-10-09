@@ -211,6 +211,44 @@ def admin_git_update(request: Request, target_ref: str = Form(...)):
     return _git_redirect(success="update_started")
 
 
+@router.post("/admin/git/deploy")
+def admin_git_deploy(request: Request, target_ref: str = Form(...)):
+    user = require_login(request)
+    redirect = require_permission_or_redirect(user, "admin.system.view")
+    if redirect:
+        return redirect
+
+    snapshot = get_code_update_snapshot()
+    allowed_targets = {item.get("key") for item in snapshot.get("deploy_targets", [])}
+    if not snapshot.get("deploy_allowed") or target_ref not in allowed_targets:
+        return _git_redirect(error="deploy_not_allowed")
+
+    try:
+        queue_code_action("deploy", target_ref)
+        audit_log(
+            request,
+            "admin_code_branch_deploy",
+            user_id=user["id"],
+            username=user["username"],
+            target_type="code_update",
+            target_id=target_ref,
+            details="branch_deploy_queued",
+        )
+    except CodeUpdateError as exc:
+        audit_log(
+            request,
+            "admin_code_branch_deploy_failed",
+            user_id=user["id"],
+            username=user["username"],
+            target_type="code_update",
+            target_id=target_ref,
+            details=str(exc),
+        )
+        return _git_redirect(error="deploy_start_failed")
+
+    return _git_redirect(success="deploy_started")
+
+
 @router.post("/admin/git/rollback")
 def admin_git_rollback(request: Request, target_ref: str = Form(...)):
     user = require_login(request)

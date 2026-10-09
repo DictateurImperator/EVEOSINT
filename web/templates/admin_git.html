@@ -18,6 +18,8 @@
   <div class="alert alert-info py-2">Code update started. This page will refresh automatically when deployment finishes.</div>
 {% elif success == "rollback_started" %}
   <div class="alert alert-info py-2">Rollback started. This page will refresh automatically when deployment finishes.</div>
+{% elif success == "deploy_started" %}
+  <div class="alert alert-info py-2">Selected branch deployment started. This page will refresh automatically when deployment finishes.</div>
 {% endif %}
 
 {% if error == "config_failed" %}
@@ -34,6 +36,10 @@
   <div class="alert alert-danger py-2">Rollback to the selected target is not available.</div>
 {% elif error == "rollback_start_failed" %}
   <div class="alert alert-danger py-2">Unable to start the rollback.</div>
+{% elif error == "deploy_not_allowed" %}
+  <div class="alert alert-danger py-2">This branch cannot be deployed right now. Check versions and select a branch different from the current deployment.</div>
+{% elif error == "deploy_start_failed" %}
+  <div class="alert alert-danger py-2">Unable to start the selected branch deployment.</div>
 {% endif %}
 
 <section class="content-card p-3 p-md-4 mb-4">
@@ -198,10 +204,6 @@
       <div class="alert alert-info py-2">
         Tracked local modifications will be replaced by the selected Git version during update or rollback.
       </div>
-    {% elif code_update.state == "diverged" or code_update.state == "local_ahead" %}
-      <div class="alert alert-warning py-2">
-        The current commit is ahead of or diverged from the reference branch. Update is available only for branches that extend the current deployment.
-      </div>
     {% endif %}
 
     <div class="d-flex flex-wrap gap-2 align-items-end">
@@ -209,70 +211,24 @@
         <button class="btn btn-outline-light" type="submit" {% if code_update.deployment_active %}disabled{% endif %}>Check versions</button>
       </form>
 
-      <form method="post" action="/admin/git/update" class="m-0 d-flex gap-2 align-items-end">
+      <form method="post" action="/admin/git/deploy" class="m-0 d-flex flex-wrap gap-2 align-items-end">
         <div>
-          <label class="form-label small mb-1" for="update_target">Update to</label>
-          <select class="form-select form-select-sm" id="update_target" name="target_ref" {% if not code_update.update_allowed %}disabled{% endif %}>
-            {% for group in code_update.update_target_groups %}
+          <label class="form-label small mb-1" for="deploy_target">Choose branch</label>
+          <select class="form-select form-select-sm" id="deploy_target" name="target_ref" required {% if not code_update.deploy_allowed %}disabled{% endif %}>
+            <option value="" selected disabled>Select a branch…</option>
+            {% for group in code_update.remote_target_groups %}
               <optgroup label="{{ group.label }}">
                 {% for target in group["items"] %}
-                  <option value="{{ target.key }}">{{ target.label }}</option>
+                  <option value="{{ target.key }}" {% if not target.can_deploy %}disabled{% endif %}>{{ target.label }}{% if target.is_current %} (current){% endif %}</option>
                 {% endfor %}
               </optgroup>
             {% endfor %}
           </select>
         </div>
-        <button class="btn btn-primary" type="submit" {% if not code_update.update_allowed %}disabled{% endif %}>Update</button>
-      </form>
-
-      <form method="post" action="/admin/git/rollback" class="m-0 d-flex gap-2 align-items-end">
-        <div>
-          <label class="form-label small mb-1" for="rollback_target">Rollback to</label>
-          <select class="form-select form-select-sm" id="rollback_target" name="target_ref" {% if not code_update.rollback_allowed %}disabled{% endif %}>
-            {% for group in code_update.rollback_target_groups %}
-              <optgroup label="{{ group.label }}">
-                {% for target in group["items"] %}
-                  <option value="{{ target.key }}">{{ target.label }}</option>
-                {% endfor %}
-              </optgroup>
-            {% endfor %}
-          </select>
-        </div>
-        <button class="btn btn-outline-warning" type="submit" {% if not code_update.rollback_allowed %}disabled{% endif %}>Rollback</button>
+        <button class="btn btn-primary" type="submit" {% if not code_update.deploy_allowed %}disabled{% endif %}>Deploy selected branch</button>
       </form>
     </div>
-
-    {% if code_update.remote_targets %}
-      <div class="table-responsive mt-4">
-        <table class="table table-dark table-hover align-middle mb-0">
-          <caption class="caption-top text-light">Available branches</caption>
-          <thead>
-            <tr><th>Branch</th><th>Status</th></tr>
-          </thead>
-          <tbody>
-            {% for group in code_update.remote_target_groups %}
-              <tr><th colspan="2" scope="rowgroup">{{ group.label }}</th></tr>
-              {% for target in group["items"] %}
-              <tr>
-                <td class="font-monospace">{{ target.label }}</td>
-                <td>
-                  {% if target.is_current %}
-                    <span class="badge text-bg-success">Current</span>
-                  {% elif target.can_update %}
-                    <span class="badge text-bg-warning">Update available</span>
-                  {% elif target.can_rollback %}
-                    <span class="badge text-bg-secondary">Rollback available</span>
-                  {% else %}
-                    <span class="muted-line">Different history or not yet fetched</span>
-                  {% endif %}
-                </td>
-              </tr>
-              {% endfor %}
-            {% endfor %}
-          </tbody>
-        </table>
-      </div>
-    {% endif %}
+    <div class="muted-line small mt-2">Select a stable or development branch, then deploy that version. Older versions can be selected to roll back.</div>
   {% endif %}
 
   {% if code_update.last_result or code_update.last_message %}
@@ -314,7 +270,7 @@
   {% endif %}
 </section>
 
-{% if success in ["update_started", "rollback_started"] or code_update.deployment_active %}
+{% if success in ["deploy_started", "update_started", "rollback_started"] or code_update.deployment_active %}
 <script>
 (() => {
   const poll = async () => {
