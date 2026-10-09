@@ -1,0 +1,27 @@
+{
+  "method": "Replay of 98 known target-masked kills. No DB or CCP calls. Estimates are conditional relative-score percentiles, not calibrated success probabilities. The known sample does not represent all hidden kills.",
+  "cases": 98,
+  "groups": {
+    "weak": {
+      "cases": 81,
+      "covered_by_initial_plan": 67,
+      "actual_mean_when_covered": 2.25,
+      "actual_within_score_80th_percentile": 67,
+      "mean_estimated_cost_all_cases": 24.24
+    },
+    "moderate": {
+      "cases": 10,
+      "covered_by_initial_plan": 10,
+      "actual_mean_when_covered": 3.4,
+      "actual_within_score_80th_percentile": 10,
+      "mean_estimated_cost_all_cases": 14.52
+    },
+    "strong": {
+      "cases": 7,
+      "covered_by_initial_plan": 6,
+      "actual_mean_when_covered": 1.5,
+      "actual_within_score_80th_percentile": 6,
+      "mean_estimated_cost_all_cases": 15.99
+    }
+  }
+}

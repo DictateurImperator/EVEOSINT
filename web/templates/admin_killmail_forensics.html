@@ -10,6 +10,22 @@
   <a class="btn btn-outline-info" href="/admin/killmail-forensics/recovered">Recovered killmails</a>
 </div>
 
+<section class="content-card p-3 mb-4" id="forensics-batch" aria-labelledby="forensics-batch-title">
+  <h2 class="h5" id="forensics-batch-title">Analyze all hidden kills</h2>
+  <p class="muted-line small">Build estimates in the background for every hidden MER loss. Leave both dates empty for all available exports. These dates define the batch scope; the browsing filters below apply to individual selection. You may close this tab. Saved analyses and tests are kept when resuming.</p>
+  <div class="d-flex flex-wrap gap-2 align-items-end">
+    <label class="small">From <input type="date" class="form-control form-control-sm" data-analysis-from></label>
+    <label class="small">Through <input type="date" class="form-control form-control-sm" data-analysis-to></label>
+    <button type="button" class="btn btn-sm btn-primary" data-analysis-start {% if not can_run_forensics_analysis %}disabled{% endif %} data-can-run="{{ 'yes' if can_run_forensics_analysis else 'no' }}">Analyze / resume all hidden kills</button>
+    <button type="button" class="btn btn-sm btn-outline-danger" data-analysis-stop hidden>Stop analysis</button>
+    <a href="/admin/jobs" class="btn btn-sm btn-outline-light">Job logs</a>
+  </div>
+  {% if not can_run_forensics_analysis %}<div class="small muted-line mt-2">Starting a background analysis requires the Admin Jobs run permission.</div>{% endif %}
+  <div class="small mt-3" data-analysis-status role="status" aria-live="polite"></div>
+  <div class="small muted-line mt-2" data-analysis-summary></div>
+  <div class="alert alert-danger mt-2" data-analysis-error hidden></div>
+</section>
+
 <section aria-labelledby="hiddenKillmailsTitle" id="forensics-workspace" data-selection-user="{{ user.id }}">
   <h2 id="hiddenKillmailsTitle" class="h5">Select hidden killmails</h2>
   <p class="muted-line">Browse unmatched MER losses with the killboard filters. MER data includes ships, locations, corporations and alliances; character IDs are unavailable.</p>
@@ -40,11 +56,25 @@
     <h2 id="investigationTitle" class="h5">Hash reconstruction</h2>
     <div class="d-flex gap-2">
       <label class="visually-hidden" for="forensics-sort">Sort investigations</label>
-      <select class="form-select form-select-sm" id="forensics-sort"><option value="attempts">Fewest remaining attempts first</option><option value="date">Newest kills first</option></select>
+      <select class="form-select form-select-sm" id="forensics-sort"><option value="priority">Strongest evidence, then estimated cost</option><option value="estimate">Fewest estimated trials first</option><option value="attempts">Fewest remaining attempts first</option><option value="date">Newest kills first</option></select>
       <button class="btn btn-sm btn-outline-light" type="button" data-investigations-refresh>Refresh</button>
       <button class="btn btn-sm btn-outline-danger" type="button" data-investigations-stop hidden>Stop validation</button>
     </div>
   </div>
+  <div class="d-flex flex-wrap gap-2 align-items-end mb-3">
+    <label class="small">Recovery outlook <select class="form-select form-select-sm" data-assessment-filter><option value="">All outlooks</option><option value="strong">Strong evidence</option><option value="moderate">Moderate evidence</option><option value="weak">Weak evidence</option><option value="blocked">Needs input / analysis failed</option><option value="exhausted">Selected plan exhausted</option></select></label>
+    <label class="small">Pilot evidence <select class="form-select form-select-sm" data-evidence-role><option value="either">Victim or final blow</option><option value="victim">Victim</option><option value="attacker">Final blow</option></select></label>
+    <button type="button" class="btn btn-sm btn-outline-light" data-evidence-clear>Clear evidence filters</button>
+  </div>
+  <details class="mb-3"><summary>Filter by evidence</summary>
+    <p class="small muted-line mt-2">All checked pilot clues must occur on the same selected candidate. Hover the outlook for the reasons behind its assessment.</p>
+    <div class="row g-2">
+    {% for key, item in forensics_evidence_filters.items() %}
+      <label class="col-12 col-md-6 col-xl-4 small"><input type="checkbox" value="{{ key }}" data-evidence-filter> {{ item[0] }}</label>
+    {% endfor %}
+    </div>
+  </details>
+  <p class="small muted-line">Estimated trials show a range from relative scores, conditional on the answer being in your selected candidates. Recovery outlook describes the strength of the clues. Maximum remaining combinations is the full search budget; neither value guarantees recovery.</p>
   <p class="muted-line small">Pilot percentages are relative scores among listed hypotheses, not calibrated certainty. Hover a candidate for evidence. Current inferred skills and historical ship usage are scored separately. Known combatants are selected first for the final blow; other corporation members remain available when widening the search. Keep this tab open during CCP validation; stopping retains completed tests.</p>
   <div role="status" aria-live="polite" data-investigations-status></div>
   <div class="alert alert-danger" role="alert" data-investigations-error hidden></div>
@@ -52,5 +82,6 @@
   <div class="d-flex gap-2 mt-3"><button class="btn btn-sm btn-outline-light" type="button" data-investigations-prev disabled>Previous</button><button class="btn btn-sm btn-outline-light" type="button" data-investigations-next disabled>Next</button></div>
 </section>
 {% include "forensics_investigations_script.html" %}
+{% include "forensics_batch_script.html" %}
 {% include "admin_killmail_forensics_script.html" %}
 {% endblock %}

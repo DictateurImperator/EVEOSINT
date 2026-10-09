@@ -8,9 +8,10 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from psycopg2.errors import QueryCanceled
 from pydantic import BaseModel, Field, StrictInt
 
-from . import forensics_store
+from . import forensics_store, forensics_batch
 from .auth import has_permission, require_login, require_permission_or_redirect
 from .entities import EntityError, get_hidden_killmails_page
+from .forensics_forecast import EVIDENCE_FILTERS
 from .killmail_filters import killmail_filters_from_request, search_killboard_filters
 from .layout import app_context
 from .main_objects import templates
@@ -50,6 +51,8 @@ def admin_killmail_forensics(request: Request):
         {
             "killboard_search_url": "/admin/killmail-forensics/search",
             "killboard_entity_placeholder": "Alliance, corporation…",
+            "can_run_forensics_analysis": has_permission(user, "admin.jobs.run"),
+            "forensics_evidence_filters": EVIDENCE_FILTERS,
         }
     )
     return templates.TemplateResponse(
@@ -182,12 +185,19 @@ def forensics_cases(
     sort: str = "attempts",
     page: int = Query(1, ge=1),
     recovered: bool = False,
+    assessment: str = "",
+    evidence: list[str] = Query(default=[]),
+    evidence_role: str = "either",
 ):
     denied = _workspace_access(request)
     if denied is not None:
         return denied
     return _workspace_result(
-        lambda: {"cases": forensics_store.list_cases(sort, page, recovered)}
+        lambda: {
+            "cases": forensics_store.list_cases(
+                sort, page, recovered, assessment, evidence, evidence_role
+            )
+        }
     )
 
 
@@ -235,9 +245,26 @@ def forensics_validate(request: Request, case_id: int):
     denied = _workspace_access(request, True)
     if denied is not None:
         return denied
-    return _workspace_result(
-        lambda: forensics_store.validate_next(case_id, require_login(request)["id"])
-    )
+
+    def validate_and_refresh():
+        result = forensics_store.validate_next(case_id, require_login(request)["id"])
+        if result.get("neighbors_queued"):
+            try:
+                from .jobs import run_forensics_analysis_job
+
+                run_forensics_analysis_job(
+                    require_login(request)["id"], refresh_only=True
+                )
+            except Exception:
+                # A running worker drains this durable queue. Launch failures never
+                # discard a CCP result; pending recalculations remain visible.
+                logger.info(
+                    "Neighbor recalculation queued; worker already running or launch unavailable.",
+                    exc_info=True,
+                )
+        return result
+
+    return _workspace_result(validate_and_refresh)
 
 
 @router.get("/admin/killmail-forensics/recovered", response_class=HTMLResponse)
@@ -287,3 +314,61 @@ def forensics_recovered_kill(request: Request, kill_id: int):
     return templates.TemplateResponse(
         request=request, name="forensics_recovered_detail.html", context=context
     )
+
+
+class AnalysisScope(BaseModel):
+    date_from: date | None = None
+    date_to: date | None = None
+
+
+@router.get("/admin/killmail-forensics/analysis", response_class=JSONResponse)
+def forensics_analysis_status(request: Request):
+    denied = _workspace_access(request)
+    if denied is not None:
+        return denied
+    return _workspace_result(forensics_batch.analysis_status)
+
+
+@router.post("/admin/killmail-forensics/analysis/start", response_class=JSONResponse)
+def forensics_analysis_start(request: Request, scope: AnalysisScope):
+    denied = _workspace_access(request, True)
+    if denied is not None:
+        return denied
+    user = require_login(request)
+    if not has_permission(user, "admin.jobs.run"):
+        return JSONResponse(
+            {
+                "error": "The admin.jobs.run permission is required to start the background job."
+            },
+            status_code=403,
+        )
+    from .jobs import JobError, run_forensics_analysis_job
+    from .audit import audit_log
+
+    try:
+        ok, message = run_forensics_analysis_job(
+            user["id"], scope.date_from, scope.date_to
+        )
+        audit_log(
+            request,
+            "admin_job_run",
+            user_id=user["id"],
+            username=user["username"],
+            target_type="job",
+            target_id="analyze_hidden_killmails",
+            details=message,
+        )
+    except JobError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=409)
+    return JSONResponse(
+        {"message": "Background analysis started. You may close this tab."},
+        status_code=200 if ok else 503,
+    )
+
+
+@router.post("/admin/killmail-forensics/analysis/stop", response_class=JSONResponse)
+def forensics_analysis_stop(request: Request):
+    denied = _workspace_access(request, True)
+    if denied is not None:
+        return denied
+    return _workspace_result(forensics_batch.stop_analysis)

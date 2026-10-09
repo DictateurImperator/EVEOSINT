@@ -84,10 +84,20 @@
             </button>
           </form>
         {% elif job.type == "killmail_forensics_setup" %}
-          <p class="muted-line small">Run once after deploying Killmail Forensics. Re-running preserves existing investigations.</p>
+          <p class="muted-line small">Run after deploying or upgrading Killmail Forensics. Re-running adds missing tables and columns while preserving investigations and tests.</p>
           <form method="post" action="/admin/jobs/killmail-forensics-setup/run" class="mb-3">
             <button class="btn btn-primary" type="submit" {% if job.running or not job.enabled %}disabled{% endif %}>Create Forensics tables</button>
           </form>
+        {% elif job.type == "killmail_forensics_analysis" %}
+          <p class="muted-line small">Analyze all hidden MER losses in the background. Existing investigations and tests are preserved. Leave dates empty for all available exports. No CCP requests are sent.</p>
+          <form method="post" action="/admin/jobs/forensics-analysis/run" class="mb-3">
+            <div class="d-flex flex-wrap gap-2 align-items-end">
+              <label>From <input type="date" name="date_from" class="form-control"></label>
+              <label>Through <input type="date" name="date_to" class="form-control"></label>
+              <button class="btn btn-primary" type="submit" {% if job.running or not job.enabled %}disabled{% endif %}>Analyze / resume hidden kills</button>
+            </div>
+          </form>
+          <a href="/admin/killmail-forensics#forensics-batch">View estimates, progress and stop controls</a>
         {% elif job.type == "sde" %}
           <form method="post" action="/admin/jobs/sde/run" class="mb-3">
             <button type="submit" class="btn btn-primary" {% if not job.enabled or job.running %}disabled{% endif %}>

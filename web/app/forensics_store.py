@@ -1,6 +1,7 @@
 """Persistence and one-trial validation. No DDL, rawkm import or MER mutation."""
 
 import json
+import logging
 import math
 from contextlib import contextmanager
 from datetime import date, datetime, timezone
@@ -19,6 +20,7 @@ from .forensics_engine import (
     normalize_choices,
 )
 from .forensics_evidence import analyze
+from .forensics_forecast import forecast, EVIDENCE_FILTERS
 
 TABLES = (
     "forensics_cases",
@@ -26,8 +28,11 @@ TABLES = (
     "forensics_recovered",
     "forensics_esi_gate",
     "forensics_esi_requests",
+    "forensics_analysis_runs",
+    "forensics_refresh_queue",
 )
 CASE_LOCK = 4721190440000
+logger = logging.getLogger(__name__)
 
 
 class ForensicsError(ValueError):
@@ -94,6 +99,77 @@ def lock_case(conn, case_id):
         )
 
 
+def remaining_plan(conn, case, plan=None):
+    plan = combinations(case["choices"], case["hypotheses"]) if plan is None else plan
+    done = {
+        (a["killmail_id"], a["hash"])
+        for a in execute(
+            conn,
+            "SELECT killmail_id,hash FROM web.forensics_attempts WHERE case_id=%s",
+            (case["id"],),
+        )
+    }
+    return [
+        item
+        for item in plan
+        if (
+            item[0],
+            killmail_hash(
+                item[1],
+                item[2],
+                case["snapshot"]["victim_ship_type_id"],
+                case["kill_datetime"],
+            ),
+        )
+        not in done
+    ]
+
+
+def persist_forecast(conn, case, remaining=None):
+    remaining = remaining_plan(conn, case) if remaining is None else remaining
+    info = forecast(
+        case["hypotheses"],
+        case["choices"],
+        remaining,
+        recovered=case["status"] == "recovered",
+        analysis_error=case.get("analysis_error"),
+    )
+    execute(
+        conn,
+        """UPDATE web.forensics_cases SET forecast=%s,expected_trials=%s,
+        recovery_priority=%s,estimated_attempts=%s,analysis_version=%s WHERE id=%s""",
+        (
+            Json(info),
+            info["expected_trials"],
+            info["priority"],
+            0 if case["status"] == "recovered" else len(remaining),
+            case["hypotheses"].get("version", 0),
+            case["id"],
+        ),
+    )
+    case.update(
+        forecast=info,
+        expected_trials=info["expected_trials"],
+        recovery_priority=info["priority"],
+    )
+    return info
+
+
+def initial_choices(hypotheses):
+    def pilots(side):
+        return [
+            c["id"]
+            for c in hypotheses[side]["candidates"]
+            if c["id"] is not None and (side == "victim" or c.get("pvp_priority"))
+        ][:9] + [None]
+
+    return {
+        "ids": [c["id"] for c in hypotheses["ids"]["candidates"][:20]],
+        "victims": pilots("victim"),
+        "attackers": pilots("attacker"),
+    }
+
+
 def create_case(ref, user_id):
     with connection() as conn:
         existing = execute(
@@ -103,29 +179,19 @@ def create_case(ref, user_id):
             (ref["kill_datetime"], ref["source_month"], int(ref["source_row"])),
         )
         if existing:
+            if existing[0].get("forecast") is None:
+                persist_forecast(conn, existing[0])
+                return json_safe(get_case(conn, existing[0]["id"]))
             return json_safe(existing[0])
         snapshot, hypotheses = analyze(conn, ref)
 
-        def initial_pilots(side):
-            candidates = hypotheses[side]["candidates"]
-            eligible = [
-                c["id"]
-                for c in candidates
-                if c["id"] is not None and (side == "victim" or c.get("pvp_priority"))
-            ]
-            return eligible[:9] + [None]
-
-        choices = {
-            "ids": [c["id"] for c in hypotheses["ids"]["candidates"][:20]],
-            "victims": initial_pilots("victim"),
-            "attackers": initial_pilots("attacker"),
-        }
+        choices = initial_choices(hypotheses)
         total = len(combinations(choices, hypotheses))
         found = execute(
             conn,
             """INSERT INTO web.forensics_cases(kill_datetime,source_month,source_row,snapshot,hypotheses,
-                choices,estimated_attempts,status,created_by)
-            VALUES(%s::timestamptz,%s::date,%s,%s,%s,%s,%s,%s,%s)
+                choices,estimated_attempts,status,created_by,choices_customized)
+            VALUES(%s::timestamptz,%s::date,%s,%s,%s,%s,%s,%s,%s,FALSE)
             ON CONFLICT(kill_datetime,source_month,source_row) DO NOTHING RETURNING *""",
             (
                 snapshot["kill_datetime"],
@@ -146,25 +212,59 @@ def create_case(ref, user_id):
                 AND source_month=%s::date AND source_row=%s""",
                 (ref["kill_datetime"], ref["source_month"], int(ref["source_row"])),
             )
-        return json_safe(found[0])
+        persist_forecast(conn, found[0])
+        return json_safe(get_case(conn, found[0]["id"]))
 
 
-def list_cases(sort="attempts", page=1, recovered=False):
+def list_cases(
+    sort="attempts",
+    page=1,
+    recovered=False,
+    assessment="",
+    evidence=(),
+    evidence_role="either",
+):
+    actionable = "CASE WHEN status='ready' AND estimated_attempts>0 THEN 0 ELSE 1 END"
     order = {
-        "attempts": "CASE WHEN status='ready' AND estimated_attempts>0 THEN 0 ELSE 1 END,estimated_attempts ASC,id ASC",
+        "attempts": actionable + ",estimated_attempts ASC,id ASC",
+        "estimate": actionable + ",expected_trials ASC NULLS LAST,id ASC",
+        "priority": actionable
+        + ",recovery_priority DESC NULLS LAST,expected_trials ASC NULLS LAST,id ASC",
         "date": "kill_datetime DESC,id DESC",
-    }.get(
-        sort,
-        "CASE WHEN status='ready' AND estimated_attempts>0 THEN 0 ELSE 1 END,estimated_attempts ASC,id ASC",
-    )
+    }.get(sort, actionable + ",estimated_attempts ASC,id ASC")
+    if assessment not in ("", "strong", "moderate", "weak", "blocked", "exhausted"):
+        raise ForensicsError("Invalid recovery assessment filter.")
+    if evidence_role not in ("either", "victim", "attacker") or any(
+        key not in EVIDENCE_FILTERS for key in evidence
+    ):
+        raise ForensicsError("Invalid evidence filter.")
+    context_flags = [key for key in evidence if EVIDENCE_FILTERS[key][1] == "context"]
+    pilot_flags = [key for key in evidence if EVIDENCE_FILTERS[key][1] == "pilot"]
+    extra = ""
+    params = [recovered, assessment, assessment]
+    if context_flags:
+        extra += " AND c.forecast->'context_flags' @> %s::jsonb"
+        params.append(Json(context_flags))
+    if pilot_flags:
+        sides = (
+            ("victim", "attacker") if evidence_role == "either" else (evidence_role,)
+        )
+        predicates = []
+        for side in sides:
+            predicates.append("c.forecast->'candidate_evidence' @> %s::jsonb")
+            params.append(Json({side: [{"flags": pilot_flags}]}))
+        extra += " AND (" + " OR ".join(predicates) + ")"
+    params.append((max(1, int(page)) - 1) * 50)
     with connection() as conn:
         result = execute(
             conn,
             f"""SELECT c.*,r.killmail_id AS recovered_id,r.hash AS recovered_hash,
+            EXISTS(SELECT 1 FROM web.forensics_refresh_queue q WHERE q.case_id=c.id) AS refresh_pending,
             (SELECT COUNT(*) FROM web.forensics_attempts a WHERE a.case_id=c.id) AS attempted
             FROM web.forensics_cases c LEFT JOIN web.forensics_recovered r ON r.killmail_id=c.recovered_killmail_id
-            WHERE (c.status='recovered')=%s ORDER BY {order} LIMIT 50 OFFSET %s""",
-            (recovered, (max(1, int(page)) - 1) * 50),
+            WHERE (c.status='recovered')=%s AND (%s='' OR c.forecast->>'assessment'=%s)
+            {extra} ORDER BY {order} LIMIT 50 OFFSET %s""",
+            params,
         )
         return json_safe(result)
 
@@ -187,6 +287,7 @@ def _save_choices(conn, case, choices):
                             f"Character {candidate}" if candidate else "No character"
                         ),
                         "weight": 1,
+                        "evidence": {"manual": True},
                         "reasons": [
                             "Manually selected candidate; no automatic supporting evidence."
                         ],
@@ -195,37 +296,27 @@ def _save_choices(conn, case, choices):
                 known.add(candidate)
         case["hypotheses"][side]["candidates"] = ranked_candidates(candidates)
     plan = combinations(choices, case["hypotheses"])
-    attempts = execute(
+    case["choices_customized"] = (
+        case.get("choices_customized", True) or choices != case["choices"]
+    )
+    case["choices"] = choices
+    remaining = remaining_plan(conn, case, plan)
+    case["status"] = "ready" if remaining else ("exhausted" if plan else "needs_input")
+    execute(
         conn,
-        "SELECT killmail_id,hash FROM web.forensics_attempts WHERE case_id=%s",
-        (case_id,),
-    )
-    done = {(a["killmail_id"], a["hash"]) for a in attempts}
-    remaining = sum(
+        """UPDATE web.forensics_cases SET hypotheses=%s,choices=%s,estimated_attempts=%s,
+        plan_cursor=0,status=%s,choices_customized=%s,updated_at=NOW() WHERE id=%s""",
         (
-            i,
-            killmail_hash(
-                v, a, case["snapshot"]["victim_ship_type_id"], case["kill_datetime"]
-            ),
-        )
-        not in done
-        for i, v, a, _ in plan
+            Json(case["hypotheses"]),
+            Json(choices),
+            len(remaining),
+            case["status"],
+            case["choices_customized"],
+            case_id,
+        ),
     )
-    return json_safe(
-        execute(
-            conn,
-            """UPDATE web.forensics_cases SET hypotheses=%s,choices=%s,estimated_attempts=%s,
-            plan_cursor=0,status=%s,updated_at=NOW() WHERE id=%s RETURNING *""",
-            (
-                Json(case["hypotheses"]),
-                Json(choices),
-                remaining,
-                "ready" if remaining else ("exhausted" if plan else "needs_input"),
-                case_id,
-            ),
-            True,
-        )
-    )
+    persist_forecast(conn, case, remaining)
+    return json_safe(get_case(conn, case_id))
 
 
 def save_choices(case_id, choices):
@@ -244,12 +335,19 @@ def refresh_case(case_id):
         snapshot, hypotheses = analyze(conn, case)
         execute(
             conn,
-            "UPDATE web.forensics_cases SET snapshot=%s,hypotheses=%s,updated_at=NOW() WHERE id=%s",
+            "UPDATE web.forensics_cases SET snapshot=%s,hypotheses=%s,analysis_error=NULL,updated_at=NOW() WHERE id=%s",
             (Json(snapshot), Json(hypotheses), case_id),
         )
         # Preserve explicit user choices and attempted combinations.
-        case.update(snapshot=snapshot, hypotheses=hypotheses)
-        return _save_choices(conn, case, case["choices"])
+        case.update(snapshot=snapshot, hypotheses=hypotheses, analysis_error=None)
+        choices = (
+            case["choices"]
+            if case.get("choices_customized", True)
+            else initial_choices(hypotheses)
+        )
+        if not case.get("choices_customized", True):
+            case["choices"] = choices
+        return _save_choices(conn, case, choices)
 
 
 def reserve_request():
@@ -486,12 +584,49 @@ def validate_next(case_id, user_id):
                         "UPDATE web.forensics_cases SET status='recovered',recovered_killmail_id=%s,estimated_attempts=0,updated_at=NOW() WHERE id=%s",
                         (kill_id, case_id),
                     )
+                    # Commit the CCP result before optional neighbor maintenance.
+                    case["status"] = "recovered"
+                    persist_forecast(conn, case, [])
                     conn.commit()
+                    queued = []
+                    refresh_error = False
+                    try:
+                        from .forensics_evidence import nearby_systems
+
+                        systems = list(
+                            nearby_systems(
+                                conn, case["snapshot"].get("solar_system_id")
+                            )
+                        )
+                        queued = execute(
+                            conn,
+                            """INSERT INTO web.forensics_refresh_queue(case_id,trigger_killmail_id)
+                            SELECT id,%s FROM web.forensics_cases WHERE status<>'recovered'
+                            AND kill_datetime BETWEEN %s::timestamptz - INTERVAL '1 hour' AND %s::timestamptz + INTERVAL '1 hour'
+                            AND (snapshot->>'solar_system_id')::bigint=ANY(%s)
+                            ON CONFLICT(case_id) DO UPDATE SET trigger_killmail_id=EXCLUDED.trigger_killmail_id,
+                                queued_at=NOW(),failures=0,next_retry_at=NOW() RETURNING case_id""",
+                            (
+                                kill_id,
+                                case["kill_datetime"],
+                                case["kill_datetime"],
+                                systems,
+                            ),
+                        )
+                        conn.commit()
+                    except Exception:
+                        conn.rollback()
+                        refresh_error = True
+                        logger.exception(
+                            "Killmail %s confirmed; neighbor queueing failed.", kill_id
+                        )
                     return {
                         "done": True,
                         "recovered": True,
                         "killmail_id": kill_id,
                         "hash": hash_value,
+                        "neighbors_queued": len(queued),
+                        "neighbor_refresh_error": refresh_error,
                     }
                 execute(
                     conn,
@@ -499,6 +634,7 @@ def validate_next(case_id, user_id):
                     updated_at=NOW() WHERE id=%s""",
                     (cursor + 1, case_id),
                 )
+                persist_forecast(conn, case)
                 conn.commit()
                 if sent:
                     return {
@@ -512,6 +648,8 @@ def validate_next(case_id, user_id):
                     "UPDATE web.forensics_cases SET status=%s,estimated_attempts=0,updated_at=NOW() WHERE id=%s",
                     ("exhausted" if plan else "needs_input", case_id),
                 )
+                case["status"] = "exhausted" if plan else "needs_input"
+                persist_forecast(conn, case, [])
                 conn.commit()
                 return {
                     "done": True,

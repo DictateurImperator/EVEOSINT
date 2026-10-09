@@ -39,6 +39,14 @@
       '<div style="max-height:260px;overflow:auto">'+rows+'</div></details>'+
       '<label class="small d-block mt-2">Add '+(key==='ids'?'killmail':'character')+' IDs <input class="form-control form-control-sm" data-manual="'+key+'" value="'+esc(manual)+'" placeholder="123, 456" '+(active?'disabled':'')+'></label>';
   }
+  function estimate(c) {
+    var f=c.forecast;
+    if(!f)return '<span class="muted-line">Awaiting analysis</span>';
+    var names={strong:'Strong evidence',moderate:'Moderate evidence',weak:'Weak evidence',blocked:'Needs input',exhausted:'Selected plan exhausted',confirmed:'Confirmed'};
+    var count=f.typical_trials===null?'Not estimated':f.typical_trials+'–'+f.upper_trials+' trials';
+    return '<div data-forecast title="'+esc(f.reasons.join('\n'))+'"><strong>'+esc(count)+'</strong><div class="small">'+esc(names[f.assessment] || f.assessment)+'</div></div>'+
+      (c.refresh_pending?'<div class="small text-info">Neighbor recalculation queued</div>':'');
+  }
   function render(cases) {
     root.querySelector('[data-investigations-stop]').hidden=active===null;
     latest = new Map(cases.map(function (c) {return [c.id,c];}));
@@ -50,15 +58,15 @@
         (h.ids.truncated?'<div class="text-warning small">'+h.ids.total+' IDs possible; showing '+h.ids.candidates.length+'. Add more IDs manually.</div>':'')+'</td>'+
         '<td><a href="/kill/mer/'+esc(c.source_month)+'/'+c.source_row+'/hidden?kill_datetime='+encodeURIComponent(c.kill_datetime)+'">'+esc(s.victim_ship_type_name || 'Type '+s.victim_ship_type_id)+'</a><div class="small">Victim ship type '+s.victim_ship_type_id+'</div><div>'+esc(c.kill_datetime)+' (UTC)</div><div class="small muted-line">'+esc(s.solar_system_name || 'System '+s.solar_system_id)+'</div><div class="small">Victim corp '+esc(s.victim_corporation_name || s.victim_corporation_id || 'unknown')+' · Final blow corp '+esc(s.killer_corporation_name || s.killer_corporation_id || 'unknown')+'</div></td>'+
         '<td>'+picker(c,'victim','victims')+'</td><td>'+picker(c,'attacker','attackers')+'</td>'+
-        '<td><strong data-remaining>'+(c.status==='needs_input'?'Not estimated':c.estimated_attempts)+'</strong><div class="small muted-line">'+c.attempted+' stored tests</div><div class="badge text-bg-secondary">'+esc(c.status)+'</div>'+
+        '<td>'+estimate(c)+'</td><td><strong data-remaining>'+(c.status==='needs_input'?'Not estimated':c.estimated_attempts)+'</strong><div class="small muted-line">'+c.attempted+' stored tests</div><div class="badge text-bg-secondary">'+esc(c.status)+'</div>'+
         (h.warnings.length?'<details class="small text-warning"><summary>Evidence limits</summary>'+h.warnings.map(esc).join('<br>')+'</details>':'')+'</td>'+
         '<td><button type="button" class="btn btn-sm btn-outline-primary mb-1" data-case-action="save" '+(active?'disabled':'')+'>Apply choices</button> '+
         '<button type="button" class="btn btn-sm btn-primary mb-1" data-case-action="validate" '+(active?'disabled':'')+'>Test selected</button> '+
         '<button type="button" class="btn btn-sm btn-outline-light mb-1" data-case-action="refresh" '+(active?'disabled':'')+'>Refresh hypotheses</button>'+ 
         (active===c.id?' <button type="button" class="btn btn-sm btn-outline-danger" data-case-action="stop">Stop</button>':'')+'</td></tr>';
     }).join('');
-    table.innerHTML='<table class="table align-middle"><thead><tr><th>MER / CCP ID</th><th>Known hash inputs</th><th>Victim hypotheses</th><th>Final blow hypotheses</th><th>Attempts remaining</th><th>Actions</th></tr></thead><tbody>'+
-      (rows || '<tr><td colspan="6" class="muted-line">Select hidden killmails and click Investigate selected.</td></tr>')+'</tbody></table>';
+    table.innerHTML='<table class="table align-middle"><thead><tr><th>MER / CCP ID</th><th>Known hash inputs</th><th>Victim hypotheses</th><th>Final blow hypotheses</th><th>Estimated search / outlook</th><th>Maximum attempts remaining</th><th>Actions</th></tr></thead><tbody>'+
+      (rows || '<tr><td colspan="7" class="muted-line">Select hidden killmails and click Investigate selected.</td></tr>')+'</tbody></table>';
     root.querySelector('[data-investigations-prev]').disabled=page===1;
     root.querySelector('[data-investigations-next]').disabled=cases.length<50;
   }
@@ -66,7 +74,9 @@
     var current=++generation;
     root.setAttribute('aria-busy','true');
     try {
-      var data=await api('cases?sort='+sort.value+'&page='+page);
+      var params=new URLSearchParams({sort:sort.value,page:page,assessment:root.querySelector('[data-assessment-filter]').value,evidence_role:root.querySelector('[data-evidence-role]').value});
+      root.querySelectorAll('[data-evidence-filter]:checked').forEach(function(box){params.append('evidence',box.value);});
+      var data=await api('cases?'+params.toString());
       if(current===generation) render(data.cases);
     } finally {
       if(current===generation) root.setAttribute('aria-busy','false');
@@ -98,7 +108,7 @@
         var data=await api('cases/'+id+'/validate',{});
         await load();
         if(token!==runToken) break;
-        status.textContent=data.message || (data.recovered?'Killmail confirmed by CCP. See Recovered killmails.':'Hypothesis checked.');
+        status.textContent=data.neighbor_refresh_error?'Killmail confirmed. Neighbor queueing failed; see job/server logs.':data.message || (data.recovered?'Killmail confirmed by CCP. See Recovered killmails.':'Hypothesis checked.');
         if(data.done || data.paused) break;
         var remaining=Math.max(1,Number(data.retry_after)||2);
         while(remaining>0 && token===runToken) {
@@ -122,6 +132,7 @@
       var choices=rowChoices(row); drafts.set(Number(row.dataset.case),choices);
       var count=choices.ids.length*choices.victims.length*choices.attackers.length;
       row.querySelector('[data-remaining]').textContent=count+' in draft';
+      var forecast=row.querySelector('[data-forecast]');if(forecast)forecast.textContent='Apply choices to update estimate';
     }catch(error){if(reportError)fail(error);}
   }
   table.addEventListener('change',function(event){updateDraft(event,true);});
@@ -152,6 +163,11 @@
     button.disabled=false;status.textContent=(refs.length-errors)+' investigations ready'+(errors?' · '+errors+' could not be analyzed.':'.');
     await load().catch(fail);root.scrollIntoView({behavior:'smooth',block:'start'});
   });
+  root.querySelector('[data-assessment-filter]').addEventListener('change',function(){page=1;load().catch(fail);});
+  root.querySelector('[data-evidence-role]').addEventListener('change',function(){page=1;load().catch(fail);});
+  root.querySelectorAll('[data-evidence-filter]').forEach(function(box){box.addEventListener('change',function(){page=1;load().catch(fail);});});
+  root.querySelector('[data-evidence-clear]').addEventListener('click',function(){root.querySelectorAll('[data-evidence-filter]').forEach(function(box){box.checked=false;});root.querySelector('[data-evidence-role]').value='either';root.querySelector('[data-assessment-filter]').value='';page=1;load().catch(fail);});
+  document.addEventListener('forensics:estimates-updated',function(){if(!active)load().catch(fail);});
   sort.addEventListener('change',function(){page=1;load().catch(fail);});
   root.querySelector('[data-investigations-refresh]').addEventListener('click',function(){errorBox.hidden=true;load().catch(fail);});
   root.querySelector('[data-investigations-stop]').addEventListener('click',stopValidation);

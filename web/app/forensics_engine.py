@@ -5,7 +5,7 @@ import itertools
 from collections import defaultdict
 from datetime import datetime, timezone
 
-VERSION = 2
+VERSION = 3
 MAX_IDS = 200
 MAX_PILOTS = 200
 CAPSULE_TYPES = frozenset({670, 33328})
@@ -336,6 +336,54 @@ def pilot_candidates(
                 "weight": round(weight, 4),
                 "reasons": reasons,
                 "pvp_priority": pvp_priority,
+                "evidence": {
+                    "same_system": any(
+                        e.get("role") == "attacker" or e.get("ship_category_id", 6) == 6
+                        for e in local
+                    ),
+                    "neighbor_system": any(
+                        e.get("role") == "attacker" or e.get("ship_category_id", 6) == 6
+                        for e in nearby
+                    ),
+                    "recent_ship": bool(used)
+                    and (at - used).total_seconds() <= 30 * 86400,
+                    "past_ship": bool(used),
+                    "companions": shared > 0,
+                    "disappeared": role == "victim"
+                    and bool(before)
+                    and min((at - e["time"]).total_seconds() for e in before) <= 1200
+                    and not after
+                    and fight_continues,
+                    "inferred_skills": cid in capable,
+                    "final_blow_local": role == "attacker"
+                    and any(e.get("final_blow") for e in matching),
+                    "same_ship_before_loss": role == "victim"
+                    and any(
+                        e["time"] < at and e.get("role") == "attacker" for e in matching
+                    ),
+                    "recovered_neighbor": any(e.get("from_recovered") for e in events),
+                    "membership": cid in members,
+                    "historical_pvp": cid in past_pvp,
+                    "same_ship_local": bool(matching),
+                    "unique_ship_local": bool(matching) and len(ship_users) == 1,
+                    "physical_local": any(
+                        e.get("role") == "attacker" or e.get("ship_category_id", 6) == 6
+                        for e in local
+                    ),
+                    "prior_ship_days": max(0, (at - used).total_seconds() / 86400)
+                    if used
+                    else None,
+                    "capsule_sequence": bool(
+                        (capsule and earlier_ship_losses)
+                        or (
+                            role == "victim"
+                            and not capsule
+                            and category == 6
+                            and later_capsule_losses
+                        )
+                    ),
+                    "ownership_local": bool(losses) and category in OBJECT_CATEGORIES,
+                },
             }
         )
     candidates.sort(key=lambda c: (-c["weight"], c["id"]))
@@ -351,6 +399,10 @@ def pilot_candidates(
             "id": None,
             "name": "No character (NPC / unpiloted object)",
             "weight": absent_weight,
+            "evidence": {
+                "npc_type": category == 11,
+                "object_type": category in OBJECT_CATEGORIES,
+            },
             "reasons": [
                 "Explicit absent-character hypothesis; unknown MER character fields do not prove absence.",
                 "Structures, deployables, abandoned ships and NPC final blows need this alternative.",
@@ -359,6 +411,9 @@ def pilot_candidates(
     )
     return {
         "candidates": ranked_candidates(candidates),
+        "category": category,
+        "local_pilots": len(active_here),
+        "same_ship_pilots": len(ship_users),
         "truncated": truncated,
         "reasons": [
             "Scores are relative likelihoods among listed candidates, not calibrated probabilities."

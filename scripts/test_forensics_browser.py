@@ -6,6 +6,8 @@ in test_forensics_reconstruction.py. Never imports production configuration.
 Run from the repository root: python -m scripts.test_forensics_browser
 """
 
+import sys
+import types
 from unittest.mock import patch
 from urllib.parse import urlsplit
 
@@ -34,7 +36,11 @@ def run(lab):
     app = FastAPI()
     app.include_router(f.routes.router)
     client = TestClient(app)
-    user = {"id": 7, "username": "dev", "permissions": {f.routes.PERMISSION}}
+    user = {
+        "id": 7,
+        "username": "dev",
+        "permissions": {f.routes.PERMISSION, "admin.jobs.run"},
+    }
     row = list(f.mer_row(2))
     row[1] = r.AT.date().replace(day=1)
     row[3] = r.AT
@@ -54,7 +60,19 @@ def run(lab):
             else (404, {}, {"error": "Invalid killmail hash"})
         )
 
+    launches = []
+    fake_jobs = types.ModuleType(f.PACKAGE + ".jobs")
+    fake_jobs.JobError = RuntimeError
+    fake_jobs.run_forensics_analysis_job = lambda *args, **kwargs: (
+        launches.append((args, kwargs)) or (True, "started")
+    )
+    fake_audit = types.ModuleType(f.PACKAGE + ".audit")
+    fake_audit.audit_log = lambda *args, **kwargs: None
     with (
+        patch.dict(
+            sys.modules,
+            {f.PACKAGE + ".jobs": fake_jobs, f.PACKAGE + ".audit": fake_audit},
+        ),
         patch.object(f.routes, "require_login", return_value=user),
         patch.object(f.routes, "get_hidden_killmails_page", return_value=hidden),
         patch.object(r.store, "fetch_ccp", side_effect=fetch),
@@ -93,6 +111,25 @@ def run(lab):
         page.route("**/*", handle)
         page.goto("http://forensics.test/admin/killmail-forensics")
         expect(page.locator("[data-case]")).to_have_count(1)
+        expect(page.locator("[data-forecast]")).to_contain_text("trials")
+        assert "conditional" in page.locator("[data-forecast]").get_attribute("title")
+        # All pilot flags must concern the same candidate in the chosen role.
+        evidence = page.locator('[data-evidence-filter][value="same_ship_local"]')
+        evidence.locator("xpath=ancestor::details").locator("summary").click()
+        evidence.check()
+        page.locator("[data-evidence-role]").select_option("victim")
+        page.locator('[data-evidence-filter][value="final_blow_local"]').check()
+        expect(page.locator("[data-case]")).to_have_count(0)
+        page.locator("[data-evidence-role]").select_option("attacker")
+        expect(page.locator("[data-case]")).to_have_count(1)
+        page.locator("[data-evidence-clear]").click()
+        expect(page.locator("[data-case]")).to_have_count(1)
+        page.locator("[data-analysis-from]").fill("2026-08-01")
+        page.locator("[data-analysis-to]").fill("2026-08-02")
+        with page.expect_response("**/analysis/start"):
+            page.locator("[data-analysis-start]").click()
+        assert str(launches[-1][0][1]) == "2026-08-01"
+        assert str(launches[-1][0][2]) == "2026-08-02"
         page.locator("[data-forensics-ref]").check()
         page.locator("[data-forensics-investigate]").click()
         expect(page.locator("[data-investigations-status]")).to_contain_text(
@@ -117,7 +154,7 @@ def run(lab):
         case = page.locator("[data-case]")
         # Manual candidates stay visible after saving and can be removed again.
         case.locator('[data-manual="attackers"]').fill("25")
-        with page.expect_response("**/cases?sort=date&page=1"):
+        with page.expect_response("**/cases?sort=date&page=1**"):
             page.locator("#forensics-sort").select_option("date")
         expect(page.locator("#forensics-investigations")).to_have_attribute(
             "aria-busy", "false"

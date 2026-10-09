@@ -1,6 +1,5 @@
 import json
 import os
-import signal
 import subprocess
 import sys
 from datetime import date, datetime
@@ -151,7 +150,7 @@ def _normalize_job(raw_job):
     log_path = raw_job.get("log_path")
     enabled = bool(raw_job.get("enabled", True))
 
-    if job_type not in {"sde", "killmails", "recent_kill_pilots_affiliation", "character_skill_inference", "population_alliances_init", "population_alliances_daily", "sovereignty_esi", "killmail_forensics_setup"}:
+    if job_type not in {"sde", "killmails", "recent_kill_pilots_affiliation", "character_skill_inference", "population_alliances_init", "population_alliances_daily", "sovereignty_esi", "killmail_forensics_setup", "killmail_forensics_analysis"}:
         raise JobError(f"job_type_invalid:{key}")
 
     if not isinstance(command, list) or not command:
@@ -253,6 +252,16 @@ def load_jobs_config():
             })
         )
 
+    if not any(job["key"] == "analyze_hidden_killmails" for job in jobs):
+        jobs.append(_normalize_job({
+            "key": "analyze_hidden_killmails",
+            "label": "Forensics · Analyze all hidden killmails",
+            "type": "killmail_forensics_analysis",
+            "command": [sys.executable, str(Path(__file__).resolve().parents[2] / "scripts/analyze_hidden_killmails.py")],
+            "log_path": str(Path.home() / "eveosint/data/logs/killmail_forensics_analysis.log"),
+            "enabled": True,
+        }))
+
     allowed_keys = {
         "sync_sde",
         "sync_killmails",
@@ -262,6 +271,7 @@ def load_jobs_config():
         "population_alliances_daily",
         "sync_sovereignty_esi",
         "setup_killmail_forensics",
+        "analyze_hidden_killmails",
     }
     unexpected = {job["key"] for job in jobs} - allowed_keys
     if unexpected:
@@ -487,3 +497,23 @@ def run_killmail_forensics_setup_job():
     if job["type"] != "killmail_forensics_setup":
         raise JobError("job_type_mismatch:setup_killmail_forensics")
     return _start_process(job, job["command"])
+
+
+def run_forensics_analysis_job(user_id, date_from=None, date_to=None, refresh_only=False):
+    from .forensics_batch import date_scope
+    try:
+        bounds = date_scope(date_from, date_to)
+        if int(user_id) <= 0:
+            raise ValueError("A user ID is required.")
+    except (ValueError, TypeError) as exc:
+        raise JobError(str(exc)) from exc
+    job = get_job("analyze_hidden_killmails")
+    if job["type"] != "killmail_forensics_analysis":
+        raise JobError("job_type_mismatch:analyze_hidden_killmails")
+    command = list(job["command"]) + ["--user-id", str(int(user_id))]
+    if refresh_only:
+        command.append("--refresh-only")
+    for option, value in zip(("--date-from", "--date-to"), bounds):
+        if value:
+            command.extend([option, value.isoformat()])
+    return _start_process(job, command)

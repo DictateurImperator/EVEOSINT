@@ -15,6 +15,7 @@ from .jobs import (
     run_sovereignty_esi_job,
     run_sde_job,
     run_killmail_forensics_setup_job,
+    run_forensics_analysis_job,
 )
 from .layout import app_context
 from .main_objects import templates
@@ -354,3 +355,21 @@ def admin_jobs_run_forensics_setup(request: Request):
         url="/admin/jobs?success=job_started" if ok else "/admin/jobs?error=job_failed",
         status_code=302,
     )
+
+
+@router.post("/admin/jobs/forensics-analysis/run")
+def admin_jobs_run_forensics_analysis(request: Request, date_from: str = Form(""), date_to: str = Form("")):
+    user = require_login(request)
+    redirect = require_permission_or_redirect(user, "admin.jobs.run")
+    if redirect:
+        return redirect
+    redirect = require_permission_or_redirect(user, "admin.killmail_forensics.dev")
+    if redirect:
+        return redirect
+    try:
+        ok, message = run_forensics_analysis_job(user["id"], date_from, date_to)
+        audit_log(request, "admin_job_run", user_id=user["id"], username=user["username"],
+                  target_type="job", target_id="analyze_hidden_killmails", details=message)
+    except JobError as exc:
+        return _error_redirect(exc)
+    return RedirectResponse(url="/admin/jobs?success=job_started" if ok else "/admin/jobs?error=job_failed", status_code=302)

@@ -50,20 +50,29 @@ def mer_snapshot(conn, ref):
 def id_evidence(conn, snapshot, exclude_kill_ids=()):
     at = utc(snapshot["kill_datetime"])
     month = snapshot["source_month"]
+    source = """SELECT m.kill_datetime AS time,m.resolved_km[1] AS id,m.source_month,m.source_row
+        FROM mer.killmails m WHERE array_length(m.resolved_km,1)=1 AND NOT m.resolved_km_ambiguous"""
+    if _table_exists(conn, "web", "forensics_recovered"):
+        source += """ UNION ALL SELECT c.kill_datetime,r.killmail_id,c.source_month,c.source_row
+            FROM web.forensics_recovered r JOIN web.forensics_cases c ON c.recovered_killmail_id=r.killmail_id"""
     anchors = []
     for direction, order in (("<", "DESC"), (">", "ASC")):
-        # SQL operators here are internal constants, never request text.
         result = rows(
             conn,
-            f"""SELECT m.kill_datetime AS time,m.resolved_km[1] AS id
-            FROM mer.killmails m WHERE m.source_month=%s::date
-            AND m.kill_datetime BETWEEN %s AND %s AND m.kill_datetime {direction} %s
-            AND array_length(m.resolved_km,1)=1 AND NOT m.resolved_km_ambiguous
-            AND NOT EXISTS (SELECT 1 FROM mer.killmails other
-                WHERE other.kill_datetime=m.kill_datetime AND other.source_month=m.source_month
-                AND other.source_row<>m.source_row)
-            ORDER BY m.kill_datetime {order} LIMIT 1""",
-            (month, at - timedelta(days=7), at + timedelta(days=7), at),
+            f"""WITH known AS ({source})
+            SELECT k.time,k.id FROM known k WHERE k.source_month=%s::date
+            AND k.time BETWEEN %s AND %s AND k.time {direction} %s
+            AND NOT (k.id=ANY(%s::bigint[]))
+            AND NOT EXISTS (SELECT 1 FROM mer.killmails other WHERE other.kill_datetime=k.time
+                AND other.source_month=k.source_month AND other.source_row<>k.source_row)
+            ORDER BY k.time {order},k.id LIMIT 1""",
+            (
+                month,
+                at - timedelta(days=7),
+                at + timedelta(days=7),
+                at,
+                list(exclude_kill_ids),
+            ),
         )
         anchors.append(result[0] if result else None)
     before, after = anchors
@@ -79,9 +88,8 @@ def id_evidence(conn, snapshot, exclude_kill_ids=()):
     )[0]
     known = rows(
         conn,
-        """SELECT resolved_km[1] AS id FROM mer.killmails
-        WHERE source_month=%s::date AND kill_datetime>%s AND kill_datetime<%s
-        AND array_length(resolved_km,1)=1 AND NOT resolved_km_ambiguous""",
+        f"""WITH known AS ({source}) SELECT DISTINCT id FROM known
+        WHERE source_month=%s::date AND time>%s AND time<%s""",
         (month, before["time"], after["time"]),
     )
     for anchor in anchors:
@@ -113,6 +121,43 @@ def nearby_systems(conn, system):
         if len(ids) > 200:
             return {system}
     return ids
+
+
+def recovered_observations(conn, at, systems, corps, exclude_kill_ids=()):
+    if (
+        not systems
+        or not corps
+        or not _table_exists(conn, "web", "forensics_recovered")
+    ):
+        return []
+    return rows(
+        conn,
+        """WITH recovered AS (
+        SELECT r.killmail_id,c.kill_datetime AS time,(r.payload->>'solar_system_id')::bigint AS system_id,r.payload
+        FROM web.forensics_recovered r JOIN web.forensics_cases c ON c.id=r.case_id
+        WHERE c.kill_datetime BETWEEN %s AND %s
+        AND (r.payload->>'solar_system_id')::bigint=ANY(%s)
+        AND NOT(r.killmail_id=ANY(%s::bigint[])))
+        SELECT k.killmail_id,k.time,k.system_id,(a->>'character_id')::bigint AS character_id,
+            (a->>'corporation_id')::bigint AS corporation_id,(a->>'ship_type_id')::bigint AS ship_type_id,
+            COALESCE((a->>'final_blow')::boolean,FALSE) AS final_blow,'attacker'::text AS role,TRUE AS from_recovered
+        FROM recovered k CROSS JOIN LATERAL jsonb_array_elements(k.payload->'attackers') a
+        WHERE (a->>'corporation_id')::bigint=ANY(%s)
+        UNION ALL
+        SELECT k.killmail_id,k.time,k.system_id,(payload->'victim'->>'character_id')::bigint,
+            (payload->'victim'->>'corporation_id')::bigint,(payload->'victim'->>'ship_type_id')::bigint,
+            FALSE,'victim'::text,TRUE FROM recovered k
+        WHERE (payload->'victim'->>'corporation_id')::bigint=ANY(%s)
+        ORDER BY time,killmail_id,character_id LIMIT 5001""",
+        (
+            at - timedelta(hours=1),
+            at + timedelta(hours=1),
+            systems,
+            list(exclude_kill_ids),
+            corps,
+            corps,
+        ),
+    )
 
 
 def analyze(conn, ref):
@@ -201,6 +246,25 @@ def analyze_snapshot(conn, snapshot, exclude_kill_ids=()):
                 list(exclude_kill_ids),
             ),
         )
+    recovered_events = recovered_observations(
+        conn, at, systems, corps, exclude_kill_ids
+    )
+    combined = {
+        (e["killmail_id"], e["role"], e["character_id"], e.get("ship_type_id")): e
+        for e in observations
+    }
+    for event in recovered_events:
+        key = (
+            event["killmail_id"],
+            event["role"],
+            event["character_id"],
+            event.get("ship_type_id"),
+        )
+        combined[key] = event
+    observations = sorted(
+        combined.values(),
+        key=lambda e: (e["time"], e["killmail_id"], e["character_id"] or 0),
+    )
     if len(observations) > 5000:
         warnings.append(
             "The combat window exceeds 5,000 appearances; evidence is incomplete."
@@ -224,6 +288,11 @@ def analyze_snapshot(conn, snapshot, exclude_kill_ids=()):
             past_pvp[corp] = {
                 r["character_id"]: r["last_attack"] for r in activity[:2000]
             }
+    for event in recovered_events:
+        if event["time"] < at and event["role"] == "attacker" and event["character_id"]:
+            pilots = past_pvp.setdefault(event["corporation_id"], {})
+            cid = event["character_id"]
+            pilots[cid] = max(pilots.get(cid, event["time"]), event["time"])
     priority_ids = list(
         {cid for pilots in past_pvp.values() for cid in pilots}
         | {e["character_id"] for e in observations if e["character_id"]}
@@ -310,6 +379,10 @@ def analyze_snapshot(conn, snapshot, exclude_kill_ids=()):
         prior_usage = {
             (u["character_id"], u["ship_type_id"]): u["last_used"] for u in usage
         }
+    for event in recovered_events:
+        if event["time"] < at and event["character_id"] and event.get("ship_type_id"):
+            key = (event["character_id"], event["ship_type_id"])
+            prior_usage[key] = max(prior_usage.get(key, event["time"]), event["time"])
     companions = Counter()
     if seeds and _table_exists(conn, "rawkm", "killmail_attackers"):
         history = rows(

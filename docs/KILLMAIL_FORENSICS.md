@@ -10,9 +10,11 @@ and advanced filters. Character and module filters cannot be evaluated from MER.
 After deploying this branch, open **Administration → Jobs** and run
 **Forensics · Create investigation tables (run once)** using **Create Forensics
 tables**. This executes `scripts/setup_killmail_forensics.py` with the application
-DB configuration and `web/app/forensics_schema.sql`. The five new tables are
-created in one transaction with timeouts and an advisory lock. Repeating the
-script preserves records. The job requires `admin.jobs.run`.
+DB configuration and `web/app/forensics_schema.sql`. The seven Forensics tables are
+created in one transaction with timeouts and an advisory lock. After upgrading
+from an earlier Forensics branch, run this same job again to add forecast columns,
+the analysis-run table, refresh queue and sorting indexes. Repeating the script
+preserves records and existing custom plans. The job requires `admin.jobs.run`.
 
 The web process only checks whether the tables exist. It never creates them at
 startup, and registering the job does not start it. Until setup succeeds, the
@@ -40,6 +42,68 @@ workspace explains which job to run. The migration has not been run on the live 
 Investigations store snapshots, ranked evidence, choices, outcomes, combined
 attempt scores, confirmed hashes and CCP payloads. They are shared by users with
 the dev permission. This feature does not import into `rawkm` or mutate MER.
+
+## Estimate and sort every hidden kill
+
+**Analyze / resume all hidden kills** launches the registered Admin Job
+`scripts/analyze_hidden_killmails.py`. It requires both the Forensics dev permission
+and `admin.jobs.run`. Leave both dates empty to cover all available unmatched MER
+exports, or choose an inclusive date range. The batch scope is separate from the
+advanced browsing filters used for individual selection. The job sends no CCP
+requests and only writes Forensics records. No job was launched on the live DB
+while implementing this feature.
+
+The worker uses batches of 100 composite MER references and a global advisory
+lock. It saves each completed investigation and the run's progress. Closing the
+tab leaves it running; **Stop analysis** stops between cases. Restarting skips
+current successfully analyzed records, upgrades old evidence and retries failures.
+Failed analyses are retained with an explanation and an unknown estimate. New
+imports after a scan cursor has passed are included by running the job again.
+
+Each investigation shows:
+
+- **Estimated search**: the 50th–80th percentile trial positions under the relative
+  candidate weights, conditional on the correct answer being in the remaining
+  selected plan. This is a conservative heuristic range, not a calibrated interval.
+- **Recovery outlook**: strong, moderate or weak evidence, or a blocked/exhausted
+  plan. It assesses viable hypotheses, local ship/capsule clues, recent ship use,
+  prior combat activity, ID deductions, excluded candidates and incomplete evidence.
+  It is not a percentage probability of success. Hover for reasons.
+- **Maximum attempts remaining**: the exact selected combinations minus stored
+  tests. This is the full budget if the search fails.
+
+Sort the entire saved collection by estimated cost, strongest evidence then cost,
+maximum remaining trials, or date. Filter by outlook and combine specific evidence
+filters, optionally restricting them to the victim or final blow. All checked
+pilot clues must match **one selected candidate** in the chosen role. Context
+filters such as ID deduction, NPC ship type and evidence truncation match the case.
+Draft choices affect estimates/filters after **Apply choices**.
+
+The 98 previously masked benchmark cases were replayed with the new forecast.
+Pilot ordering and initial-plan coverage stayed unchanged (83/98). The scoring
+range overestimated the successful trial positions in this sample; all 83 covered
+cases fell below its 80th percentile. It should be used to prioritize investigation,
+not as a promise about hidden kills. The observed sample and score-based forecast
+are described in [the replay check](forensics_forecast_check_2026-10-09.json).
+
+## A recovered kill enriches its neighbors
+
+CCP-confirmed Forensics payloads participate in nearby pilot/ship evidence and
+prior local ship use, and their IDs become known chronological anchors. They stay
+in Forensics storage; MER and `rawkm` are not changed. Raw and recovered appearances
+are deduplicated, target masking is preserved, and collection limits remain explicit.
+
+After confirmation, existing unrecovered investigations within one hour in the
+same system or up to two stargate jumps are queued for recalculation. A background
+worker drains the durable queue without CCP calls, including while a global scan
+is running. Pending recalculations appear on rows and in the progress summary;
+launch/interruption failures leave the queue intact for a subsequent run. Failed
+recalculations wait five minutes before becoming eligible again.
+
+Automatic plans adopt newly ranked candidates and IDs. Explicit user choices and
+all completed tests persist. Investigations created before this upgrade retain
+their previous choices. Closing the validation tab does not cancel already queued
+neighbor maintenance.
 
 ## ID and pilot deductions
 
@@ -133,7 +197,7 @@ headers. Other services can share the public IP bucket; limits can change.
 Tests use isolated modules/configuration, with no production startup:
 
 ```bash
-python -m unittest scripts.test_killmail_forensics scripts.test_forensics_reconstruction scripts.test_code_update -v
+python -m unittest scripts.test_killmail_forensics scripts.test_forensics_reconstruction scripts.test_forensics_forecasts scripts.test_code_update -v
 ```
 
 Optional persistence tests require a **disposable** PostgreSQL instance: Unix
@@ -142,7 +206,7 @@ fixture schemas in that lab and never read live DB configuration. Browser tests
 also require Playwright and Chromium, and mock CCP responses:
 
 ```bash
-EVEOSINT_FORENSICS_TEST_SOCKET=/tmp/eveosint-forensics-lab python -m unittest scripts.test_forensics_reconstruction -v
+EVEOSINT_FORENSICS_TEST_SOCKET=/tmp/eveosint-forensics-lab python -m unittest scripts.test_forensics_reconstruction scripts.test_forensics_forecasts -v
 EVEOSINT_FORENSICS_TEST_SOCKET=/tmp/eveosint-forensics-lab python -m scripts.test_forensics_browser
 ```
 
