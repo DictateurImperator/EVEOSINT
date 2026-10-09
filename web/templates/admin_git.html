@@ -126,7 +126,7 @@
   <div class="d-flex justify-content-between align-items-start gap-3 mb-3">
     <div>
       <h2 class="h5 mb-1">Code Update</h2>
-      <div class="muted-line small">Deploy latest or an explicit stable version from the configured Git repository.</div>
+      <div class="muted-line small">Branches are grouped by their base stable version, with the highest-numbered development branches above each stable.</div>
     </div>
 
     {% if code_update.state == "up_to_date" %}
@@ -162,13 +162,13 @@
       </div>
       <div class="col-12 col-lg-3">
         <div class="border border-secondary-subtle rounded-3 p-3 h-100">
-          <div class="muted-line small mb-1">Latest branch</div>
+          <div class="muted-line small mb-1">Reference branch</div>
           <div class="fw-semibold">{{ code_update.branch or "-" }}</div>
         </div>
       </div>
       <div class="col-12 col-lg-3">
         <div class="border border-secondary-subtle rounded-3 p-3 h-100">
-          <div class="muted-line small mb-1">Latest</div>
+          <div class="muted-line small mb-1">Reference commit</div>
           <div class="font-monospace fw-semibold">{{ code_update.remote_short or "Not checked" }}</div>
         </div>
       </div>
@@ -200,7 +200,7 @@
       </div>
     {% elif code_update.state == "diverged" or code_update.state == "local_ahead" %}
       <div class="alert alert-warning py-2">
-        Automatic update is blocked because the local Git history is not a simple fast-forward from the remote branch.
+        The current commit is ahead of or diverged from the reference branch. Update is available only for branches that extend the current deployment.
       </div>
     {% endif %}
 
@@ -213,8 +213,12 @@
         <div>
           <label class="form-label small mb-1" for="update_target">Update to</label>
           <select class="form-select form-select-sm" id="update_target" name="target_ref" {% if not code_update.update_allowed %}disabled{% endif %}>
-            {% for target in code_update.update_targets %}
-              <option value="{{ target.key }}">{{ target.label }} · {{ target.short }}</option>
+            {% for group in code_update.update_target_groups %}
+              <optgroup label="{{ group.label }}">
+                {% for target in group["items"] %}
+                  <option value="{{ target.key }}">{{ target.label }}</option>
+                {% endfor %}
+              </optgroup>
             {% endfor %}
           </select>
         </div>
@@ -225,14 +229,50 @@
         <div>
           <label class="form-label small mb-1" for="rollback_target">Rollback to</label>
           <select class="form-select form-select-sm" id="rollback_target" name="target_ref" {% if not code_update.rollback_allowed %}disabled{% endif %}>
-            {% for target in code_update.rollback_targets %}
-              <option value="{{ target.key }}">{{ target.label }} · {{ target.short }}</option>
+            {% for group in code_update.rollback_target_groups %}
+              <optgroup label="{{ group.label }}">
+                {% for target in group["items"] %}
+                  <option value="{{ target.key }}">{{ target.label }}</option>
+                {% endfor %}
+              </optgroup>
             {% endfor %}
           </select>
         </div>
         <button class="btn btn-outline-warning" type="submit" {% if not code_update.rollback_allowed %}disabled{% endif %}>Rollback</button>
       </form>
     </div>
+
+    {% if code_update.remote_targets %}
+      <div class="table-responsive mt-4">
+        <table class="table table-dark table-hover align-middle mb-0">
+          <caption class="caption-top text-light">Available branches</caption>
+          <thead>
+            <tr><th>Branch</th><th>Status</th></tr>
+          </thead>
+          <tbody>
+            {% for group in code_update.remote_target_groups %}
+              <tr><th colspan="2" scope="rowgroup">{{ group.label }}</th></tr>
+              {% for target in group["items"] %}
+              <tr>
+                <td class="font-monospace">{{ target.label }}</td>
+                <td>
+                  {% if target.is_current %}
+                    <span class="badge text-bg-success">Current</span>
+                  {% elif target.can_update %}
+                    <span class="badge text-bg-warning">Update available</span>
+                  {% elif target.can_rollback %}
+                    <span class="badge text-bg-secondary">Rollback available</span>
+                  {% else %}
+                    <span class="muted-line">Different history or not yet fetched</span>
+                  {% endif %}
+                </td>
+              </tr>
+              {% endfor %}
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    {% endif %}
   {% endif %}
 
   {% if code_update.last_result or code_update.last_message %}

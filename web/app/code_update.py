@@ -244,11 +244,25 @@ def _sanitize_remote_url(value):
     return value
 
 
-def _version_sort_key(value):
-    match = re.fullmatch(r"(?:v)?(\d+)\.(\d+)\.(\d+)(?:[-+].*)?", value or "")
-    if not match:
-        return (-1, -1, -1, value or "")
-    return (int(match.group(1)), int(match.group(2)), int(match.group(3)), value or "")
+def _branch_sort_key(name):
+    natural = tuple(
+        (1, int(part)) if part.isdigit() else (0, part.casefold())
+        for part in re.split(r"(\d+)", name)
+    )
+    release = re.fullmatch(r"(?:dev_|stable/)(\d+)\.(\d+)\.(\d+)(?:_(\d+))?", name)
+    if release:
+        return (1, *(int(part or 0) for part in release.groups()), natural)
+    return (0, 0, 0, 0, 0, natural)
+
+
+def _group_branch_targets(targets):
+    groups = {}
+    for target in targets:
+        name = target.get("branch") or target.get("ref", "").removeprefix("refs/heads/")
+        release = re.fullmatch(r"(?:dev_|stable/)(\d+\.\d+\.\d+)(?:_\d+)?", name)
+        label = f"Based on stable/{release.group(1)}" if release else "Other branches"
+        groups.setdefault(label, []).append(target)
+    return [{"label": label, "items": items} for label, items in groups.items()]
 
 
 def _discover_remote_targets():
@@ -275,39 +289,30 @@ def _discover_remote_targets():
         if re.fullmatch(r"[0-9a-fA-F]{40}", sha):
             refs[ref] = sha.lower()
 
-    targets = []
     latest_ref = f"refs/heads/{branch}"
-    latest_sha = refs.get(latest_ref)
-    if latest_sha:
-        targets.append({
-            "key": "latest",
-            "ref": latest_ref,
-            "label": f"latest ({branch})",
-            "kind": "latest",
-            "sha": latest_sha,
-            "short": latest_sha[:12],
-        })
-
-    stable = []
-    prefix = "refs/heads/stable/"
+    targets = []
+    prefix = "refs/heads/"
     for ref, sha in refs.items():
         if not ref.startswith(prefix):
             continue
-        version = ref[len(prefix):]
-        if not version:
+        name = ref[len(prefix):]
+        if not name:
             continue
-        stable.append({
-            "key": f"stable/{version}",
+        # Keep existing deployment keys valid while displaying real branch names.
+        key = "latest" if ref == latest_ref else (
+            name if name.startswith("stable/") else ref
+        )
+        targets.append({
+            "key": key,
             "ref": ref,
-            "label": f"stable {version}",
-            "kind": "stable",
-            "version": version,
+            "label": name,
+            "branch": name,
+            "kind": "stable" if name.startswith("stable/") else "branch",
             "sha": sha,
             "short": sha[:12],
         })
 
-    stable.sort(key=lambda item: _version_sort_key(item["version"]), reverse=True)
-    targets.extend(stable)
+    targets.sort(key=lambda item: _branch_sort_key(item["branch"]), reverse=True)
     return targets
 
 
@@ -407,11 +412,14 @@ def refresh_remote():
     origin = _configured_origin()
 
     _git(
-        ["fetch", "--quiet", "--prune", origin, latest["ref"]],
+        ["fetch", "--quiet", "--prune", origin,
+         "+refs/heads/*:refs/remotes/eveosint/*"],
         timeout=90,
         authenticated=True,
     )
-    remote_sha = _git(["rev-parse", "FETCH_HEAD"]).stdout.strip().lower()
+    remote_sha = _git(
+        ["rev-parse", f"refs/remotes/eveosint/{_configured_branch()}"]
+    ).stdout.strip().lower()
     if not _commit_exists(remote_sha):
         raise CodeUpdateError("remote_commit_missing")
     if remote_sha != latest["sha"]:
@@ -458,8 +466,11 @@ def get_code_update_snapshot(refresh=False):
         "remote_short": (status.get("last_remote_sha") or "")[:12] or None,
         "last_remote_check_at": status.get("last_remote_check_at"),
         "remote_targets": status.get("remote_targets") or [],
+        "remote_target_groups": [],
         "update_targets": [],
+        "update_target_groups": [],
         "rollback_targets": [],
+        "rollback_target_groups": [],
         "dirty": False,
         "tracked_changes": [],
         "blocking_tracked_files": [],
@@ -518,7 +529,14 @@ def get_code_update_snapshot(refresh=False):
         snapshot["remote_targets"] = targets
         snapshot["update_targets"] = [item for item in targets if item.get("can_update")]
         snapshot["rollback_targets"] = [item for item in targets if item.get("can_rollback")]
-        for item in targets:
+        snapshot["remote_target_groups"] = _group_branch_targets(targets)
+        snapshot["update_target_groups"] = _group_branch_targets(snapshot["update_targets"])
+        snapshot["rollback_target_groups"] = _group_branch_targets(snapshot["rollback_targets"])
+        deployed_branch = status.get("target_ref")
+        targets_by_preference = sorted(
+            targets, key=lambda item: item.get("key") == deployed_branch, reverse=True
+        )
+        for item in targets_by_preference:
             if item.get("is_current"):
                 snapshot["current_version"] = item.get("label")
                 break
@@ -532,6 +550,10 @@ def get_code_update_snapshot(refresh=False):
             snapshot["state"] = "dirty"
         elif not remote_sha or not _commit_exists(remote_sha):
             snapshot["state"] = "not_checked"
+        elif snapshot["update_targets"]:
+            snapshot["state"] = "update_available"
+            snapshot["behind"] = _rev_count(f"{current_sha}..{remote_sha}")
+            snapshot["ahead"] = _rev_count(f"{remote_sha}..{current_sha}")
         elif current_sha == remote_sha:
             snapshot["state"] = "up_to_date"
             snapshot["behind"] = 0
