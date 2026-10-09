@@ -127,6 +127,7 @@ def main():
                 ('admin.jobs.view', 'View Jobs', 'View whitelisted jobs and logs'),
                 ('admin.jobs.run', 'Run Jobs', 'Run whitelisted jobs'),
                 ('admin.mer.view', 'View MER', 'View Monthly Economic Reports administration'),
+                ('admin.killmail_forensics.dev', 'Dev · Killmail Forensics', 'Access the killmail hash reconstruction development workspace'),
                 ('admin.audit.view', 'View Audit', 'View user action audit log')
             ON CONFLICT (permission_key) DO UPDATE SET
                 label = EXCLUDED.label,
@@ -269,6 +270,7 @@ def main():
                 ('admin.jobs', 'Jobs', '/admin/jobs', '▶', 'admin.jobs.view', 30),
                 ('admin.update_pipeline', 'Update Pipeline', '/admin/update-pipeline', '⟳', 'admin.jobs.view', 35),
                 ('admin.mer', 'MER', '/admin/mer', '▤', 'admin.mer.view', 40),
+                ('admin.killmail_forensics', 'Killmail Forensics', '/admin/killmail-forensics', '⌕', 'admin.killmail_forensics.dev', 45),
                 ('admin.audit', 'Audit', '/admin/audit', '≡', 'admin.audit.view', 50),
             ]
 

@@ -18,6 +18,7 @@ from .routes_admin_debug import router as admin_debug_router
 from .routes_admin_git import router as admin_git_router
 from .routes_admin_update_pipeline import router as admin_update_pipeline_router
 from .routes_admin_mer import router as admin_mer_router
+from .routes_admin_killmail_forensics import router as admin_killmail_forensics_router
 from .routes_admin_system import router as admin_system_router
 from .routes_admin_sov_colors import router as admin_sov_colors_router
 from .routes_admin_users import router as admin_users_router
@@ -246,4 +247,5 @@ app.include_router(admin_debug_router)
 app.include_router(admin_git_router)
 app.include_router(admin_update_pipeline_router)
 app.include_router(admin_mer_router)
+app.include_router(admin_killmail_forensics_router)
 app.include_router(admin_audit_router)
