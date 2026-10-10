@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="mb-4">
+  <h1 class="h3 mb-2">Tools</h1>
+  <p class="muted-line mb-0">Explore New Eden, combat activity, regional economics and intelligence.</p>
+</div>
+<div class="row g-3">
+  {% for tool in tools %}
+  <div class="col-12 col-md-6 col-xl-4">
+    <a class="content-card p-4 d-block h-100 text-decoration-none text-body" href="{{ tool.href }}">
+      <h2 class="h5 mb-2">{{ tool.label }}</h2>
+      <p class="muted-line mb-3">{{ tool.description }}</p>
+      <span class="text-info">Open tool →</span>
+    </a>
+  </div>
+  {% endfor %}
+</div>
+{% endblock %}

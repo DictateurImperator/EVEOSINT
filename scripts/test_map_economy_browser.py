@@ -43,8 +43,7 @@ def main():
                 route.fulfill(json={'from':q['from'][0],'to':q['to'][0],'frames':frames,'unplaced_scopes':unplaced,'metrics':[m for m in metrics if m['key'] in selected]}); return
             route.fulfill(content_type='text/html',body=html)
         page.route('**/*',handle)
-        page.goto('http://economy.test/map/eve-2d')
-        page.locator('[data-eve2d-mode="economy"]').click()
+        page.goto('http://economy.test/map/eve-2d?mode=economy')
         expect(page.locator('#eve2dEconomyStatus')).to_contain_text('2026-02')
         lights=page.locator('[data-economic-region]')
         expect(lights).to_have_count(2)

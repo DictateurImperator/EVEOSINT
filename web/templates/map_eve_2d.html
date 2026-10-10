@@ -3135,6 +3135,8 @@
   observer.observe(shell);
   resizeCanvas();
   renderStaticSvg(true);
+  const initialMode = new URLSearchParams(window.location.search).get("mode");
+  if (["influence", "heat", "economy"].includes(initialMode)) setMode(initialMode);
 })();
 </script>
 {% endblock %}

@@ -157,9 +157,8 @@ def superintel_evolution(request: Request):
         request=request,
         user=user,
         title="EVEOSINT - SuperINTEL Evolution",
-        active_module="superintel",
-        # Evolution is a Detailed-dashboard companion page.
-        active_menu_key="superintel.detailed",
+        active_module="tools",
+        active_menu_key="tools.super_evolution",
     )
 
     error = None

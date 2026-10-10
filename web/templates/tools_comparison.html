@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+{% block content %}
+<section id="comparison-tool" data-kind="{{ comparison_kind }}" class="content-card p-3 p-md-4">
+  <h1 class="h3">{{ comparison_kind|title }} comparison</h1>
+  <p class="muted-line">Select up to six alliances or coalitions to compare on the same graph.</p>
+  {% if comparison_kind == 'economics' %}
+  <p class="small muted-line">MER activity is apportioned by average daily regional sovereignty. These are territorial estimates, including activity by other groups. Population is averaged within each month; active PvP pilots participated as attackers within the selected window, restricted to available MER days. PPA uses the same CPI reference month for every entity. Missing data stays empty.</p>
+  {% else %}
+  <p class="small muted-line">Official population uses recorded daily snapshots. PvP metrics use the same activity window and participation rule for each entity, with membership evaluated at the time of activity. Missing data stays empty.</p>
+  {% endif %}
+  <label for="tc-search" class="form-label">Add an alliance or coalition</label>
+  <input id="tc-search" type="search" class="form-control" autocomplete="off" placeholder="Search by name…">
+  <div id="tc-results" class="list-group mt-2" aria-live="polite"></div>
+  <div id="tc-selected" class="d-flex flex-wrap gap-2 my-3"></div>
+  <div class="d-flex flex-wrap gap-3 align-items-end">
+    <label>From<input id="tc-from" class="form-control" type="{{ 'month' if comparison_kind == 'economics' else 'date' }}"></label>
+    <label>Through<input id="tc-to" class="form-control" type="{{ 'month' if comparison_kind == 'economics' else 'date' }}"></label>
+    <label>Indicator<select id="tc-metric" class="form-select">
+      {% if comparison_kind == 'economics' %}
+      <option value="npc_bounties_isk">NPC bounties</option><option value="npc_bounties_ppa_isk">NPC bounties · PPA</option>
+      <option value="mining_isk">Mining</option><option value="mining_ppa_isk">Mining · PPA</option>
+      <option value="production_isk">Production</option><option value="production_ppa_isk">Production · PPA</option>
+      {% else %}
+      <option value="member_count">Members</option><option value="corporation_count">Corporations</option><option value="sovereignty_count">Sovereignty systems</option>
+      <option value="active_count">Active PvP pilots</option><option value="active_rate_pct">Active PvP percentage</option><option value="core_pvp_count">Core PvP pilots</option>
+      {% endif %}
+    </select></label>
+    {% if comparison_kind == 'economics' %}
+    <label>Display<select id="tc-basis" class="form-select"><option value="total">Monthly estimate</option><option value="member">Per average member</option><option value="active">Per active PvP pilot</option></select></label>
+    <label>PPA reference month<input id="tc-reference" class="form-control" type="month"></label>
+    {% else %}
+    <label>PvP participation<select id="tc-mode" class="form-select"><option value="any">Attacker or victim</option><option value="attacker">Attacker</option></select></label>
+    {% endif %}
+    <label>PvP window (days)<input id="tc-window" class="form-control" type="number" value="90" min="1" max="3650"></label>
+    <button id="tc-run" class="btn btn-primary">Compare</button>
+    <button id="tc-stop" class="btn btn-outline-secondary" disabled>Stop</button>
+  </div>
+  <div id="tc-status" class="muted-line my-3" role="status"></div>
+  <div class="d-flex gap-2 mb-2"><button id="tc-reset" class="btn btn-sm btn-outline-secondary">Reset zoom</button><button id="tc-csv" class="btn btn-sm btn-outline-secondary" disabled>Download CSV</button></div>
+  <div id="tc-chart" style="position:relative; touch-action:none; cursor:crosshair;" aria-label="Entity comparison graph"></div>
+  <div id="tc-tip" class="content-card p-2 small" style="position:absolute;pointer-events:none;white-space:pre-line;z-index:25" hidden></div>
+  <div class="table-responsive mt-3"><table class="table table-sm"><thead><tr><th>Entity</th><th>First available</th><th>Latest available</th><th>Change</th></tr></thead><tbody id="tc-summary"></tbody></table></div>
+</section>
+<script>{% include "tools_comparison.js" %}</script>
+{% endblock %}
