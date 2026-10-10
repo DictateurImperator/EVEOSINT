@@ -1615,7 +1615,7 @@
     if (activeMode === "heat" && heatBySystem.size) {
       heatBySystem.forEach((entry, systemId) => {
         const node = nodeById.get(String(systemId));
-        if (!node || node.space === "anoikis") return;
+        if (!node) return;
 
         const ratio = heatRatio(entry.value);
         if (ratio <= 0) return;
@@ -1769,7 +1769,7 @@
     if (activeMode === "heat" && heatBySystem.size) {
       heatBySystem.forEach((entry, systemId) => {
         const node = nodeById.get(String(systemId));
-        if (!node || node.space === "anoikis") return;
+        if (!node) return;
 
         const ratio = heatRatio(entry.value);
         if (ratio <= 0) return;
