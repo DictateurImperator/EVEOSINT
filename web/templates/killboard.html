@@ -165,9 +165,9 @@
     root.innerHTML = fragment.innerHTML;
     var tbody = root.querySelector('.killmail-table tbody');
     if (tbody) {
-      tbody.querySelectorAll('.killmail-empty-result').forEach(function (row) {
-        row.remove();
-      });
+      // Copy the table shell only. appendFragmentRows adds this first batch
+      // below, just like every subsequent batch.
+      tbody.replaceChildren();
     }
 
     // Pagination inside monthly fragments is controlled by this progressive
