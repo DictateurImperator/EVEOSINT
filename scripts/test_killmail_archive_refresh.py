@@ -6,7 +6,7 @@ import os
 import tarfile
 import tempfile
 import unittest
-from datetime import date
+from datetime import UTC, date, datetime
 from pathlib import Path
 from unittest.mock import Mock, patch
 
@@ -73,8 +73,6 @@ class Source:
 
     def get(self, url, **_kwargs):
         self.calls.append(url)
-        if url.endswith("totals.json"):
-            return Response({DAY.isoformat(): self.count})
         if url.endswith("index.json"):
             return Response({"files": [self.entry]})
         if url.endswith(".tar.bz2"):
@@ -83,18 +81,30 @@ class Source:
 
 
 class DecisionTests(unittest.TestCase):
-    def test_initial_baseline_and_count_growth(self):
-        entry = {"etag": "new", "last_modified": "now", "size": 100}
-        self.assertFalse(refresh.needs_refresh(17705, 17705, None, entry))
-        self.assertTrue(refresh.needs_refresh(17705, 18114, None, entry))
-        self.assertTrue(refresh.needs_refresh(None, None, None, entry))
-        with self.assertRaises(ValueError):
-            refresh.needs_refresh(18114, 17705, None, entry)
+    def test_modified_before_or_at_download_is_never_reloaded(self):
+        downloaded = datetime(2026, 9, 1, tzinfo=UTC)
+        for stamp in ("2026-04-05T17:12:20.959Z", "2026-09-01T00:00:00Z"):
+            self.assertFalse(refresh.needs_refresh(downloaded, {"last_modified": stamp}))
+        self.assertTrue(refresh.needs_refresh(downloaded, {"last_modified": "2026-10-09T11:00:17Z"}))
 
-    def test_index_changes_without_count_growth(self):
-        entry = {"etag": "new", "last_modified": "now", "size": 100}
-        self.assertFalse(refresh.needs_refresh(2, 2, dict(entry), entry))
-        self.assertTrue(refresh.needs_refresh(2, 2, {"etag": "old"}, entry))
+    def test_unknown_download_date_is_skipped_and_actual_checkpoint_is_supported(self):
+        self.assertFalse(refresh.needs_refresh(None, {"last_modified": "2026-10-09T11:00:17Z"}))
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "absent"
+            self.assertIsNone(refresh.download_time(path, {"last_modified": "2026-04-01T00:00:00Z"}))
+            expected = datetime(2026, 9, 1, tzinfo=UTC)
+            self.assertEqual(refresh.download_time(path, {"downloaded_at": expected.isoformat()}), expected)
+
+    def test_cleanup_only_removes_worker_temporary_downloads(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            archive = root / "killmails-2026-08-29.tar.bz2"
+            temporary = root / ".refresh-interrupted.tar.bz2"
+            archive.write_bytes(b"keep")
+            temporary.write_bytes(b"partial")
+            refresh.cleanup_downloads(root)
+            self.assertFalse(temporary.exists())
+            self.assertEqual(archive.read_bytes(), b"keep")
 
     def test_index_only_accepts_daily_archives_in_requested_year(self):
         source = Source(b"unused")
@@ -126,6 +136,26 @@ class DecisionTests(unittest.TestCase):
             with self.assertRaises(jobs.JobError):
                 jobs.run_killmail_job("2026-08-01", "2026-08-31", 4)
             launch.assert_not_called()
+
+    def test_admin_stop_checks_process_identity_and_only_signals_refresh(self):
+        import signal
+        import sys
+        config = sys.modules[f.PACKAGE + ".config"]
+        with patch.object(config, "JOBS_CONFIG_PATH", f.ROOT / "config/offline-jobs.json", create=True):
+            jobs = f.load("jobs")
+        with patch.object(jobs, "_read_config_file", return_value={"jobs": []}), \
+             patch.object(jobs, "_cleanup_stale_pid", return_value=(True, 123)), \
+             patch.object(jobs.os, "kill") as kill, \
+             patch.object(Path, "read_bytes") as command:
+            script = jobs.get_job("refresh_killmail_archives")["command"][1]
+            command.return_value = b"python\0" + os.fsencode(script) + b"\0"
+            self.assertEqual(jobs.stop_killmail_archive_refresh_job(), (True, "stop_requested"))
+            kill.assert_called_once_with(123, signal.SIGTERM)
+            kill.reset_mock()
+            command.return_value = b"python\0unrelated.py\0"
+            with self.assertRaises(jobs.JobError):
+                jobs.stop_killmail_archive_refresh_job()
+            kill.assert_not_called()
 
     def test_statistics_access_and_year_validation(self):
         app = FastAPI()
@@ -185,6 +215,8 @@ class RefreshIntegrationTests(unittest.TestCase):
                         VALUES (%s,%s,%s,30000142,20187,98473379,98658732)""",
                         (at[:7] + "-01", row, at))
         self.importer.archive_tar_path(DAY).write_bytes(archive_bytes([self.old]))
+        downloaded = datetime(2026, 8, 30, tzinfo=UTC).timestamp()
+        os.utime(self.importer.archive_tar_path(DAY), (downloaded, downloaded))
         self.source = Source(archive_bytes([self.old, payload()]))
 
     def run_job(self, source=None, match=None):
@@ -216,6 +248,19 @@ class RefreshIntegrationTests(unittest.TestCase):
         self.assertFalse(any(url.endswith(".tar.bz2") for url in self.source.calls[before:]))
         self.assertEqual(self.scalar("SELECT count(*) FROM rawkm.killmail_attackers"), 2)
         self.assertEqual(json.loads(self.state.read_text())["pending_months"], [])
+
+    def test_first_run_skips_old_remote_modification_despite_different_counts(self):
+        self.source.entry["last_modified"] = "2026-04-05T17:12:20.959Z"
+        result = self.run_job()
+        self.assertEqual(result["changed"], 0)
+        self.assertFalse(any(url.endswith(".tar.bz2") for url in self.source.calls))
+        self.assertEqual(self.scalar("SELECT count(*) FROM rawkm.killmails"), 1)
+
+    def test_successful_refresh_replaces_archive_without_extra_files(self):
+        self.run_job()
+        destination = self.importer.archive_tar_path(DAY)
+        self.assertEqual(destination.read_bytes(), self.source.data)
+        self.assertEqual(list(destination.parent.iterdir()), [destination])
 
     def test_stale_archive_and_failed_match_are_resumed(self):
         with self.assertRaises(RuntimeError):

@@ -22,7 +22,9 @@
 
 {% if success %}
   <div class="alert alert-success py-2">
-    {% if success == "job_started" %}
+    {% if success == "job_stop_requested" %}
+      Archive refresh stop requested. Check its status and log below.
+    {% elif success == "job_started" %}
       Job lancé en arrière-plan.
     {% else %}
       Action effectuée.
@@ -97,6 +99,11 @@
               <button class="btn btn-primary" type="submit" {% if job.running or not job.enabled %}disabled{% endif %}>Refresh updated archives</button>
             </div>
           </form>
+          {% if job.running %}
+          <form method="post" action="/admin/jobs/killmail-archives/stop" class="mb-3">
+            <button class="btn btn-outline-danger" type="submit">Stop archive refresh</button>
+          </form>
+          {% endif %}
           <a href="/admin/killmail-statistics">View monthly killmail statistics</a>
         {% elif job.type == "killmail_forensics_analysis" %}
           <p class="muted-line small">Analyze all hidden MER losses in the background. Existing investigations and tests are preserved. Leave dates empty for all available exports. No CCP requests are sent.</p>

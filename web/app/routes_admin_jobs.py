@@ -9,6 +9,7 @@ from .jobs import (
     read_job_log,
     run_killmail_job,
     run_killmail_archive_refresh_job,
+    stop_killmail_archive_refresh_job,
     run_population_alliances_init_job,
     run_population_alliances_daily_job,
     run_recent_kill_pilots_affiliation_job,
@@ -392,3 +393,18 @@ def admin_jobs_refresh_killmail_archives(request: Request, date_from: str = Form
                   target_type="job", target_id="refresh_killmail_archives", details=str(exc))
         return _error_redirect(exc)
     return RedirectResponse(url="/admin/jobs?success=job_started" if ok else "/admin/jobs?error=job_failed", status_code=302)
+
+
+@router.post("/admin/jobs/killmail-archives/stop")
+def admin_jobs_stop_killmail_archives(request: Request):
+    user = require_login(request)
+    redirect = require_permission_or_redirect(user, "admin.jobs.run")
+    if redirect:
+        return redirect
+    try:
+        _ok, message = stop_killmail_archive_refresh_job()
+        audit_log(request, "admin_job_stop", user_id=user["id"], username=user["username"],
+                  target_type="job", target_id="refresh_killmail_archives", details=message)
+    except JobError as exc:
+        return _error_redirect(exc)
+    return RedirectResponse(url="/admin/jobs?success=job_stop_requested", status_code=302)

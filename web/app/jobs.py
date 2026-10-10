@@ -1,5 +1,6 @@
 import json
 import os
+import signal
 import subprocess
 import sys
 from datetime import date, datetime
@@ -547,3 +548,20 @@ def run_killmail_archive_refresh_job(date_from=None, date_to=None):
         if value:
             command.extend([option, value.isoformat()])
     return _start_process(job, command)
+
+
+def stop_killmail_archive_refresh_job():
+    job = get_job("refresh_killmail_archives")
+    running, pid = _cleanup_stale_pid(job["key"])
+    if not running:
+        return True, "already_stopped"
+    try:
+        arguments = Path(f"/proc/{pid}/cmdline").read_bytes().split(b"\0")
+        if os.fsencode(job["command"][1]) not in arguments:
+            raise JobError("job_process_mismatch:refresh_killmail_archives")
+        os.kill(pid, signal.SIGTERM)
+    except ProcessLookupError:
+        return True, "already_stopped"
+    except OSError as exc:
+        raise JobError("job_stop_failed:refresh_killmail_archives") from exc
+    return True, "stop_requested"

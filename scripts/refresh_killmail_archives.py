@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Manually refresh changed, previously imported EVE Ref daily archives.
 
-No scheduler, CCP requests or zKillboard submissions. The first run uses totals
-as a baseline so unchanged historical archives need not be downloaded again.
+No scheduler, CCP requests or zKillboard submissions. Archives are downloaded only when their remote modification date is later than
+our local download date, including on the first run.
 """
 
 import argparse
@@ -10,6 +10,7 @@ import fcntl
 import json
 import logging
 import os
+import signal
 import sys
 import tarfile
 import tempfile
@@ -68,18 +69,36 @@ def signature(entry):
     return {key: entry.get(key) for key in ("etag", "last_modified", "size")}
 
 
-def needs_refresh(local_count, remote_count, previous, entry):
-    # Counts also detect changes on the first run and interrupted earlier runs.
-    if remote_count is not None and local_count is not None:
-        if remote_count < local_count:
-            raise ValueError("EVE Ref reports fewer killmails than the successful local import")
-        if remote_count != local_count:
-            return True
-        if previous is None:
-            return False
-    if previous is None:
-        return True  # No reliable baseline: verify the archive itself.
-    return signature(previous) != signature(entry)
+def download_time(archive_path, previous=None):
+    # The regular importer writes the download then moves it without preserving
+    # EVE Ref's Last-Modified, so this mtime is our local download time.
+    if archive_path.is_file():
+        return datetime.fromtimestamp(archive_path.stat().st_mtime, UTC)
+    value = (previous or {}).get("downloaded_at")
+    if value:
+        stamp = datetime.fromisoformat(value)
+        if stamp.tzinfo is None:
+            raise ValueError("Download time must include its timezone")
+        return stamp
+    return None
+
+
+def needs_refresh(downloaded_at, entry):
+    if downloaded_at is None:
+        return False  # An unknown date must never trigger a historical redownload.
+    modified = datetime.fromisoformat(entry["last_modified"])
+    if modified.tzinfo is None or downloaded_at.tzinfo is None:
+        raise ValueError("Archive dates must include their timezone")
+    return modified > downloaded_at
+
+
+def cleanup_downloads(archive_dir):
+    # Caller holds the refresh lock: these belong to interrupted workers only.
+    for path in archive_dir.rglob(".refresh-*.tar.bz2"):
+        if path.is_file():
+            size = path.stat().st_size
+            path.unlink()
+            LOG.info("TEMP_REMOVED path=%s bytes=%s", path, size)
 
 
 def ensure_recovery_table(conn):
@@ -167,7 +186,9 @@ def refresh_archive(conn, importer, session, day, entry, state, state_path):
                 added += import_batch(conn, importer, batch, day, months, state, state_path, ensured)
         temporary.replace(destination)
         importer.mark_day(conn, day, "success", files_count=count, archive_count=1)
-        state["archives"][day.isoformat()] = signature(entry)
+        state["archives"][day.isoformat()] = signature(entry) | {
+            "downloaded_at": download_time(destination).isoformat(),
+        }
         save_state(state_path, state)
         LOG.info("ARCHIVE_DONE day=%s files=%s added=%s modified=%s", day, count, added, entry.get("last_modified"))
         return added
@@ -186,7 +207,6 @@ def run_refresh(conn, importer, session, state_path, match, start=None, end=None
         days = cur.fetchall()
     conn.commit()
     LOG.info("START imported_days=%s from=%s through=%s", len(days), start or "all", end or "all")
-    totals = get_json(session, f"{BASE_URL}/totals.json") if days else {}
     indexes = {}
     for year in sorted({day.year for day, _count in days}):
         LOG.info("INDEX_START year=%s", year)
@@ -204,18 +224,21 @@ def run_refresh(conn, importer, session, state_path, match, start=None, end=None
             entry = indexes[day.year].get(day.isoformat())
             if entry is None:
                 raise ValueError("Previously imported archive is missing from the EVE Ref index")
-            raw_count = totals.get(day.isoformat())
-            remote_count = int(raw_count) if raw_count is not None else None
+            downloaded_at = download_time(importer.archive_tar_path(day), state["archives"].get(day.isoformat()))
             checked += 1
-            if needs_refresh(local_count, remote_count, state["archives"].get(day.isoformat()), entry):
+            if downloaded_at is None:
+                LOG.warning("ARCHIVE_SKIPPED day=%s reason=unknown_download_date", day)
+            if needs_refresh(downloaded_at, entry):
                 changed += 1
-                LOG.info("ARCHIVE_CHANGED day=%s local=%s remote=%s modified=%s", day, local_count, remote_count, entry.get("last_modified"))
+                LOG.info("ARCHIVE_CHANGED day=%s downloaded=%s modified=%s", day, downloaded_at.isoformat(), entry["last_modified"])
                 # Even a failed, partially committed import must be reconciled.
                 state["pending_months"] = sorted(set(state["pending_months"]) | {day.isoformat()[:7]})
                 save_state(state_path, state)
                 added += refresh_archive(conn, importer, session, day, entry, state, state_path)
             else:
-                state["archives"][day.isoformat()] = signature(entry)
+                state["archives"][day.isoformat()] = signature(entry) | {
+                    "downloaded_at": downloaded_at.isoformat() if downloaded_at else None,
+                }
             if checked % 100 == 0:
                 save_state(state_path, state)
                 LOG.info("CHECK_PROGRESS checked=%s/%s changed=%s added=%s failed=%s", checked, len(days), changed, added, failed)
@@ -258,12 +281,22 @@ def main():
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
             raise RuntimeError("An archive refresh is already running") from None
+        cleanup_downloads(importer.ARCHIVE_DIR)
+
+        def stop(_signal, _frame):
+            LOG.info("STOP_REQUESTED")
+            raise KeyboardInterrupt
+
+        signal.signal(signal.SIGTERM, stop)
+        signal.signal(signal.SIGINT, stop)
         conn = importer.db()
         try:
             ensure_recovery_table(conn)
             with requests.Session() as session:
                 session.headers["User-Agent"] = USER_AGENT
                 run_refresh(conn, importer, session, state_path, match_mer_killmails, args.start, args.end)
+        except KeyboardInterrupt:
+            LOG.info("STOPPED (completed batches retained; temporary download removed)")
         finally:
             conn.close()
 

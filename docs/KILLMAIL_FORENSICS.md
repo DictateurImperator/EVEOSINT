@@ -283,11 +283,16 @@ inclusively. Empty dates check every day successfully imported by the regular
 killmail importer. This job does not schedule itself or backfill days that have
 never been imported.
 
-EVE Ref updates daily archives in place, using the kill date. The job reads
-`totals.json` and each relevant yearly `index.json` (ETag, last modification and
-size). On its first run, matching local/remote counts establish the baseline;
-count increases trigger a fresh download. Subsequent runs also detect changed
-index metadata. Downloads bypass the old cached archive. Only missing killmails,
+EVE Ref updates daily archives in place, using the kill date. The job reads each
+relevant yearly `index.json` and compares `last_modified` with the local archive's
+download time (its filesystem mtime, preserved by the regular importer's move).
+Only a strictly later remote modification triggers a download, including on the
+first run. Counts and ETag changes cannot override this rule. Missing download
+dates are logged and skipped; the worker never assumes all history needs fetching.
+New refreshes also record `downloaded_at` in the checkpoint. Downloads bypass the
+old cached archive and replace it at the same path after successful import.
+Interrupted temporary downloads are cleaned under the worker lock on relaunch.
+Only missing killmails,
 attackers and items are inserted; existing kill data is preserved. Payload kill
 timestamps determine the destination partition, including an unexpected date in
 another month. The job then runs strict MER matching for the affected months.
@@ -296,7 +301,8 @@ Progress is in the job log (`INDEX_START`, `ARCHIVE_CHANGED`, `ARCHIVE_PROGRESS`
 `ARCHIVE_DONE`, `MER_MATCH_DONE`, `DONE`). The durable checkpoint is
 `data/killmails/refresh_index.json`. Failed downloads preserve the old archive;
 committed batches and pending MER matching survive interruption. Relaunch to
-retry. Concurrent refresh workers are refused; Admin launches also prevent
+retry. **Stop archive refresh** in Admin Jobs requests a graceful stop: its temporary
+download is removed and committed progress is retained. Concurrent refresh workers are refused; Admin launches also prevent
 running the regular importer and refresh together. MER matching has a database
 lock shared by the manual MER action and this worker.
 
