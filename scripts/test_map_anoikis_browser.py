@@ -33,6 +33,8 @@ def main():
                              "width": 540, "height": 360}],
         "anoikis_constellations": [],
     }
+    extra_nodes = [{"id": 30000200 + i, "name": f"Test {i:02}", "x": 50, "y": 50, "security": .5} for i in range(30)]
+    payload["nodes"].extend(extra_nodes)
     html = environment.get_template("map_eve_2d.html").render(
         map_payload=payload, map_data_json=json.dumps(payload))
     errors = []
@@ -45,15 +47,18 @@ def main():
             url = urlsplit(route.request.url)
             if url.netloc != "map.test":
                 route.abort()
+            elif url.path == "/api/map/eve-2d/influence":
+                route.fulfill(json={"date": "2026-10-09", "grouping": "coalition", "groups": [
+                    {"id": "coalition:1", "entity_id": 1, "name": "Offline coalition", "color": "#60a5fa", "system_ids": [30000142, 30000144]}]})
             elif url.path == "/api/map/eve-2d/heat":
                 query = parse_qs(url.query)
                 route.fulfill(json={
                     "source": query["source"][0], "metric": query["metric"][0],
                     "from": "2026-10-08T00:00:00+00:00", "to": "2026-10-09T00:00:00+00:00",
-                    "max_value": 10, "systems_count": 3,
+                    "max_value": 100, "systems_count": 33,
                     "systems": [{"system_id": 30000142, "value": 5},
                                 {"system_id": 31000001, "value": 10},
-                                {"system_id": 99999999, "value": 1}],
+                                {"system_id": 99999999, "value": 100}] + [{"system_id": node["id"], "value": 3} for node in extra_nodes],
                 })
             else:
                 route.fulfill(content_type="text/html", body=html)
@@ -65,7 +70,15 @@ def main():
                                ("total", "isk"), ("hidden", "isk"), ("hidden", "kills")]:
             page.locator('[data-heat-source="' + source + '"]').click()
             page.locator('[data-heat-metric="' + metric + '"]').click()
-            expect(page.locator("#eve2dHeatStatus")).to_contain_text("3 systems")
+            expect(page.locator("#eve2dHeatStatus")).to_contain_text("33 systems")
+            ranks = page.locator('#eve2dRankingList .eve2d-ranking-row')
+            expect(ranks).to_have_count(20)
+            expect(ranks.first.locator('a')).to_have_text('J055520')
+            expect(ranks.first.locator('.eve2d-ranking-stats')).to_have_text('10 ' + ('ISK' if metric == 'isk' else 'kills'))
+            expect(page.locator('#eve2dRankingMeta')).to_contain_text('Top 20 / 32')
+            rank_query = parse_qs(urlsplit(ranks.first.locator('a').get_attribute('href')).query)
+            assert rank_query['mode'] == [source]
+            assert rank_query['datetime_from'] == ['2026-10-08T00:00']
             link = page.locator('#eve2dStaticHost a[href^="/system/31000001?"]')
             expect(link).to_have_count(1)
             expect(link.locator("title")).to_contain_text("J055520 · 10 " + ("ISK" if metric == "isk" else "kills"))
@@ -82,7 +95,12 @@ def main():
         expect(page.locator("#eve2dCanvas")).to_be_visible()
         page.locator("#eve2dInteractive").uncheck()
         expect(page.locator('#eve2dStaticHost a[href^="/system/31000001?"]')).to_have_count(1)
+        page.locator('[data-eve2d-mode="influence"]').click()
+        expect(page.locator('#eve2dRankingTitle')).to_have_text('SOV Ranking')
+        expect(page.locator('#eve2dRankingList')).to_contain_text('Offline coalition')
+        expect(page.locator('#eve2dRankingMetric')).to_be_hidden()
         page.locator('[data-eve2d-mode="systems"]').click()
+        expect(page.locator('#eve2dRankingPanel')).to_be_hidden()
         expect(page.locator('#eve2dStaticHost a[href^="/system/31000001?"]')).to_have_count(0)
         assert not errors, errors
         browser.close()

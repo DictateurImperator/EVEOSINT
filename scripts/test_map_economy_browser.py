@@ -51,10 +51,19 @@ def main():
         first=page.locator('[data-economic-region="10000001"]')
         second=page.locator('[data-economic-region="10000002"]')
         expect(page.locator('#eve2dEconomyBasis')).to_have_value('absolute')
+        expect(page.locator('#eve2dRankingPanel')).to_be_visible()
+        expect(page.locator('#eve2dRankingTitle')).to_have_text('Economic ranking')
+        ranks = page.locator('#eve2dRankingList .eve2d-ranking-row')
+        expect(ranks).to_have_count(2)
+        expect(ranks.first.locator('a')).to_have_text('Derelik')
+        assert ranks.first.get_attribute('data-ranking-value') == '30'
+        assert ranks.first.locator('a').get_attribute('href') == '/map/region/10000001'
         assert first.get_attribute('data-economic-value') == '30'
         assert second.get_attribute('data-economic-value') == '10'
         page.locator('#eve2dEconomyBasis').select_option('relative')
         expect(first.locator('title')).to_contain_text('10% of production')
+        expect(ranks).to_have_count(1)
+        expect(page.locator('#eve2dRankingMeta')).to_contain_text('% of regional production')
         expect(second.locator('title')).to_contain_text('Production is zero')
         assert first.get_attribute('href')=='/map/region/10000001'
         assert second.get_attribute('data-economic-value') is None
@@ -64,18 +73,26 @@ def main():
         expect(page.locator('#eve2dEconomyStatus')).to_contain_text('Wormhole')
         page.locator('#eve2dEconomyMetrics input[value="trade_isk"]').check()
         expect(lights).to_have_count(4)
+        expect(page.locator('#eve2dRankingMetric')).to_be_visible()
+        page.locator('#eve2dRankingMetric').select_option('trade_isk')
+        expect(page.locator('#eve2dRankingMeta')).to_contain_text('Trade')
         page.locator('#eve2dEconomyCombined').check()
         expect(lights).to_have_count(2)
         expect(first.locator('title')).to_contain_text('40% of production')
+        expect(page.locator('#eve2dRankingMetric')).to_be_hidden()
+        assert ranks.first.get_attribute('data-ranking-value') == '0.4'
         page.locator('#eve2dEconomyMode').select_option('animated')
         expect(page.locator('#eve2dEconomyStatus')).to_contain_text('2026-01')
         expect(first.locator('title')).to_contain_text('70% of production')
+        assert ranks.first.get_attribute('data-ranking-value') == '0.7'
         assert float(first.get_attribute('data-economic-intensity'))==1
         page.evaluate("document.querySelector('#eve2dStaticHost svg').testIdentity = true")
         page.locator('#eve2dEconomyFrame').evaluate("el => el.value = '1'")
         page.locator('#eve2dEconomyFrame').dispatch_event('input')
         expect(page.locator('#eve2dEconomyStatus')).to_contain_text('2026-02')
         assert abs(float(first.get_attribute('data-economic-intensity'))-3/7)<1e-9
+        assert ranks.first.get_attribute('data-ranking-value') == '0.3'
+        expect(page.locator('#eve2dRankingMeta')).to_contain_text('2026-02')
         assert page.evaluate("document.querySelector('#eve2dStaticHost svg').testIdentity")
         expect(page.locator('#eve2dEconomyLegend')).to_contain_text('70% of production')
         page.locator('#eve2dEconomyBasis').select_option('absolute')
@@ -96,11 +113,13 @@ def main():
         expect(page.locator('#eve2dEconomyPlay')).to_have_text('Play')
         page.locator('#eve2dInteractive').uncheck()
         expect(lights).to_have_count(0)
+        expect(page.locator('#eve2dRankingPanel')).to_be_hidden()
         page.locator('[data-eve2d-mode="economy"]').click()
         expect(lights).to_have_count(2)
         bad=True
         page.locator('#eve2dEconomyApply').click()
         expect(page.locator('#eve2dEconomyStatus')).to_contain_text('Economic data unavailable')
+        expect(ranks).to_have_count(0)
         expect(lights).to_have_count(0)
         bad=False
         page.locator('#eve2dEconomyApply').click()

@@ -49,3 +49,20 @@ Validation: `python -m unittest scripts.test_map_economy -q` and
 only the explicit disposable PostgreSQL socket selected by
 `EVEOSINT_FORENSICS_TEST_SOCKET`, port 55444, and checks the API queries in a
 read-only database session after preparing its fixture.
+
+## Map rankings
+
+The right panel displays the top 20 mapped regions for the currently displayed
+economic frame or fixed period. It sorts by ISK in the default absolute mode and
+by the actual value/production ratio in relative mode, not by the normalized
+brightness. Missing values are omitted; published zeros remain eligible. When
+separate indicators are shown, choose **Rank by** to select the ranking measure.
+The combined view ranks the selected sum. The panel updates with the month
+slider and playback; region links open the corresponding region map.
+
+Fight Heat Map uses the same panel for the top 20 mapped systems, including
+Anoikis, ranked by the selected kill count or ISK amount. It uses the already
+filtered heat payload, and each link opens its killboard with the same source,
+time range and advanced filters. Source/metric changes and new animation frames
+refresh the ranking; loading errors clear stale results. Influence retains its
+SOV ranking and Systems hides the panel. No additional database queries are used.

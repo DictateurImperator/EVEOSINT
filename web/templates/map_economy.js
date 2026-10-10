@@ -196,6 +196,7 @@ function showEconomyFrame(index) {
     (unavailable ? ' · ' + unavailable + ' unavailable in this view' : '') +
     (unplaced.length ? ' · Without regional placement: ' + unplaced.join(', ') : '');
   if (!available) economyStatus.textContent += ' · No usable regional data for this selection';
+  renderEconomicRanking();
   renderCurrentView();
 }
 async function economicJson(url, signal) {
@@ -214,6 +215,7 @@ async function loadEconomy() {
   economyPayload = null; economyRegionEntries.clear(); economyLegend.replaceChildren();
   economyPlay.disabled = true;
   economyStatus.textContent = 'Loading economic data…';
+  rankingMessage('Economic ranking', 'Loading…');
   renderCurrentView();
   try {
     if (!economyOptions) {
@@ -246,6 +248,7 @@ async function loadEconomy() {
   } catch (error) {
     if (token !== economyRequestToken || error.name === 'AbortError') return;
     economyStatus.textContent = error.message || String(error);
+    rankingMessage('Economic ranking', 'Ranking unavailable — see economic status');
     renderCurrentView();
   }
 }

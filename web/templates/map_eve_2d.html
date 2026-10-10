@@ -238,6 +238,8 @@
     white-space:nowrap;
     font-variant-numeric:tabular-nums;
   }
+  .eve2d-ranking-select { margin-top:8px; font-size:.7rem; }
+  .eve2d-ranking-select[hidden] { display:none; }
   .eve2d-ranking-empty {
     padding:12px;
     color:#788aa1;
@@ -691,8 +693,9 @@
     </div>
     <div class="eve2d-ranking-panel" id="eve2dRankingPanel" hidden>
       <div class="eve2d-ranking-head">
-        <div class="eve2d-ranking-title">SOV Ranking</div>
+        <div class="eve2d-ranking-title" id="eve2dRankingTitle">SOV Ranking</div>
         <div class="eve2d-ranking-meta" id="eve2dRankingMeta"></div>
+        <select id="eve2dRankingMetric" class="form-select form-select-sm eve2d-ranking-select" aria-label="Rank regions by indicator" hidden></select>
       </div>
       <div class="eve2d-ranking-list" id="eve2dRankingList"></div>
     </div>
@@ -873,6 +876,7 @@
   let staticViewBox = {x:0, y:0, width:WORLD_WIDTH, height:WORLD_HEIGHT};
 
   {% include "map_economy.js" %}
+  {% include "map_rankings.js" %}
 
   function resizeCanvas() {
     const rect = shell.getBoundingClientRect();
@@ -1998,6 +2002,7 @@
     }
 
     if (heatStatus) heatStatus.textContent = heatStatusText(payload);
+    renderHeatRanking();
     renderCurrentView();
   }
 
@@ -2005,6 +2010,7 @@
     stopHeatEvolution();
     const token = ++heatRequestToken;
     if (heatStatus) heatStatus.textContent = "Loading…";
+    rankingMessage("Fight heat ranking", "Loading…");
 
     const requestFrom = fromValue !== null
       ? fromValue
@@ -2022,6 +2028,7 @@
       currentHeatPayload = null;
       heatBySystem = new Map();
       if (heatStatus) heatStatus.textContent = String(error.message || error);
+      rankingMessage("Fight heat ranking", "Ranking unavailable — see heat map status");
       renderCurrentView();
     }
   }
@@ -2643,7 +2650,9 @@
   }
 
   function renderInfluenceRanking(payload) {
-    if (!rankingPanel || !rankingMeta || !rankingList) return;
+    if (!rankingPanel || !rankingMeta || !rankingList || activeMode !== "influence") return;
+    rankingTitle.textContent = "SOV Ranking";
+    rankingMetric.hidden = true;
 
     const groups = Array.isArray(payload.groups) ? payload.groups.slice() : [];
     groups.sort((a, b) => {
@@ -2772,7 +2781,9 @@
     stopEconomicAnimation();
     ++economyRequestToken;
     if (economyAborter) economyAborter.abort();
-    if (rankingPanel) rankingPanel.hidden = activeMode !== "influence";
+    if (rankingPanel) rankingPanel.hidden = activeMode === "systems";
+    rankingMetric.hidden = true;
+    rankingTitle.textContent = activeMode === "economy" ? "Economic ranking" : (activeMode === "heat" ? "Fight heat ranking" : "SOV Ranking");
 
     stopEvolution();
     stopHeatEvolution();
