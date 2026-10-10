@@ -66,7 +66,7 @@
         (active===c.id?' <button type="button" class="btn btn-sm btn-outline-danger" data-case-action="stop">Stop</button>':'')+'</td></tr>';
     }).join('');
     table.innerHTML='<table class="table align-middle"><thead><tr><th>MER / CCP ID</th><th>Known hash inputs</th><th>Victim hypotheses</th><th>Final blow hypotheses</th><th>Estimated search / outlook</th><th>Maximum attempts remaining</th><th>Actions</th></tr></thead><tbody>'+
-      (rows || '<tr><td colspan="7" class="muted-line">Select hidden killmails and click Investigate selected.</td></tr>')+'</tbody></table>';
+      (rows || '<tr><td colspan="7" class="muted-line">No saved investigations match these filters. Start the background analysis above, or investigate selected hidden killmails below.</td></tr>')+'</tbody></table>';
     root.querySelector('[data-investigations-prev]').disabled=page===1;
     root.querySelector('[data-investigations-next]').disabled=cases.length<50;
   }

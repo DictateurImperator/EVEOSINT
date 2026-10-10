@@ -16,6 +16,7 @@
     var data=await api(''),r=data.run,s=data.summary,running=r&&r.status==='running';
     if(pollFailed){errorBox.hidden=true;pollFailed=false;}
     start.disabled=busy||running||start.dataset.canRun!=='yes';stop.hidden=!running;
+    root.querySelector('[data-analysis-results]').textContent='View analyzed kills ('+Math.max(0,s.investigations-s.recovered)+')';
     summary.textContent=s.investigations+' investigations · '+s.strong+' strong · '+s.moderate+' moderate · '+s.weak+' weak · '+s.blocked+' needing input / exhausted · '+s.recovered+' recovered · '+data.pending_refresh+' neighbor recalculations queued';
     status.textContent=r?(r.refresh_only?'Neighbor recalculation':'Hidden kill analysis')+': '+r.status+' · '+r.analyzed+' analyzed · '+r.failed+' failed · '+r.refreshed+' neighbors refreshed'+(r.total===null?'':' · '+r.total+' new / outdated analyses in scope')+(running&&r.remaining_seconds!==null&&!r.refresh_only?' · about '+Math.max(1,Math.ceil(r.remaining_seconds/60))+' minutes remaining':'')+(r.stop_requested&&running?' · stopping after the current kill':''):'No background analysis has been started.';
     if(r&&!r.refresh_only)status.textContent+=' · '+(r.date_from||'all dates')+' through '+(r.date_to||'latest export');
