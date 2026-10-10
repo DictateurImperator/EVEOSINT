@@ -151,6 +151,10 @@ def run(lab):
         expect(page.locator("[data-case]")).to_have_count(1)
         expect(page.locator("[data-forecast]")).to_contain_text("trials")
         assert "conditional" in page.locator("[data-forecast]").get_attribute("title")
+        expect(page.locator('[data-case] img.killmail-type-icon')).to_have_count(2)
+        expect(page.locator('[data-case] a[href="/corporation/100"]')).to_have_count(1)
+        expect(page.locator('[data-case] a[href="/system/30000142"]')).to_have_count(1)
+        assert "forensics-difficulty-" in page.locator('[data-case]').get_attribute('class')
         # All pilot flags must concern the same candidate in the chosen role.
         evidence = page.locator('[data-evidence-filter][value="same_ship_local"]')
         evidence.locator("xpath=ancestor::details").locator("summary").click()

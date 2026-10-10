@@ -73,6 +73,29 @@ class ForecastTests(unittest.TestCase):
             "blocked",
         )
 
+    def test_saved_case_display_preserves_mer_alliance_and_handles_unknowns(self):
+        case = {"snapshot": {
+            "victim_ship_type_id": 587, "killer_ship_type_id": 588,
+            "victim_corporation_id": 100, "killer_corporation_id": 200,
+            "victim_alliance_id": 300, "solar_system_id": 30000142,
+            "solar_system_name": "Jita",
+        }}
+        with (
+            patch.object(store, "_lookup_type_names", return_value={587: "Rifter", 588: "Reaper"}),
+            patch.object(store, "_lookup_system_locations", return_value={}),
+            patch.object(store, "_lookup_entity_names", side_effect=[
+                {100: {"name": "Victim Corp", "ticker": "VC"}},
+                {300: {"name": "MER Alliance", "ticker": "MA"}},
+            ]),
+        ):
+            display = store.case_displays(None, [case])[0]["display"]
+        self.assertEqual(display["victim_ship"]["name"], "Rifter")
+        self.assertIn("/types/587/", display["victim_ship"]["image_url"])
+        self.assertEqual(display["victim_corporation"]["ticker"], "VC")
+        self.assertEqual(display["victim_alliance"]["url"], "/alliance/300")
+        self.assertIsNone(display["killer_alliance"])
+        self.assertEqual(display["location"]["system"]["name"], "Jita")
+
     def test_date_scope_rejects_inverted_bounds(self):
         self.assertEqual(batch.date_scope(), [None, None])
         with self.assertRaises(ValueError):

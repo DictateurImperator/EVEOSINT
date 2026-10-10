@@ -22,6 +22,15 @@ from .forensics_engine import (
 from .forensics_evidence import analyze
 from .forensics_forecast import forecast, EVIDENCE_FILTERS
 
+from .entities import (
+    _lookup_entity_names,
+    _lookup_system_locations,
+    _lookup_type_names,
+    _resolved_entity_ref,
+    _killmail_type_ref,
+    _location_ref,
+)
+
 TABLES = (
     "forensics_cases",
     "forensics_attempts",
@@ -216,6 +225,68 @@ def create_case(ref, user_id):
         return json_safe(get_case(conn, found[0]["id"]))
 
 
+def case_displays(conn, cases):
+    """Batch-load display metadata for saved cases; keep MER affiliations at kill time."""
+    snapshots = [case["snapshot"] for case in cases]
+    ships = _lookup_type_names(
+        conn,
+        [
+            s.get(side + "_ship_type_id")
+            for s in snapshots
+            for side in ("victim", "killer")
+        ],
+    )
+    corps = _lookup_entity_names(
+        conn,
+        "corporation",
+        [
+            s.get(side + "_corporation_id")
+            for s in snapshots
+            for side in ("victim", "killer")
+        ],
+    )
+    alliances = _lookup_entity_names(
+        conn,
+        "alliance",
+        [
+            s.get(side + "_alliance_id")
+            for s in snapshots
+            for side in ("victim", "killer")
+        ],
+    )
+    locations = _lookup_system_locations(
+        conn, [s.get("solar_system_id") for s in snapshots]
+    )
+    for case in cases:
+        s = case["snapshot"]
+        display = {
+            "location": locations.get(s.get("solar_system_id"))
+            or {
+                "system": _location_ref(
+                    "system", s.get("solar_system_id"), s.get("solar_system_name")
+                ),
+                "constellation": None,
+                "region": None,
+            }
+        }
+        for side in ("victim", "killer"):
+            ship_id = s.get(side + "_ship_type_id")
+            display[side + "_ship"] = _killmail_type_ref(
+                ship_id, ships.get(ship_id) or s.get(side + "_ship_type_name"), "ship"
+            )
+            for kind, lookup in (("corporation", corps), ("alliance", alliances)):
+                entity_id = s.get(side + "_" + kind + "_id")
+                display[side + "_" + kind] = _resolved_entity_ref(
+                    kind,
+                    entity_id,
+                    s.get(side + "_" + kind + "_name")
+                    or (f"{kind.title()} {entity_id}" if entity_id else None),
+                    lookup,
+                )
+        case["display"] = display
+    return cases
+
+
 def list_cases(
     sort="attempts",
     page=1,
@@ -266,7 +337,7 @@ def list_cases(
             {extra} ORDER BY {order} LIMIT 50 OFFSET %s""",
             params,
         )
-        return json_safe(result)
+        return json_safe(case_displays(conn, result))
 
 
 def _save_choices(conn, case, choices):

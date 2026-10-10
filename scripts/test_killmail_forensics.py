@@ -293,7 +293,7 @@ class EndpointTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIn('data-kb-search-url="/admin/killmail-forensics/search"', response.text)
         self.assertIn('data-selection-user="7"', response.text)
-        self.assertIn("Hash reconstruction", response.text)
+        self.assertIn("Analyzed killmails", response.text)
 
 
 if __name__ == "__main__":

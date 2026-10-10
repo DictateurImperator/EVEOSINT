@@ -2,6 +2,17 @@
 
 {% block content %}
 {% include "killmail_table_styles.html" %}
+<style>
+  .forensics-table { min-width:1450px; }
+  .forensics-table td { padding:.8rem .6rem; vertical-align:top; }
+  .forensics-table .forensics-side { min-width:290px; }
+  .forensics-combatant { display:flex; gap:.65rem; align-items:center; margin-bottom:.65rem; }
+  .forensics-affiliation { display:flex; gap:.35rem; align-items:center; margin-top:.2rem; }
+  .forensics-affiliation-icon { width:24px; height:24px; border-radius:.3rem; object-fit:cover; }
+  .forensics-difficulty-easy { background:rgba(22,101,52,.25); }
+  .forensics-difficulty-medium { background:rgba(161,98,7,.18); }
+  .forensics-difficulty-hard { background:rgba(127,29,29,.22); }
+</style>
 <div class="d-flex justify-content-between align-items-start gap-3 mb-4">
   <div>
     <h1 class="h3 fw-bold mb-1">Killmail Forensics</h1>

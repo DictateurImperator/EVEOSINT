@@ -21,6 +21,27 @@
     if (!response.ok) throw new Error(data.error || 'The request failed.');
     return data;
   }
+  function entity(e,icon) {
+    if(!e)return '';
+    return '<a class="killmail-entity text-decoration-none forensics-affiliation" href="'+esc(e.url)+'">'+
+      (icon&&e.image_url?'<img src="'+esc(e.image_url)+'" alt="" loading="lazy" class="forensics-affiliation-icon">':'')+
+      '<span>'+esc(e.name)+(e.ticker?' <span class="muted-line">['+esc(e.ticker)+']</span>':'')+'</span></a>';
+  }
+  function combatant(c,side) {
+    var d=c.display||{},ship=d[side+'_ship'],corp=d[side+'_corporation'],alliance=d[side+'_alliance'];
+    var detail='/kill/mer/'+encodeURIComponent(c.source_month)+'/'+c.source_row+'/hidden?kill_datetime='+encodeURIComponent(c.kill_datetime);
+    return '<div class="forensics-combatant">'+(ship?'<a href="'+(side==='victim'?detail:esc(ship.url))+'" title="'+esc(ship.name)+'"><img class="killmail-type-icon" src="'+esc(ship.image_url)+'" alt="'+esc(ship.name)+'" loading="lazy"></a>':'<span class="killmail-type-icon killmail-empty-icon"></span>')+
+      '<div class="killmail-entity-lines"><div class="fw-bold">'+(ship?entity(ship,false):'Unknown ship')+'</div>'+entity(corp,true)+entity(alliance,true)+(!corp?'<div class="muted-line small">Unknown corporation</div>':'')+'</div></div>';
+  }
+  function location(c) {
+    var loc=(c.display||{}).location||{},labels={system:'S',constellation:'C',region:'R'};
+    return '<div class="small muted-line mb-2">'+esc(c.kill_datetime.replace('T',' ').replace(/\+00:00$/,'').replace(/Z$/,''))+' UTC</div>'+Object.keys(labels).map(function(key){var e=loc[key];return e?'<div class="killmail-location-row"><span class="killmail-location-icon">'+labels[key]+'</span>'+entity(e,false)+'</div>':'';}).join('');
+  }
+  function difficulty(c) {
+    var f=c.forecast;if(!f||f.typical_trials===null||f.assessment==='blocked'||f.assessment==='exhausted')return 'forensics-difficulty-hard';
+    var cost=f.upper_trials;
+    return cost<=10&&['strong','moderate','confirmed'].includes(f.assessment)?'forensics-difficulty-easy':cost<=100?'forensics-difficulty-medium':'forensics-difficulty-hard';
+  }
   function picker(c,side,key) {
     var choices = (drafts.get(c.id) || c.choices)[key];
     var info = c.hypotheses[side];
@@ -51,13 +72,13 @@
     root.querySelector('[data-investigations-stop]').hidden=active===null;
     latest = new Map(cases.map(function (c) {return [c.id,c];}));
     var rows = cases.map(function (c) {
-      var s=c.snapshot, h=c.hypotheses;
+      var h=c.hypotheses;
       var inferred=h.ids.deduced?'Deduced ID':'Candidate IDs';
-      return '<tr data-case="'+c.id+'"><td><strong>'+inferred+'</strong>'+picker(c,'ids','ids')+
+      return '<tr data-case="'+c.id+'" class="'+difficulty(c)+'"><td><strong>'+inferred+'</strong>'+picker(c,'ids','ids')+
         '<div class="muted-line small mt-2">MER '+esc(c.source_month)+' · row '+c.source_row+'</div>'+ 
         (h.ids.truncated?'<div class="text-warning small">'+h.ids.total+' IDs possible; showing '+h.ids.candidates.length+'. Add more IDs manually.</div>':'')+'</td>'+
-        '<td><a href="/kill/mer/'+esc(c.source_month)+'/'+c.source_row+'/hidden?kill_datetime='+encodeURIComponent(c.kill_datetime)+'">'+esc(s.victim_ship_type_name || 'Type '+s.victim_ship_type_id)+'</a><div class="small">Victim ship type '+s.victim_ship_type_id+'</div><div>'+esc(c.kill_datetime)+' (UTC)</div><div class="small muted-line">'+esc(s.solar_system_name || 'System '+s.solar_system_id)+'</div><div class="small">Victim corp '+esc(s.victim_corporation_name || s.victim_corporation_id || 'unknown')+' · Final blow corp '+esc(s.killer_corporation_name || s.killer_corporation_id || 'unknown')+'</div></td>'+
-        '<td>'+picker(c,'victim','victims')+'</td><td>'+picker(c,'attacker','attackers')+'</td>'+
+        '<td class="killmail-location">'+location(c)+'</td>'+
+        '<td class="forensics-side">'+combatant(c,'victim')+picker(c,'victim','victims')+'</td><td class="forensics-side">'+combatant(c,'killer')+picker(c,'attacker','attackers')+'</td>'+
         '<td>'+estimate(c)+'</td><td><strong data-remaining>'+(c.status==='needs_input'?'Not estimated':c.estimated_attempts)+'</strong><div class="small muted-line">'+c.attempted+' stored tests</div><div class="badge text-bg-secondary">'+esc(c.status)+'</div>'+
         (h.warnings.length?'<details class="small text-warning"><summary>Evidence limits</summary>'+h.warnings.map(esc).join('<br>')+'</details>':'')+'</td>'+
         '<td><button type="button" class="btn btn-sm btn-outline-primary mb-1" data-case-action="save" '+(active?'disabled':'')+'>Apply choices</button> '+
@@ -65,7 +86,7 @@
         '<button type="button" class="btn btn-sm btn-outline-light mb-1" data-case-action="refresh" '+(active?'disabled':'')+'>Refresh hypotheses</button>'+ 
         (active===c.id?' <button type="button" class="btn btn-sm btn-outline-danger" data-case-action="stop">Stop</button>':'')+'</td></tr>';
     }).join('');
-    table.innerHTML='<table class="table align-middle"><thead><tr><th>MER / CCP ID</th><th>Known hash inputs</th><th>Victim hypotheses</th><th>Final blow hypotheses</th><th>Estimated search / outlook</th><th>Maximum attempts remaining</th><th>Actions</th></tr></thead><tbody>'+
+    table.innerHTML='<table class="killmail-table forensics-table"><thead><tr><th>MER / CCP ID</th><th>Time / location</th><th>Victim / hypotheses</th><th>Final blow / hypotheses</th><th>Estimated search / outlook</th><th>Maximum attempts remaining</th><th>Actions</th></tr></thead><tbody>'+
       (rows || '<tr><td colspan="7" class="muted-line">No saved investigations match these filters. Start the background analysis above, or investigate selected hidden killmails below.</td></tr>')+'</tbody></table>';
     root.querySelector('[data-investigations-prev]').disabled=page===1;
     root.querySelector('[data-investigations-next]').disabled=cases.length<50;
