@@ -18,6 +18,7 @@ from .population_intelligence import (
 
 METRICS = {'npc_bounties_isk': 'NPC bounties', 'mining_isk': 'Mining', 'production_isk': 'Production'}
 _CACHE = {}
+_ACTIVITY_CACHE = {}
 _LOCK = Lock()
 
 
@@ -187,45 +188,59 @@ def average_population(official, dates, months):
 
 
 def _activity(conn, kind, entity_id, rules, intervals):
-    active, kills, losses = set(), set(), set()
+    # Disjoint time segments let us add distinct kill counts without transferring kill ID arrays.
+    segments = []
+    for start, end in intervals:
+        day = start
+        while day < end:
+            scope = scope_at(kind, entity_id, rules, day)
+            if segments and segments[-1][1] == day and segments[-1][2] == scope:
+                segments[-1] = (segments[-1][0], day+timedelta(days=1), scope)
+            else:
+                segments.append((day, day+timedelta(days=1), scope))
+            day += timedelta(days=1)
+    key = (kind, entity_id, tuple((a,b,tuple(sorted(scope))) for a,b,scope in segments))
+    with _LOCK:
+        cached = _ACTIVITY_CACHE.get(key)
+        if cached and monotonic()-cached[0] < 300:
+            return cached[1]
+    active, kills, losses = set(), 0, 0
     with conn.cursor() as cur:
-        cur.execute("SET LOCAL statement_timeout = '30000ms'")
-        for start, end in intervals:
-            # Coalition membership can change on any day, including nested/excluded members.
-            segments = []
-            day = start
-            while day < end:
-                scope = scope_at(kind, entity_id, rules, day)
-                if segments and segments[-1][2] == scope:
-                    segments[-1] = (segments[-1][0], day + timedelta(days=1), scope)
-                else:
-                    segments.append((day, day + timedelta(days=1), scope))
-                day += timedelta(days=1)
-            for first, last, scope in segments:
-                aids = [eid for typ, eid in scope if typ == 'alliance']
-                cids = [eid for typ, eid in scope if typ == 'corporation']
-                if not (aids or cids):
-                    continue
-                cur.execute("""WITH participation AS (SELECT ka.character_id, km.killmail_id,
-                    (ka.alliance_id=ANY(%s) OR ka.corporation_id=ANY(%s)) AS inflicted,
-                    (km.victim_alliance_id=ANY(%s) OR km.victim_corporation_id=ANY(%s)) AS suffered
-                    FROM rawkm.killmails km JOIN rawkm.killmail_attackers ka
-                      ON ka.killmail_id=km.killmail_id AND ka.killmail_time=km.killmail_time
-                    WHERE km.killmail_time >= %s AND km.killmail_time < %s
-                      AND ka.killmail_time >= %s AND ka.killmail_time < %s
-                      AND km.victim_character_id > 0 AND ka.character_id > 0
-                      AND (ka.alliance_id=ANY(%s) OR ka.corporation_id=ANY(%s)
-                           OR km.victim_alliance_id=ANY(%s) OR km.victim_corporation_id=ANY(%s)))
-                    SELECT ARRAY_AGG(DISTINCT character_id) FILTER (WHERE inflicted),
-                           ARRAY_AGG(DISTINCT killmail_id) FILTER (WHERE inflicted),
-                           ARRAY_AGG(DISTINCT killmail_id) FILTER (WHERE suffered)
-                    FROM participation""",
-                    (aids, cids, aids, cids, ts(first), ts(last), ts(first), ts(last), aids, cids, aids, cids))
-                pilot_ids, kill_ids, loss_ids = cur.fetchone()
-                active.update(pilot_ids or [])
-                kills.update(kill_ids or [])
-                losses.update(loss_ids or [])
-    return len(active), len(kills), len(losses)
+        cur.execute("SET LOCAL statement_timeout = '12000ms'")
+        for first, last, scope in segments:
+            aids = [eid for typ,eid in scope if typ == 'alliance']
+            cids = [eid for typ,eid in scope if typ == 'corporation']
+            if not (aids or cids):
+                continue
+            # Filtering attackers and victims separately avoids an OR across both sides of
+            # the join, which made PostgreSQL scan unrelated regional/global participation.
+            cur.execute("""SELECT ARRAY_AGG(DISTINCT ka.character_id), COUNT(DISTINCT km.killmail_id)
+                FROM rawkm.killmail_attackers ka JOIN rawkm.killmails km
+                  ON km.killmail_id=ka.killmail_id AND km.killmail_time=ka.killmail_time
+                WHERE ka.killmail_time >= %s AND ka.killmail_time < %s
+                  AND km.killmail_time >= %s AND km.killmail_time < %s
+                  AND ka.character_id > 0 AND km.victim_character_id > 0
+                  AND (ka.alliance_id=ANY(%s) OR ka.corporation_id=ANY(%s))""",
+                (ts(first), ts(last), ts(first), ts(last), aids, cids))
+            pilot_ids, kill_count = cur.fetchone()
+            active.update(pilot_ids or [])
+            kills += kill_count or 0
+            cur.execute("""SELECT COUNT(DISTINCT km.killmail_id) FROM rawkm.killmails km
+                WHERE km.killmail_time >= %s AND km.killmail_time < %s
+                  AND km.victim_character_id > 0
+                  AND (km.victim_alliance_id=ANY(%s) OR km.victim_corporation_id=ANY(%s))
+                  AND EXISTS (SELECT 1 FROM rawkm.killmail_attackers ka
+                      WHERE ka.killmail_id=km.killmail_id AND ka.killmail_time=km.killmail_time
+                        AND ka.killmail_time >= %s AND ka.killmail_time < %s
+                        AND ka.character_id > 0)""",
+                (ts(first), ts(last), aids, cids, ts(first), ts(last)))
+            losses += cur.fetchone()[0] or 0
+    result = (len(active), kills, losses)
+    with _LOCK:
+        if len(_ACTIVITY_CACHE) >= 256:
+            _ACTIVITY_CACHE.pop(next(iter(_ACTIVITY_CACHE)))
+        _ACTIVITY_CACHE[key] = (monotonic(), result)
+    return result
 
 
 def get_series(kind, entity_id, from_month, to_month, window=90, offset=0):
@@ -273,7 +288,8 @@ def get_evolution(kind, entity_id, from_month, to_month, basis='total', window=9
     months = month_range(month(from_month), month(to_month))
     catalog = _catalog(kind, entity_id)
     covered = set(catalog['months'])
-    batch = months[offset:offset+12]
+    batch_size = 1 if basis in {'active', 'loss', 'kill'} else 12
+    batch = months[offset:offset+batch_size]
     points = []
     with db() as conn:
         official, dates = ([], [])

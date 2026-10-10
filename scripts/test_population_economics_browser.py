@@ -20,7 +20,7 @@ def main():
         browser=p.chromium.launch(args=['--no-sandbox'])
         for kind in ['alliance','coalition','corporation']:
             html='<meta charset="utf-8">'+env.get_template('coalition_population.html' if kind=='coalition' else 'entity_population.html').render(profile={'entity_type':kind,'entity_id':1,'name':'Example'})
-            page=browser.new_page();errors=[];calls=[];available=True;fail=False
+            page=browser.new_page();errors=[];calls=[];available=True;fail=False;fail_chart=False
             page.on('pageerror',lambda e:errors.append(str(e)))
             page.add_init_script("window.eveosintPublicError=e=>e.message || String(e)")
             def handle(route):
@@ -30,9 +30,12 @@ def main():
                 elif path.endswith('/population-economics/evolution'):
                     q=parse_qs(urlsplit(route.request.url).query);a=q['from'][0];b=q['to'][0]
                     start=int(a[:4])*12+int(a[5:])-1;end=int(b[:4])*12+int(b[5:])-1
-                    offset=int(q['offset'][0]);months=[f'{i//12}-{i%12+1:02d}' for i in range(start,end+1)]
+                    offset=int(q['offset'][0]);
+                    if fail_chart and offset>0:route.fulfill(status=500,json={'error':'Test chart error'});return
+                    months=[f'{i//12}-{i%12+1:02d}' for i in range(start,end+1)]
                     points=[{'month':m,'denominator':'10','values':{key:None if m=='2026-05' else str(1000000000+i*100000000) for key in ['npc_bounties_isk','mining_isk','production_isk']}} for i,m in enumerate(months)]
-                    route.fulfill(json={'points':points[offset:offset+12],'next_offset':offset+12 if offset+12<len(points) else None,'total_months':len(points)})
+                    size=1 if q['basis'][0] in ['active','loss','kill'] else 12
+                    route.fulfill(json={'points':points[offset:offset+size],'next_offset':offset+size if offset+size<len(points) else None,'total_months':len(points)})
                 elif path.endswith('/population-economics'):
                     calls.append(route.request.url)
                     if fail:route.fulfill(status=500,json={'error':'Test error'})
@@ -76,6 +79,8 @@ def main():
             with page.expect_download() as download:page.locator('#pe-chart-csv').click()
             assert 'economics.csv' in download.value.suggested_filename
             page.locator('#pe-chart-from').select_option('2025-01');page.locator('#pe-chart-load').click();expect(page.locator('#pe-chart-status')).to_contain_text('20 months')
+            fail_chart=True;page.locator('#pe-chart-load').click();expect(page.locator('#pe-chart-status')).to_contain_text('Loaded 12 / 20 months. Test chart error');expect(chart.locator('path')).to_have_count(1)
+            fail_chart=False
             page.locator('#pe-chart-basis').select_option('active');expect(page.locator('#pe-chart-status')).to_contain_text('Per active PvP pilot')
             expect(page.locator('#pe-regions')).to_contain_text('8%')
             expect(page.locator('#pe-coverage')).to_contain_text('2026-08-31')

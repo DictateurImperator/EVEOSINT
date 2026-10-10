@@ -17,6 +17,9 @@ JAN, FEB, MAR = date(2026, 1, 1), date(2026, 2, 1), date(2026, 3, 1)
 
 
 class CalculationTests(unittest.TestCase):
+    def setUp(self):
+        module._ACTIVITY_CACHE.clear()
+
     def test_average_ownership_changes_regions_lost_npc_and_duplicate_coalition_scope(self):
         systems = {i: {'region_id': 1} for i in range(1, 101)}
         systems[101] = {'region_id': 2}
@@ -102,17 +105,23 @@ class CalculationTests(unittest.TestCase):
             def __enter__(self): return self
             def __exit__(self,*args): pass
             def execute(self,q,args=None): self.calls.append((q,args))
-            def fetchone(self): return [101,102],[5,6],[7]
+            def fetchone(self):
+                return ([101,102],2) if 'ARRAY_AGG' in self.calls[-1][0] else (1,)
         conn=Conn()
         with patch.object(module,'scope_at',side_effect=lambda k,i,r,d:{('alliance',10 if d.day<=15 else 20)}):
             result=module._activity(conn,'coalition',1,{},[(JAN,FEB)])
-        self.assertEqual(result,(2,2,1))
+        self.assertEqual(result,(2,4,2))
         queries=[(q,args) for q,args in conn.calls if args]
-        self.assertEqual(len(queries),2)
-        self.assertEqual(queries[0][1][0],[10])
-        self.assertEqual(queries[1][1][0],[20])
+        self.assertEqual(len(queries),4)
+        self.assertEqual(queries[0][1][4],[10])
+        self.assertEqual(queries[2][1][4],[20])
         self.assertIn('ka.killmail_time >=',queries[0][0])
         self.assertIn('km.victim_character_id > 0',queries[0][0])
+        self.assertIn('EXISTS',queries[1][0])
+        count=len(conn.calls)
+        with patch.object(module,'scope_at',side_effect=lambda k,i,r,d:{('alliance',10 if d.day<=15 else 20)}):
+            self.assertEqual(module._activity(conn,'coalition',1,{},[(JAN,FEB)]),result)
+        self.assertEqual(len(conn.calls),count)
 
 
 class EvolutionTests(unittest.TestCase):
@@ -152,6 +161,19 @@ class EvolutionTests(unittest.TestCase):
              patch.object(module,'_activity',return_value=(1,1,1)) as pvp:
             module.get_evolution('alliance',10,'2026-03','2026-03','active',90)
         self.assertEqual(pvp.call_args.args[-1],[(JAN,FEB),(MAR,date(2026,4,1))])
+
+    def test_expensive_ratios_return_one_month_immediately(self):
+        catalog={'months':[JAN,FEB,MAR],'rules':{}}
+        @contextmanager
+        def db():yield object()
+        with patch.object(module,'_catalog',return_value=catalog), patch.object(module,'db',db), \
+             patch.object(module,'estimates',return_value=({key:Decimal(100) for key in module.METRICS},[])), \
+             patch.object(module,'_activity',return_value=(2,4,1)) as pvp:
+            data=module.get_evolution('alliance',10,'2026-01','2026-03','kill',90)
+        self.assertEqual(len(data['points']),1)
+        self.assertEqual(data['next_offset'],1)
+        self.assertEqual(data['points'][0]['values']['mining_isk'],'25')
+        self.assertEqual(pvp.call_count,1)
 
     def test_invalid_basis_does_not_query_database(self):
         with patch.object(module,'_catalog') as catalog:
