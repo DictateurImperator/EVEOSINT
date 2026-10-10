@@ -79,6 +79,14 @@ class ParserTests(unittest.TestCase):
         self.assertEqual(daily[0][2], "day")
         self.assertEqual(daily[0][5]["entry_id"], "-1")
 
+    def test_ccp_decimal_flow_category_ids_are_preserved(self):
+        for identifier, expected in (("99.1000125", "99.1000125"), ("99.10001250", "99.1000125"), ("-1.0", "-1"), ("NaN", None)):
+            facts, _ = economy.normalized_row("isk_flows", {"history_date": "2023-08-01", "entry_id": identifier,
+                                                           "entry_name": "Corporate Reward Payout (Sansha Incursions)",
+                                                           "entry_sink_value": "0.0", "entry_faucet_value": "566114732901.23"}, MONTH, {})
+            self.assertEqual(facts[0][5].get("entry_id"), expected)
+            self.assertEqual(facts[1][6], Decimal("566114732901.23"))
+
     def test_moon_units_and_old_metenox_spelling(self):
         row = {"region_name": "Derelik", "source": "metanox_mining", "quantity": "10"}
         regional, _ = economy.normalized_row("moon_region", row, MONTH, {})
@@ -199,6 +207,14 @@ class PostgreSQLTests(unittest.TestCase):
         archive(self.path, {"MoneySupply.csv": [["date", "total"], ["2026-08-01", "12"]]})
         economy.import_archive(self.conn, self.path, MONTH, {})
         self.assertEqual(self.scalar("SELECT value FROM mer.global_economy_history"), 12)
+
+    def test_real_decimal_category_import_commits_and_skips(self):
+        archive(self.path, {"sinks_and_faucets_history.csv": [["history_date", "entry_id", "entry_name", "entry_sink_value", "entry_faucet_value"],
+                                                              ["2023-08-01", "99.1000125", "Corporate Reward Payout (Sansha Incursions)", "0.0", "566114732901.23"]]})
+        economy.import_archive(self.conn, self.path, MONTH, {})
+        self.assertEqual(self.scalar("SELECT dimensions->>'entry_id' FROM mer.isk_flow_history LIMIT 1"), "99.1000125")
+        self.assertEqual(self.scalar("SELECT status FROM mer.economy_imports"), "success")
+        self.assertEqual(economy.import_archive(self.conn, self.path, MONTH, {}), {"skipped": 1})
 
     def test_daily_flows_are_summed_and_not_mixed_with_monthly(self):
         archive(self.path, {

@@ -133,3 +133,5 @@ comparisons and daily volatility.
 Use **Import economic data** in Admin MER to start the detached, manual job. It reads already downloaded ZIPs; use **Download missing ZIPs** first when needed. The page polls the progress every three seconds and provides a job log. Regional and global tables are created automatically. Successful archive rows show **imported** in the Economic data column after refreshing the catalog.
 
 The job also appears in Admin Jobs. No scheduled import is installed. Progress is written atomically to `data/mer/economy_progress.json`; logs append to `data/logs/mer_economy_import.log`. `--dry-run` does not write progress or connect to PostgreSQL.
+
+CCP flow category IDs are stored as canonical numeric strings, including decimal identifiers such as `99.1000125` (Sansha corporation rewards). They are not assumed to be integers. Parser version 2 retries failed archives and refreshes archives imported with an older parser.

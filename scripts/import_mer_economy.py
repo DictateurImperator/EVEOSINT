@@ -24,7 +24,7 @@ from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
 LOG = logging.getLogger("mer_economy")
-VERSION = 1
+VERSION = 2
 SCHEMA = Path(__file__).with_name("mer_economy_schema.sql")
 BATCH_SIZE = 1000
 LOCK_ID = 472119057
@@ -133,9 +133,12 @@ def dimensions(row):
         result["source"] = "metenox_mining"
     if result.get("entry_id"):
         identifier = number(result["entry_id"])
-        if identifier is None or identifier != identifier.to_integral_value():
-            raise ValueError("Invalid flow category ID")
-        result["entry_id"] = str(int(identifier))
+        # CCP also publishes decimal category IDs (e.g. 99.1000125 for
+        # Sansha corporation rewards). Preserve them exactly as identifiers.
+        if identifier is None:
+            result.pop("entry_id")
+        else:
+            result["entry_id"] = format(identifier.normalize(), "f")
     return result
 
 
