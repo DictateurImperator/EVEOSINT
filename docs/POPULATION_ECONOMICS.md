@@ -46,3 +46,10 @@ Nominal NPC bounties, mining and production remain unchanged. Each has an additi
 PPA amount = nominal amount × CPI(reference month) / CPI(amount month). Both compared months are independently converted before calculating absolute and percentage changes. Charts use the same conversion and reference; CSV exports include the reference month. The price index and ISK purchasing-power index are additional measurements with the reference set to 100, and can also be graphed.
 
 All calculations use the global `Consumer Price Index` from the single `20_economy_indices` published chart series in `mer.global_economy_history` (`price_index_levels/index_level`). CPI values are positive and required at both the amount and reference dates; missing data yields unavailable PPA values rather than a nominal fallback. This measures purchasing power over time with a global price basket, not regional price differences or physical mining/production volume. No database migration or re-import is required when CPI levels are already imported.
+
+
+### PPA month rankings
+
+Each nominal indicator is immediately followed by its PPA counterpart: NPC bounties, NPC bounties PPA, mining, mining PPA, production, production PPA.
+
+A separate Best months in purchasing power panel manually ranks all available history for a selected PPA indicator, either its monthly total, per average member or per active PvP pilot. It uses the same reference month and activity window as the comparison/chart. Queries are batched, show progress and can be stopped; interrupted results are marked provisional. Missing values and undefined ratios are excluded, while published zero values remain eligible. Exact ties choose the earliest month. Server batches use Decimal ordering; the browser merges them with exact decimal/BigInt comparison, preserving monetary distinctions beyond JavaScript Number precision. The retained Top 20 supports switching between Top 10 and Top 20 without recalculation. Each ranked month can be selected as the observed month.

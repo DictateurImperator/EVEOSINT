@@ -402,7 +402,7 @@ def get_comparison(kind, entity_id, base_month, observed_month, window=90, refer
                 values[key] = change(_adjust(new.get('ratios', {}).get(key), observed_factor),
                                      _adjust(old.get('ratios', {}).get(key), base_factor))
             adjusted_rows.append({'metric': metric.replace('_isk', '_ppa_isk'), 'label': label+' · PPA', 'values': values})
-        rows.extend(adjusted_rows)
+        rows = [row for pair in zip(rows, adjusted_rows) for row in pair]
         ref_cpi = levels.get(reference_day)
         power = {'reference': reference, 'reference_cpi': str(ref_cpi) if ref_cpi is not None else None,
                  'price_index': change(_adjust(100, Decimal(1)/observed_factor if observed_factor else None),
@@ -421,3 +421,26 @@ def get_series_regions(kind, entity_id, base_month, observed_month):
             _values, details = estimates(catalog, [selected], _topology()['regions'])
             result.extend(details)
     return result
+
+
+
+def get_best_month(kind, entity_id, metric, basis, reference, window=90, offset=0):
+    if metric not in {key.replace('_isk', '_ppa_isk') for key in METRICS}:
+        raise ValueError('Choose a PPA indicator.')
+    month(reference)
+    if basis not in {'total', 'member', 'active'} or not 1 <= window <= 3650 or offset < 0:
+        raise ValueError('Choose a valid ranking basis, activity window and offset.')
+    catalog = _catalog(kind, entity_id)
+    if not catalog['months']:
+        return {'best': None, 'ranked_months': [], 'checked': 0, 'available': 0, 'total_months': 0, 'next_offset': None}
+    series = get_evolution(kind, entity_id, catalog['months'][0].strftime('%Y-%m'),
+                           catalog['months'][-1].strftime('%Y-%m'), basis, window, offset, reference)
+    candidates = [(Decimal(point['values'][metric]), point['month']) for point in series['points']
+                  if point['values'][metric] is not None]
+    # Earliest month wins exact ties; all comparisons keep the server's Decimal precision.
+    ranked = sorted(candidates, key=lambda item: (-item[0], item[1]))
+    candidate = ranked[0] if ranked else None
+    return {'best': {'month': candidate[1], 'value': str(candidate[0])} if candidate else None,
+            'ranked_months': [{'month': selected, 'value': str(value)} for value, selected in ranked],
+            'checked': len(series['points']), 'available': len(candidates),
+            'total_months': series['total_months'], 'next_offset': series['next_offset']}

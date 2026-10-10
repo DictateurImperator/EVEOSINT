@@ -238,7 +238,8 @@ class PurchasingPowerTests(unittest.TestCase):
              patch.object(module,'_cpi_levels',return_value={JAN:Decimal(100),MAR:Decimal(110)}):
             data=module.get_comparison('alliance',10,'2026-01','2026-03',90,'2026-01')
         self.assertEqual(len(data['rows']),6)
-        nominal=data['rows'][0]['values']['total'];ppa=data['rows'][3]['values']['total']
+        self.assertEqual([r['metric'] for r in data['rows']],['npc_bounties_isk','npc_bounties_ppa_isk','mining_isk','mining_ppa_isk','production_isk','production_ppa_isk'])
+        nominal=data['rows'][0]['values']['total'];ppa=data['rows'][1]['values']['total']
         self.assertEqual(nominal['value'],'100')
         self.assertEqual(nominal['percent'],'0')
         self.assertLess(Decimal(ppa['value']),Decimal(100))
@@ -265,6 +266,26 @@ class PurchasingPowerTests(unittest.TestCase):
     def test_removed_bases_are_rejected(self):
         for basis in ['loss','kill']:
             with self.assertRaises(ValueError):module.get_evolution('alliance',10,'2026-01','2026-03',basis)
+
+
+class RankingTests(unittest.TestCase):
+    def test_ranking_keeps_decimal_precision_omits_missing_and_breaks_ties_by_month(self):
+        series={'points':[{'month':'2026-04','values':{'mining_ppa_isk':'10000000000000000.01'}},
+                          {'month':'2026-03','values':{'mining_ppa_isk':'10000000000000000.02'}},
+                          {'month':'2026-02','values':{'mining_ppa_isk':'10000000000000000.02'}},
+                          {'month':'2026-01','values':{'mining_ppa_isk':None}}], 'total_months':4,'next_offset':None}
+        with patch.object(module,'_catalog',return_value={'months':[JAN,MAR]}),patch.object(module,'get_evolution',return_value=series):
+            result=module.get_best_month('alliance',10,'mining_ppa_isk','total','2026-03')
+        self.assertEqual(result['best']['month'],'2026-02')
+        self.assertEqual([r['month'] for r in result['ranked_months']],['2026-02','2026-03','2026-04'])
+        self.assertEqual(result['available'],3)
+        self.assertEqual(result['checked'],4)
+
+    def test_only_supported_ppa_indicators_are_ranked(self):
+        with patch.object(module,'_catalog') as catalog:
+            with self.assertRaises(ValueError):module.get_best_month('alliance',10,'mining_isk','total','2026-03')
+            with self.assertRaises(ValueError):module.get_best_month('alliance',10,'mining_ppa_isk','kill','2026-03')
+            catalog.assert_not_called()
 
 
 class RouteTests(unittest.TestCase):

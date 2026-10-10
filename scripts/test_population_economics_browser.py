@@ -38,6 +38,12 @@ def main():
                     points=[{'month':m,'denominator':'10','values':{key:None if m=='2026-05' else str(1000000000+i*100000000) for key in ['npc_bounties_isk','mining_isk','production_isk','npc_bounties_ppa_isk','mining_ppa_isk','production_ppa_isk','isk_purchasing_power_index','consumer_price_index_relative_index']}} for i,m in enumerate(months)]
                     size=1 if q['basis'][0] in ['active','loss','kill'] else 12
                     route.fulfill(json={'points':points[offset:offset+size],'next_offset':offset+size if offset+size<len(points) else None,'total_months':len(points)})
+                elif path.endswith('/population-economics/best-month'):
+                    q=parse_qs(urlsplit(route.request.url).query);offset=int(q['offset'][0]);size=1 if q['basis'][0]=='active' else 12
+                    records=[{'month':f'{2025+i//12}-{i%12+1:02d}','value':f'10000000000000000.{i:02d}'} for i in range(offset,min(offset+size,20))]
+                    ranked=list(reversed(records))
+                    route.fulfill(json={'ranked_months':ranked,'best':ranked[0] if ranked else None,'checked':len(records),
+                                        'available':len(records),'total_months':20,'next_offset':offset+len(records) if offset+len(records)<20 else None})
                 elif path.endswith('/population-economics/comparison'):
                     calls.append(route.request.url)
                     if fail:route.fulfill(status=500,json={'error':'Test error'})
@@ -105,6 +111,16 @@ def main():
             assert 'reference=2026-01' in calls[-1]
             page.locator('#pe-chart-metric').select_option('isk_purchasing_power_index');expect(page.locator('#pe-chart-basis')).to_be_disabled();expect(chart.locator('path')).to_have_attribute('stroke','#fbbf24');expect(page.locator('#pe-chart-status')).to_contain_text('Index (reference 2026-01 = 100)')
             page.locator('#pe-chart-metric').select_option('mining_ppa_isk');expect(page.locator('#pe-chart-basis')).to_be_enabled()
+            page.locator('#pe-best-metric').select_option('mining_ppa_isk');page.locator('#pe-best-find').click()
+            expect(page.locator('#pe-best-status')).to_contain_text('20 months checked; 20 usable')
+            expect(page.locator('#pe-best-ranking tr')).to_have_count(10)
+            expect(page.locator('#pe-best-ranking tr').first).to_contain_text('2026-08')
+            expect(page.locator('#pe-best-ranking tr').first.locator('td').last).to_have_attribute('title','10,000,000,000,000,000.19 PPA ISK (reference 2026-01)')
+            page.locator('#pe-best-limit').select_option('20');expect(page.locator('#pe-best-ranking tr')).to_have_count(20)
+            page.locator('#pe-best-ranking tr').nth(1).locator('button').click();expect(page.locator('#pe-to')).to_have_value('2026-07')
+            expect(page.locator('#pe-status')).to_contain_text('Observed month: 2026-07')
+            page.locator('#pe-to').select_option('2026-08')
+            page.locator('#pe-best-basis').select_option('member');expect(page.locator('#pe-best-ranking tr')).to_have_count(0)
             expect(page.locator('#pe-regions')).to_contain_text('8%')
             expect(page.locator('#pe-coverage')).to_contain_text('2026-08-31')
             page.locator('[data-population-subtab="flows"]').click()

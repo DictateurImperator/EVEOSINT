@@ -24,6 +24,20 @@
     <thead><tr><th>Indicator (ISK)</th><th>Monthly estimate</th><th>/ average member</th><th>/ active PvP pilot</th></tr></thead>
     <tbody id="pe-rows"></tbody>
   </table></div>
+  <div class="content-card p-3 my-3" id="pe-best-month">
+    <h4>Best months in purchasing power</h4>
+    <div class="d-flex flex-wrap gap-2 align-items-end">
+      <label>Indicator <select id="pe-best-metric" class="form-select form-select-sm"><option value="npc_bounties_ppa_isk">NPC bounties · PPA</option><option value="mining_ppa_isk">Mining · PPA</option><option value="production_ppa_isk">Production · PPA</option></select></label>
+      <label>Display <select id="pe-best-basis" class="form-select form-select-sm"><option value="total">Monthly estimate</option><option value="member">Per average member</option><option value="active">Per active PvP pilot</option></select></label>
+      <label>Ranking <select id="pe-best-limit" class="form-select form-select-sm"><option value="10">Top 10</option><option value="20">Top 20</option></select></label>
+      <button id="pe-best-find" class="btn btn-sm btn-primary" type="button">Rank best months</button>
+      <button id="pe-best-stop" class="btn btn-sm btn-outline-secondary" type="button" hidden>Stop</button>
+      <button id="pe-best-use" class="btn btn-sm btn-outline-secondary" type="button" hidden>Use as observed month</button>
+    </div>
+    <p class="muted-line small mt-2">Search all available history using the selected purchasing-power reference and PvP window. Missing data and undefined ratios are excluded. Exact ties use the earliest month.</p>
+    <div id="pe-best-status" class="muted-line" role="status"></div><div id="pe-best-result" class="mt-2"></div>
+    <div class="table-responsive"><table class="table table-dark table-sm"><thead><tr><th>Rank</th><th>Month</th><th>PPA amount</th></tr></thead><tbody id="pe-best-ranking"></tbody></table></div>
+  </div>
   <h4>Price and purchasing-power indicators</h4>
   <div class="table-responsive"><table class="table table-dark table-sm"><thead><tr><th>Indicator (reference = 100)</th><th id="pe-ppa-base">Base month</th><th id="pe-ppa-observed">Observed month</th><th>Change</th></tr></thead><tbody id="pe-ppa-rows"></tbody></table></div>
   <div class="mt-4" id="pe-evolution">
@@ -101,6 +115,7 @@
     if(window.eveosintRequestedPopulationEconomics)button.click();
   }).catch(()=>{});
 {% include "population_economics_chart.js" %}
+{% include "population_economics_best.js" %}
 })();
 </script>
 {% endif %}

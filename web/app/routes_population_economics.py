@@ -6,7 +6,13 @@ from psycopg2.errors import QueryCanceled
 
 from .auth import require_login, require_permission_or_redirect
 from .map_economy import EconomyMapError
-from .population_economics import get_comparison, get_evolution, get_options, get_series
+from .population_economics import (
+    get_best_month,
+    get_comparison,
+    get_evolution,
+    get_options,
+    get_series,
+)
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -54,3 +60,11 @@ def economics_evolution(request: Request, kind: str, entity_id: int,
 def economics_comparison(request: Request, kind: str, entity_id: int,
                          base: str = Query(...), observed: str = Query(...), window: int = Query(90), reference: str | None = Query(None)):
     return _response(request, kind, entity_id, lambda: get_comparison(kind, entity_id, base, observed, window, reference))
+
+
+@router.get('/api/{kind}/{entity_id}/population-economics/best-month')
+def economics_best_month(request: Request, kind: str, entity_id: int, metric: str = Query(...),
+                         reference: str = Query(...), basis: str = Query('total'), window: int = Query(90),
+                         offset: int = Query(0)):
+    return _response(request, kind, entity_id,
+                     lambda: get_best_month(kind, entity_id, metric, basis, reference, window, offset))
