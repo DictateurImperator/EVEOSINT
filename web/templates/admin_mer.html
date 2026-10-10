@@ -232,7 +232,11 @@
             </td>
 
             <td>
-              {% if mer.economic_dump_state == "present" %}
+              {% if mer.economic_dump_state == "imported" %}
+                <span class="badge text-bg-success">imported</span>
+              {% elif mer.economic_dump_state == "imported_with_unmapped" %}
+                <span class="badge text-bg-warning">imported · unmapped fields</span>
+              {% elif mer.economic_dump_state == "present" %}
                 <span class="badge text-bg-success">present</span>
               {% elif mer.economic_dump_state == "absent" %}
                 <span class="badge text-bg-danger">missing</span>
