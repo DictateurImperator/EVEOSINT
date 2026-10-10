@@ -1,4 +1,9 @@
 {% if profile.entity_type in ['alliance', 'coalition'] %}
+<style>
+.pe-chart-shell{position:relative;border:1px solid rgba(148,163,184,.18);border-radius:.65rem;background:rgba(2,6,23,.35);overflow:hidden}
+#pe-chart{display:block;width:100%;min-height:240px;cursor:grab;touch-action:none;user-select:none}#pe-chart.dragging{cursor:grabbing}
+#pe-chart-tooltip{position:absolute;pointer-events:none;padding:.5rem .65rem;background:#0f172a;color:#e2e8f0;border:1px solid #334155;border-radius:.4rem;font-size:.8rem;max-width:95%;overflow-wrap:anywhere}
+</style>
 <section id="population-economics" class="content-card p-3 p-md-4 mb-4" hidden>
   <h3>Economics</h3>
   <p class="muted-line">Territorial estimates from the MER: regional NPC bounties, mining and production are apportioned by average daily sovereignty, then summed across regions. These are estimates of activity in held territory, including activity by other groups.</p>
@@ -8,13 +13,30 @@
     <label>PvP activity window (days) <input id="pe-window" type="number" min="1" max="3650" value="90" class="form-control form-control-sm"></label>
     <button id="pe-apply" class="btn btn-sm btn-primary" type="button">Calculate</button>
   </div>
-  <p class="muted-line small">The regional share is mean systems held / mean total player sovereignty systems, using UTC day-end ownership throughout each month. Coalition membership is evaluated on each day. Average population uses the latest recorded population on or before each covered day. PvP counts membership at the time of the kill, including pilots who later left; active pilots must have participated as attackers in a PvP kill. Killmails and pilots are deduplicated across coalition members. NPC-only kills are excluded.</p>
+  <p class="muted-line small">The regional share is mean systems held / mean total player sovereignty systems, using UTC day-end ownership throughout each month. Coalition membership is evaluated on each day. Average population uses the latest recorded population on or before each covered day. PvP counts membership at the time of the kill, including pilots who later left; active pilots must have participated as attackers in a PvP kill. Killmails and pilots are deduplicated across coalition members. NPC-only kills are excluded. All amounts and population averages are calculated separately for each MER month.</p>
   <div id="pe-status" class="muted-line" role="status"></div>
   <p id="pe-counts" class="mt-2 small"></p>
   <div class="table-responsive"><table class="table table-dark table-sm align-middle">
-    <thead><tr><th>Indicator (ISK)</th><th>Total estimate</th><th>Monthly average</th><th>Daily average</th><th>/ average member</th><th>/ active PvP pilot</th><th>/ loss</th><th>/ kill inflicted</th></tr></thead>
+    <thead><tr><th>Month</th><th>Indicator (ISK)</th><th>Monthly estimate</th><th>Daily average</th><th>/ average member</th><th>/ active PvP pilot</th><th>/ loss</th><th>/ kill inflicted</th></tr></thead>
     <tbody id="pe-rows"></tbody>
   </table></div>
+  <div class="mt-4" id="pe-evolution">
+    <h4>Monthly evolution</h4>
+    <div class="d-flex flex-wrap gap-2 align-items-end mb-2">
+      <label>From <select id="pe-chart-from" class="form-select form-select-sm"></select></label>
+      <label>Through <select id="pe-chart-to" class="form-select form-select-sm"></select></label>
+      <label>Indicator <select id="pe-chart-metric" class="form-select form-select-sm"><option value="npc_bounties_isk">NPC bounties</option><option value="mining_isk">Mining</option><option value="production_isk">Production</option></select></label>
+      <label>Display <select id="pe-chart-basis" class="form-select form-select-sm"><option value="total">Monthly estimate (ISK)</option><option value="daily">Daily average (ISK)</option><option value="member">Per average member</option><option value="active">Per active PvP pilot</option><option value="loss">Per loss</option><option value="kill">Per kill inflicted</option></select></label>
+      <button id="pe-chart-load" class="btn btn-sm btn-primary" type="button">Show evolution</button>
+      <button id="pe-chart-reset" class="btn btn-sm btn-outline-secondary" type="button">Reset zoom</button>
+      <button id="pe-chart-csv" class="btn btn-sm btn-outline-secondary" type="button">Download CSV</button>
+    </div>
+    <p class="muted-line small">One point per MER month. Population is averaged within each month. PvP ratios use the chosen activity window ending at each month-end, limited to available MER days, including earlier reported months when needed.</p>
+    <div id="pe-chart-status" class="muted-line" role="status"></div>
+    <div class="pe-chart-shell"><svg id="pe-chart" viewBox="0 0 1000 360" role="img" aria-label="Economic evolution"></svg><div id="pe-chart-tooltip" hidden></div></div>
+    <p class="muted-line small">Mouse wheel: zoom · drag: pan · hover: full value · double-click: reset zoom. Missing months remain gaps.</p>
+  </div>
+  <div class="table-responsive"><table class="table table-dark table-sm"><thead><tr><th>Month</th><th>Average population</th><th>Active PvP pilots</th><th>Losses</th><th>Kills inflicted</th><th>Covered PvP days</th></tr></thead><tbody id="pe-month-counts"></tbody></table></div>
   <details><summary>Regional allocation and covered periods</summary><p id="pe-coverage" class="small mt-2"></p>
     <div class="table-responsive"><table class="table table-dark table-sm"><thead><tr><th>Month</th><th>Region</th><th>Mean systems held</th><th>Mean regional sovereignty systems</th><th>Share</th></tr></thead><tbody id="pe-regions"></tbody></table></div>
   </details>
@@ -28,30 +50,40 @@
   const base='/api/{{ profile.entity_type }}/{{ profile.entity_id | int }}/population-economics';
   let ready=false, loaded=false, controller=null;
   const fmt=value=>value===null || value===undefined?'—':Number(value).toLocaleString('en-US',{maximumFractionDigits:2});
-  function cell(row,value){const td=document.createElement('td');td.textContent=value;row.appendChild(td);}
+  // Preserve the server's decimal string for full values; Number is used only for compact labels.
+  function full(value){if(value===null || value===undefined)return '—';const parts=String(value).split('.');return parts[0].replace(/\B(?=(\d{3})+(?!\d))/g,',')+(parts[1]?'.'+parts[1]:'');}
+  function compact(value){if(value===null || value===undefined)return '—';const n=Number(value),a=Math.abs(n);const unit=a>=1e12?[1e12,'T']:a>=1e9?[1e9,'B']:a>=1e6?[1e6,'M']:null;return unit?(n/unit[0]).toLocaleString('en-US',{maximumFractionDigits:2})+' '+unit[1]:fmt(value);}
+  function cell(row,value,money=false){const td=document.createElement('td');td.textContent=money?compact(value):value;if(money)td.title=full(value)+' ISK';row.appendChild(td);}
   async function json(url,signal){const r=await fetch(url,{credentials:'same-origin',cache:'no-store',headers:{Accept:'application/json'},signal});const d=await r.json().catch(()=>({}));if(!r.ok)throw new Error(d.error||'Unable to load economics.');return d;}
   async function calculate(){
     if(!ready)return;
     if(controller)controller.abort();controller=new AbortController();const signal=controller.signal;
-    status.textContent='Calculating economics…';rows.replaceChildren();document.getElementById('pe-counts').textContent='';document.getElementById('pe-regions').replaceChildren();document.getElementById('pe-coverage').textContent='';
-    const input=document.getElementById('pe-window');
-    const params=new URLSearchParams({from:from.value,to:to.value,window:input.value});
-    try{const d=await json(base+'?'+params,signal);if(signal.aborted)return;
+    status.textContent='Calculating monthly economics…';rows.replaceChildren();document.getElementById('pe-counts').textContent='';document.getElementById('pe-month-counts').replaceChildren();document.getElementById('pe-regions').replaceChildren();document.getElementById('pe-coverage').textContent='';
+    const params=new URLSearchParams({from:from.value,to:to.value,window:document.getElementById('pe-window').value});
+    let offset=0,count=0,coverage=[];
+    try{do{params.set('offset',String(offset));const d=await json(base+'?'+params,signal);if(signal.aborted)return;
       loaded=true;if(!d.available){status.textContent='No economic estimates available for this period.';return;}
-      status.textContent='Covered MER months: '+d.coverage.join(', ')+' · '+d.economic_days+' economic days';
-      const n=d.denominators;document.getElementById('pe-counts').textContent='Average population: '+fmt(n.member)+' · Active PvP pilots: '+fmt(n.active)+' · Losses: '+fmt(n.loss)+' · Kills inflicted: '+fmt(n.kill)+' · PvP window: '+d.activity_days+' covered days';
-      for(const item of d.rows){const tr=document.createElement('tr');[item.label,fmt(item.total),fmt(item.monthly_average),fmt(item.daily_average),...['member','active','loss','kill'].map(k=>fmt(item.ratios[k]))].forEach(v=>cell(tr,v));rows.appendChild(tr);}
-      document.getElementById('pe-coverage').textContent='PvP coverage: '+d.activity_coverage.map(i=>i.from+' through '+i.through).join('; ')+'. Unreported months and days beyond MER coverage are excluded. A dash means missing data or a zero denominator.';
+      for(const month of d.months){
+        for(const item of month.rows){const tr=document.createElement('tr');cell(tr,month.month);cell(tr,item.label);[item.total,item.daily_average,...['member','active','loss','kill'].map(k=>item.ratios[k])].forEach(v=>cell(tr,v,true));rows.appendChild(tr);}
+        const n=month.denominators,tr=document.createElement('tr');[month.month,fmt(n.member),fmt(n.active),fmt(n.loss),fmt(n.kill),fmt(month.activity_days)].forEach(v=>cell(tr,v));document.getElementById('pe-month-counts').appendChild(tr);
+        coverage.push(month.month+': '+month.activity_coverage.map(i=>i.from+' through '+i.through).join('; '));count++;
+      }
       const regions=document.getElementById('pe-regions');for(const item of d.regions){const tr=document.createElement('tr');[item.month,item.region,fmt(item.owned_average),fmt(item.total_average),fmt(Number(item.share)*100)+'%'].forEach(v=>cell(tr,v));regions.appendChild(tr);}
-    }catch(e){if(e.name!=='AbortError')status.textContent=e.message;}
+      offset=d.next_offset;status.textContent=count+' / '+d.coverage.length+' MER months · Monthly estimates';
+    }while(offset!==null);
+      document.getElementById('pe-counts').textContent='Each month is calculated separately. Average population and PvP denominators are shown below; months are never summed.';
+      document.getElementById('pe-coverage').textContent='PvP coverage by month: '+coverage.join(' | ')+'. Unreported months and days beyond MER coverage are excluded. A dash means missing data or a zero denominator.';
+    }catch(e){if(e.name!=='AbortError'){rows.replaceChildren();document.getElementById('pe-month-counts').replaceChildren();document.getElementById('pe-regions').replaceChildren();status.textContent=e.message;}}
   }
-  window.eveosintLoadPopulationEconomics=()=>{if(!loaded){const original=document.getElementById('pi-window-days');if(original)document.getElementById('pe-window').value=original.value;calculate();}};
-  document.getElementById('pe-apply').addEventListener('click',calculate);
+  window.eveosintLoadPopulationEconomics=()=>{if(ready && !window.eveosintEconomicsChartLoaded)loadEvolution();if(!loaded){const original=document.getElementById('pi-window-days');if(original)document.getElementById('pe-window').value=original.value;calculate();}};
+  document.getElementById('pe-apply').addEventListener('click',()=>{calculate();if(window.eveosintEconomicsChartLoaded && ['active','loss','kill'].includes(document.getElementById('pe-chart-basis').value))loadEvolution();});
   json(base+'/options').then(d=>{
     if(!d.available)return;for(const m of d.months){from.add(new Option(m,m));to.add(new Option(m,m));}
-    from.value=d.months[d.months.length-1];to.value=from.value;ready=true;button.hidden=false;
+    from.value=d.months[d.months.length-1];to.value=from.value;
+    const cf=document.getElementById('pe-chart-from'),ct=document.getElementById('pe-chart-to');for(const m of d.months){cf.add(new Option(m,m));ct.add(new Option(m,m));}cf.value=d.months[Math.max(0,d.months.length-12)];ct.value=to.value;ready=true;button.hidden=false;
     if(window.eveosintRequestedPopulationEconomics)button.click();
   }).catch(()=>{});
+{% include "population_economics_chart.js" %}
 })();
 </script>
 {% endif %}

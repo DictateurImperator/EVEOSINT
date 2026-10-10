@@ -4,21 +4,21 @@ Population → Economics appears after Flows when imported regional MER data can
 
 ## Allocation
 
-For each reported month, reconstruct player sovereignty at the end of every UTC day from `sovereignty.reconciled_map`. For each region, sum the entity's held systems across the days and divide by the sum of all held systems across those days. This is mean held systems / mean regional sovereignty systems. Multiply each regional monthly NPC-bounties, mining and production amount by that share; sum allocated amounts across regions and months. Unclaimed systems are not part of the denominator. These estimates include economic activity by other groups in the territory.
+For each reported month, reconstruct player sovereignty at the end of every UTC day from `sovereignty.reconciled_map`. For each region, sum the entity's held systems across the days and divide by the sum of all held systems across those days. This is mean held systems / mean regional sovereignty systems. Multiply each regional monthly NPC-bounties, mining and production amount by that share; sum allocated amounts across regions for each month. Months are never summed: the table and chart compare monthly measurements. Unclaimed systems are not part of the denominator. These estimates include economic activity by other groups in the territory.
 
 Coalition rules, nested membership, validity dates and exclusions are evaluated daily. Including both an alliance and one of its corporations does not count a system twice. Historical ownership is applied forward through changes; current ownership is never applied backwards. Months preceding the first recorded sovereignty event are excluded. Missing economic measurements return a dash, rather than zero or a misleading partial total.
 
-The regional breakdown exposes mean systems held, mean regional held systems and the allocation percentage for each month. The main table also shows monthly and daily average allocated amounts.
+The regional breakdown exposes mean systems held, mean regional held systems and the allocation percentage for each month. The main table shows the monthly allocated amount and its daily average. ISK amounts use M/B/T abbreviations; hovering exposes the complete decimal value.
 
 ## Population and PvP
 
-The population denominator is the arithmetic mean of the recorded population over all selected MER-covered days, carrying the last known official daily population forward as in Global metrics. If any covered day has no known population, member ratios are unavailable. Coalition population uses the existing historical population aggregation, including its handling of overlap and missing member histories.
+The population denominator is the arithmetic mean of the recorded population over the MER-covered days of each month, carrying the last known official daily population forward as in Global metrics. If any covered day has no known population, member ratios are unavailable. Coalition population uses the existing historical population aggregation, including its handling of overlap and missing member histories.
 
-The configurable PvP window ends on the final covered MER day and intersects the selected MER months. Days in missing reports and beyond the final report are excluded. The default is 90 days, copied from Global metrics when first opening Economics. The page shows the effective coverage and all denominators.
+The configurable PvP window ends at each displayed month-end and intersects all available MER history, including earlier months when needed. The result for month X is independent of whether the display range starts at month X or earlier. Days in missing reports and beyond the final report are excluded. The default is 90 days, copied from Global metrics when first opening Economics. The page shows the effective coverage and all denominators.
 
 Only known PvP killmails with a player victim and a player attacker count. Active PvP means a distinct attacking character, irrespective of later departures. Alliance/corporation IDs on the killmail and coalition rules at combat time establish membership. Kills, losses and attacking characters are deduplicated across coalition members and temporal segments. NPC-only losses and pilotless victims are excluded. Hidden MER rows cannot identify active pilots and are not added to these denominators.
 
-Ratios divide the selected economic totals by average population, active pilots, losses and inflicted kills. A zero denominator yields a dash. Economic coverage and the configured PvP coverage are displayed separately, so shorter activity windows remain visible to the user.
+Ratios divide each monthly economic amount by average population, active pilots, losses and inflicted kills. A zero denominator yields a dash. Mean population and PvP denominators are shown in a separate monthly table, with covered windows in the regional details. The chart provides monthly amounts, daily averages and the same population/PvP ratios, with wheel zoom, drag pan, exact hover values, reset and CSV export of the visible range. Missing months interrupt the line. Table requests are batched six months at a time; chart requests twelve months at a time. PvP queries run only for the table or an explicitly selected PvP chart basis.
 
 ## Validation
 

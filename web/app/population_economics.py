@@ -228,35 +228,76 @@ def _activity(conn, kind, entity_id, rules, intervals):
     return len(active), len(kills), len(losses)
 
 
-def get_series(kind, entity_id, from_month, to_month, window=90):
+def get_series(kind, entity_id, from_month, to_month, window=90, offset=0):
     start, end = month(from_month), month(to_month)
-    if start > end or not 1 <= window <= 3650:
+    if start > end or not 1 <= window <= 3650 or offset < 0:
         raise ValueError('Choose an ordered month range and an activity window from 1 to 3650 days.')
     catalog = _catalog(kind, entity_id)
     months = [day for day in catalog['months'] if start <= day <= end]
     if not months:
-        return {'available': False, 'rows': [], 'coverage': []}
-    totals, details = estimates(catalog, months, _topology()['regions'])
-    anchor = next_month(months[-1]) - timedelta(days=1)
-    intervals = activity_intervals(months, window)
+        return {'available': False, 'months': [], 'coverage': [], 'next_offset': None}
+    measurements, details = [], []
     with db() as conn:
         official_loader = _load_official_rows if kind == 'alliance' else _load_coalition_official_rows
         official, dates = official_loader(conn, entity_id)
-        population = average_population(official, dates, months)
-        active, kills, losses = _activity(conn, kind, entity_id, catalog['rules'], intervals)
-    denominators = {'member': population, 'active': active, 'loss': losses, 'kill': kills}
-    days = sum((next_month(day)-day).days for day in months)
-    rows = []
-    for key, label in METRICS.items():
-        value = totals[key]
-        rows.append({'metric': key, 'label': label, 'total': str(value) if value is not None else None,
-                     'monthly_average': str(value/len(months)) if value is not None else None,
-                     'daily_average': str(value/days) if value is not None else None,
-                     'ratios': {name: str(value / count) if value is not None and count else None
-                                for name, count in denominators.items()}})
-    return {'available': True, 'rows': rows, 'denominators': {key: str(v) if isinstance(v, Decimal) else v for key, v in denominators.items()},
-            'economic_days': days, 'population_date': anchor.isoformat(),
-            'coverage': [d.strftime('%Y-%m') for d in months], 'regions': details,
-            'activity_coverage': [{'from': a.isoformat(), 'through': (b-timedelta(days=1)).isoformat()}
-                                  for a, b in intervals],
-            'activity_days': sum((b-a).days for a, b in intervals)}
+        for index in range(offset, min(offset+6, len(months))):
+            day = months[index]
+            totals, allocated = estimates(catalog, [day], _topology()['regions'])
+            details.extend(allocated)
+            intervals = activity_intervals([d for d in catalog['months'] if d <= day], window)
+            population = average_population(official, dates, [day])
+            active, kills, losses = _activity(conn, kind, entity_id, catalog['rules'], intervals)
+            denominators = {'member': population, 'active': active, 'loss': losses, 'kill': kills}
+            days = (next_month(day)-day).days
+            rows = []
+            for key, label in METRICS.items():
+                value = totals[key]
+                rows.append({'metric': key, 'label': label, 'total': str(value) if value is not None else None,
+                             'daily_average': str(value/days) if value is not None else None,
+                             'ratios': {name: str(value/count) if value is not None and count else None
+                                        for name, count in denominators.items()}})
+            measurements.append({'month': day.strftime('%Y-%m'), 'rows': rows,
+                                 'denominators': {key: str(v) if isinstance(v, Decimal) else v for key, v in denominators.items()},
+                                 'economic_days': days, 'activity_days': sum((b-a).days for a,b in intervals),
+                                 'activity_coverage': [{'from': a.isoformat(), 'through': (b-timedelta(days=1)).isoformat()}
+                                                       for a,b in intervals]})
+    return {'available': True, 'months': measurements, 'regions': details,
+            'coverage': [d.strftime('%Y-%m') for d in months],
+            'next_offset': offset+len(measurements) if offset+len(measurements) < len(months) else None}
+
+
+def get_evolution(kind, entity_id, from_month, to_month, basis='total', window=90, offset=0):
+    """Monthly measurements; expensive PvP ratios are requested explicitly, in small batches."""
+    if basis not in {'total', 'daily', 'member', 'active', 'loss', 'kill'} or not 1 <= window <= 3650 or offset < 0:
+        raise ValueError('Choose a valid chart basis, activity window and offset.')
+    months = month_range(month(from_month), month(to_month))
+    catalog = _catalog(kind, entity_id)
+    covered = set(catalog['months'])
+    batch = months[offset:offset+12]
+    points = []
+    with db() as conn:
+        official, dates = ([], [])
+        if basis == 'member':
+            loader = _load_official_rows if kind == 'alliance' else _load_coalition_official_rows
+            official, dates = loader(conn, entity_id)
+        for day in batch:
+            divisor = None
+            amounts = {key: None for key in METRICS}
+            if day in covered:
+                totals, _details = estimates(catalog, [day], {})
+                divisor = 1
+                if basis == 'daily':
+                    divisor = (next_month(day)-day).days
+                elif basis == 'member':
+                    divisor = average_population(official, dates, [day])
+                elif basis in {'active', 'loss', 'kill'}:
+                    history = [d for d in catalog['months'] if d <= day]
+                    intervals = activity_intervals(history, window)
+                    active, kills, losses = _activity(conn, kind, entity_id, catalog['rules'], intervals)
+                    divisor = {'active': active, 'loss': losses, 'kill': kills}[basis]
+                amounts = {key: str(value/divisor) if value is not None and divisor else None
+                           for key, value in totals.items()}
+            points.append({'month': day.strftime('%Y-%m'), 'values': amounts,
+                           'denominator': str(divisor) if divisor is not None else None})
+    return {'points': points, 'basis': basis, 'next_offset': offset+len(batch) if offset+len(batch) < len(months) else None,
+            'total_months': len(months)}

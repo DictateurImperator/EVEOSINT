@@ -70,6 +70,7 @@ class CalculationTests(unittest.TestCase):
              patch.object(module,'_load_official_rows',return_value=([{'date':FEB,'member_count':100}],[FEB])), \
              patch.object(module,'_activity',return_value=(2,4,0)):
             result = module.get_series('alliance',10,'2026-02','2026-02')
+        result=result['months'][0]
         self.assertEqual(result['economic_days'],28)
         self.assertEqual(result['denominators']['member'],'100')
         self.assertEqual(result['rows'][0]['daily_average'],'10')
@@ -77,6 +78,22 @@ class CalculationTests(unittest.TestCase):
         self.assertIsNone(result['rows'][0]['ratios']['loss'])
         self.assertIsNone(result['rows'][1]['total'])
         self.assertEqual(result['activity_days'],28)
+
+    def test_months_are_separate_instead_of_summed(self):
+        catalog={'months':[JAN,MAR], 'rules':{}, 'facts':{}, 'shares':{}}
+        @contextmanager
+        def db(): yield object()
+        def estimates(catalog, months, regions):
+            value=Decimal(100 if months[0]==JAN else 300)
+            return {key:value for key in module.METRICS},[]
+        with patch.object(module,'_catalog',return_value=catalog), patch.object(module,'db',db), \
+             patch.object(module,'_topology',return_value={'regions':{}}),patch.object(module,'estimates',side_effect=estimates), \
+             patch.object(module,'_load_official_rows',return_value=([{'date':JAN,'member_count':100}],[JAN])), \
+             patch.object(module,'_activity',return_value=(2,4,1)):
+            data=module.get_series('alliance',10,'2026-01','2026-03')
+        self.assertEqual([r['month'] for r in data['months']],['2026-01','2026-03'])
+        self.assertEqual([r['rows'][0]['total'] for r in data['months']],['100','300'])
+        self.assertNotIn('rows',data)
 
     def test_temporal_scope_counts_departed_pilots_deduplicates_kills(self):
         class Conn:
@@ -96,6 +113,50 @@ class CalculationTests(unittest.TestCase):
         self.assertEqual(queries[1][1][0],[20])
         self.assertIn('ka.killmail_time >=',queries[0][0])
         self.assertIn('km.victim_character_id > 0',queries[0][0])
+
+
+class EvolutionTests(unittest.TestCase):
+    def test_monthly_values_missing_month_and_mean_population(self):
+        catalog={'months':[JAN,MAR],'rules':{}}
+        @contextmanager
+        def db():yield object()
+        with patch.object(module,'_catalog',return_value=catalog), patch.object(module,'db',db), \
+             patch.object(module,'estimates',return_value=({key:Decimal(3100) for key in module.METRICS}, [])), \
+             patch.object(module,'_load_official_rows',return_value=([{'date':JAN,'member_count':100}],[JAN])), \
+             patch.object(module,'_activity') as pvp:
+            data=module.get_evolution('alliance',10,'2026-01','2026-03','member')
+        self.assertEqual([p['month'] for p in data['points']],['2026-01','2026-02','2026-03'])
+        self.assertEqual(data['points'][0]['values']['mining_isk'],'31')
+        self.assertIsNone(data['points'][1]['values']['mining_isk'])
+        pvp.assert_not_called()
+
+    def test_pvp_rolling_window_uses_original_range_across_batches_and_null_denominator(self):
+        catalog={'months':[JAN,MAR],'rules':{}}
+        @contextmanager
+        def db():yield object()
+        with patch.object(module,'_catalog',return_value=catalog), patch.object(module,'db',db), \
+             patch.object(module,'estimates',return_value=({key:Decimal(3100) for key in module.METRICS}, [])), \
+             patch.object(module,'_activity',return_value=(0,1,2)) as pvp:
+            data=module.get_evolution('alliance',10,'2026-01','2026-03','active',90,2)
+        self.assertEqual(data['points'][0]['month'],'2026-03')
+        self.assertEqual(pvp.call_args.args[-1],[(JAN,FEB),(MAR,date(2026,4,1))])
+        self.assertIsNone(data['points'][0]['values']['mining_isk'])
+        self.assertIsNone(data['next_offset'])
+
+    def test_month_comparison_is_independent_of_display_range(self):
+        catalog={'months':[JAN,MAR],'rules':{}}
+        @contextmanager
+        def db():yield object()
+        with patch.object(module,'_catalog',return_value=catalog), patch.object(module,'db',db), \
+             patch.object(module,'estimates',return_value=({key:Decimal(100) for key in module.METRICS},[])), \
+             patch.object(module,'_activity',return_value=(1,1,1)) as pvp:
+            module.get_evolution('alliance',10,'2026-03','2026-03','active',90)
+        self.assertEqual(pvp.call_args.args[-1],[(JAN,FEB),(MAR,date(2026,4,1))])
+
+    def test_invalid_basis_does_not_query_database(self):
+        with patch.object(module,'_catalog') as catalog:
+            with self.assertRaises(ValueError):module.get_evolution('alliance',10,'2026-01','2026-03','bad')
+            catalog.assert_not_called()
 
 
 class RouteTests(unittest.TestCase):
