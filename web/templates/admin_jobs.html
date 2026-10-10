@@ -105,6 +105,9 @@
           </form>
           {% endif %}
           {% include "admin_archive_refresh_progress.html" %}
+          <div class="d-flex flex-wrap gap-2 mb-2">
+            <a class="btn btn-sm btn-outline-warning" href="/admin/jobs/killmail-archives/errors" target="_blank" rel="noopener noreferrer">View errors (including earlier entries)</a>
+          </div>
           <a href="/admin/killmail-statistics">View monthly killmail statistics</a>
         {% elif job.type == "killmail_forensics_analysis" %}
           <p class="muted-line small">Analyze all hidden MER losses in the background. Existing investigations and tests are preserved. Leave dates empty for all available exports. No CCP requests are sent.</p>

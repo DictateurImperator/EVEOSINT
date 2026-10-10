@@ -16,6 +16,7 @@ import tarfile
 import tempfile
 import time
 from datetime import UTC, date, datetime
+from email.utils import parsedate_to_datetime
 from pathlib import Path
 
 import requests
@@ -81,6 +82,36 @@ def year_index(session, year):
         if day.year == year:
             result[day.isoformat()] = entry
     return result
+
+
+def file_metadata(entry, headers):
+    """The file response is authoritative when the yearly index lags behind."""
+    result = dict(entry)
+    if headers.get("Last-Modified"):
+        modified = parsedate_to_datetime(headers["Last-Modified"])
+        if modified.tzinfo is None:
+            raise ValueError("Remote modification time must include its timezone")
+        result["last_modified"] = modified.astimezone(UTC).isoformat()
+    if headers.get("Content-Length") and not headers.get("Content-Encoding"):
+        result["size"] = int(headers["Content-Length"])
+    if headers.get("ETag"):
+        result["etag"] = headers["ETag"].strip('"')
+    return result
+
+
+def missing_index_entry(session, importer, day):
+    # Only missing index entries need this extra request; never HEAD all history.
+    with session.head(importer.day_url(day), timeout=(15, 120), allow_redirects=True) as response:
+        if response.status_code == 404:
+            return None
+        response.raise_for_status()
+        if not response.headers.get("Last-Modified"):
+            return None
+        return file_metadata({"name": f"killmails-{day}.tar.bz2"}, response.headers)
+
+
+class ArchiveNotNewer(Exception):
+    pass
 
 
 def signature(entry):
@@ -185,6 +216,19 @@ def refresh_archive(conn, importer, session, day, entry, state, state_path, repo
         # Always fetch anew: the original import cache may be the outdated file.
         with session.get(importer.day_url(day), stream=True, timeout=(15, 300)) as response:
             response.raise_for_status()
+            headers = getattr(response, "headers", {})
+            received_entry = file_metadata(entry, headers)
+            downloaded_at = download_time(destination, state["archives"].get(day.isoformat()))
+            if not needs_refresh(downloaded_at, received_entry):
+                raise ArchiveNotNewer("File response is not newer than our download")
+            expected_size = int(headers["Content-Length"]) if headers.get("Content-Length") and not headers.get("Content-Encoding") else None
+            metadata_changed = (received_entry.get("size") != entry.get("size")
+                                or received_entry.get("etag") != entry.get("etag")
+                                or int(datetime.fromisoformat(received_entry["last_modified"]).timestamp())
+                                != int(datetime.fromisoformat(entry["last_modified"]).timestamp()))
+            if metadata_changed:
+                LOG.warning("ARCHIVE_INDEX_STALE day=%s index_size=%s response_size=%s", day, entry.get("size"), received_entry.get("size"))
+            entry = received_entry
             with temporary.open("wb") as handle:
                 downloaded, last_report = 0, 0
                 for chunk in response.iter_content(chunk_size=1024 * 1024):
@@ -194,8 +238,8 @@ def refresh_archive(conn, importer, session, day, entry, state, state_path, repo
                         report(bytes_downloaded=downloaded)
                         last_report = time.monotonic()
         report(phase="importing", bytes_downloaded=downloaded)
-        if entry.get("size") is not None and temporary.stat().st_size != int(entry["size"]):
-            raise ValueError("Archive size changed since the index was read; retry the job")
+        if expected_size is not None and temporary.stat().st_size != expected_size:
+            raise ValueError("Downloaded archive does not match response Content-Length")
         with tarfile.open(temporary, "r:bz2") as archive:
             for member in archive:
                 if not member.isfile() or not member.name.endswith(".json"):
@@ -256,7 +300,11 @@ def run_refresh(conn, importer, session, state_path, match, start=None, end=None
                 continue
             entry = indexes[day.year].get(day.isoformat())
             if entry is None:
-                raise ValueError("Previously imported archive is missing from the EVE Ref index")
+                LOG.info("ARCHIVE_INDEX_MISSING day=%s checking file headers", day)
+                entry = missing_index_entry(session, importer, day)
+                if entry is None:
+                    LOG.warning("ARCHIVE_SKIPPED day=%s reason=unavailable_remote_metadata", day)
+                    continue
             downloaded_at = download_time(importer.archive_tar_path(day), state["archives"].get(day.isoformat()))
             if downloaded_at is None:
                 LOG.warning("ARCHIVE_SKIPPED day=%s reason=unknown_download_date", day)
@@ -293,6 +341,8 @@ def run_refresh(conn, importer, session, state_path, match, start=None, end=None
 
             added += refresh_archive(conn, importer, session, day, entry, state, state_path, archive_report)
             updated += 1
+        except ArchiveNotNewer:
+            LOG.info("ARCHIVE_SKIPPED day=%s reason=response_not_newer_than_download", day)
         except Exception:
             conn.rollback()
             added += archive_added[0]

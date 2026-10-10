@@ -8,6 +8,7 @@ from .jobs import (
     list_jobs_with_logs,
     read_job_log,
     read_killmail_archive_refresh_progress,
+    read_killmail_archive_errors,
     run_killmail_job,
     run_killmail_archive_refresh_job,
     stop_killmail_archive_refresh_job,
@@ -419,3 +420,17 @@ def admin_jobs_killmail_archive_progress(request: Request):
     if not has_permission(user, "admin.jobs.view"):
         return JSONResponse({"error": "The admin.jobs.view permission is required."}, status_code=403)
     return JSONResponse(read_killmail_archive_refresh_progress(), headers={"Cache-Control": "no-store"})
+
+
+@router.get("/admin/jobs/killmail-archives/errors")
+def admin_jobs_killmail_archive_errors(request: Request):
+    user = require_login(request)
+    redirect = require_permission_or_redirect(user, "admin.jobs.view")
+    if redirect:
+        return redirect
+    try:
+        content = read_killmail_archive_errors()
+    except JobError:
+        return PlainTextResponse("Archive refresh log unavailable.", status_code=404)
+    return PlainTextResponse("Last 20 error blocks from the full archive refresh log (all runs).\n\n" + content,
+                             headers={"Cache-Control": "no-store"})

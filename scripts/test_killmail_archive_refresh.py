@@ -2,6 +2,7 @@
 
 import io
 import json
+import logging
 import os
 import tarfile
 import tempfile
@@ -44,8 +45,10 @@ def archive_bytes(payloads):
 
 
 class Response:
-    def __init__(self, data):
+    def __init__(self, data, headers=None, status_code=200):
         self.data = data
+        self.headers = headers or {}
+        self.status_code = status_code
 
     def __enter__(self):
         return self
@@ -196,6 +199,53 @@ class DecisionTests(unittest.TestCase):
         with patch.object(routes, "require_login", return_value=None):
             self.assertEqual(client.get("/admin/jobs/killmail-archives/progress").status_code, 401)
 
+    def test_earlier_error_tracebacks_remain_visible_after_many_progress_lines(self):
+        import sys
+        config = sys.modules[f.PACKAGE + ".config"]
+        with patch.object(config, "JOBS_CONFIG_PATH", f.ROOT / "config/offline-jobs.json", create=True):
+            jobs = f.load("jobs")
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "refresh.log"
+            path.write_text("2026-10-10 15:00:00,000 ERROR ARCHIVE_FAILED day=2026-08-29\n"
+                            "Traceback (most recent call last):\n  failing_call()\nValueError: sample archive failure\n" +
+                            "2026-10-10 15:01:00,000 INFO ARCHIVE_PROGRESS read=500\n" * 1000)
+            with patch.object(jobs, "get_job", return_value={"log_path": str(path)}):
+                text = jobs.read_killmail_archive_errors()
+            self.assertIn("day=2026-08-29", text)
+            self.assertIn("ValueError: sample archive failure", text)
+            self.assertNotIn("ARCHIVE_PROGRESS", text)
+            path.write_text("Traceback (most recent call last):\nRuntimeError: unhandled final error\n")
+            with patch.object(jobs, "get_job", return_value={"log_path": str(path)}):
+                self.assertIn("unhandled final error", jobs.read_killmail_archive_errors())
+            path.write_text("".join(f"2026-10-10 15:00:00,000 ERROR failure-{i}\n" for i in range(25)))
+            with patch.object(jobs, "get_job", return_value={"log_path": str(path)}):
+                text = jobs.read_killmail_archive_errors()
+                self.assertNotIn("failure-4\n", text)
+                self.assertIn("failure-24\n", text)
+
+    def test_error_log_endpoint_requires_admin_view_and_does_not_start_worker(self):
+        import sys
+        config = sys.modules[f.PACKAGE + ".config"]
+        with patch.object(config, "JOBS_CONFIG_PATH", f.ROOT / "config/offline-jobs.json", create=True):
+            f.load("jobs")
+            routes = f.load("routes_admin_jobs")
+        app = FastAPI()
+        app.include_router(routes.router)
+        client = TestClient(app)
+        user = {"id": 1, "username": "admin", "permissions": {"admin.jobs.view"}}
+        with patch.object(routes, "require_login", return_value=user), \
+             patch.object(routes, "read_killmail_archive_errors", return_value="ValueError: sample") as read, \
+             patch.object(routes, "run_killmail_archive_refresh_job") as launch:
+            response = client.get("/admin/jobs/killmail-archives/errors")
+            self.assertIn("ValueError: sample", response.text)
+            self.assertEqual(response.headers["cache-control"], "no-store")
+            self.assertEqual(response.status_code, 200)
+            launch.assert_not_called()
+            user["permissions"] = set()
+            read.reset_mock()
+            self.assertEqual(client.get("/admin/jobs/killmail-archives/errors", follow_redirects=False).status_code, 302)
+            read.assert_not_called()
+
     def test_statistics_access_and_year_validation(self):
         app = FastAPI()
         app.include_router(stat_routes.router)
@@ -226,6 +276,8 @@ class RefreshIntegrationTests(unittest.TestCase):
 
     def setUp(self):
         from scripts import sync_killmails as importer
+        # The production importer queues worker logs; these tests have no listener.
+        logging.basicConfig(handlers=[logging.NullHandler()], force=True)
         self.importer = importer
         self.temporary = tempfile.TemporaryDirectory(prefix="archive-refresh-test-")
         self.addCleanup(self.temporary.cleanup)
@@ -326,6 +378,62 @@ class RefreshIntegrationTests(unittest.TestCase):
         destination = self.importer.archive_tar_path(DAY)
         self.assertEqual(destination.read_bytes(), self.source.data)
         self.assertEqual(list(destination.parent.iterdir()), [destination])
+
+    def test_stale_index_size_uses_actual_response_and_imports_normally(self):
+        self.source.entry["size"] = len(self.source.data) - 10
+        original = self.source.get
+
+        def get(url, **options):
+            if url.endswith(".tar.bz2"):
+                return Response(self.source.data, {"Content-Length": str(len(self.source.data)), "Last-Modified": "Fri, 09 Oct 2026 11:00:17 GMT"})
+            return original(url, **options)
+
+        with patch.object(self.source, "get", side_effect=get):
+            self.assertEqual(self.run_job()["added"], 1)
+        self.assertEqual(json.loads(self.state.read_text())["archives"][DAY.isoformat()]["size"], len(self.source.data))
+
+    def test_day_missing_from_index_checks_headers_without_scanning_other_files(self):
+        original = self.source.get
+
+        def get(url, **options):
+            if url.endswith("index.json"):
+                return Response({"files": []})
+            return original(url, **options)
+
+        head = Mock(return_value=Response(None, {"Content-Length": str(len(self.source.data)), "Last-Modified": "Fri, 09 Oct 2026 11:00:17 GMT"}))
+        with patch.object(self.source, "get", side_effect=get), patch.object(self.source, "head", head, create=True):
+            self.assertEqual(self.run_job()["added"], 1)
+        head.assert_called_once()
+
+    def test_older_file_response_is_not_downloaded_even_if_index_says_newer(self):
+        original = self.source.get
+        body = Mock(side_effect=AssertionError("An older response body must not be downloaded"))
+
+        def get(url, **options):
+            if url.endswith(".tar.bz2"):
+                response = Response(self.source.data, {"Last-Modified": "Wed, 01 Jul 2026 00:00:00 GMT"})
+                response.iter_content = body
+                return response
+            return original(url, **options)
+
+        with patch.object(self.source, "get", side_effect=get):
+            self.assertEqual(self.run_job()["added"], 0)
+        body.assert_not_called()
+        self.assertEqual(self.scalar("SELECT count(*) FROM rawkm.killmails"), 1)
+
+    def test_incomplete_response_preserves_previous_archive(self):
+        original = self.source.get
+        previous = self.importer.archive_tar_path(DAY).read_bytes()
+
+        def get(url, **options):
+            if url.endswith(".tar.bz2"):
+                return Response(self.source.data, {"Content-Length": str(len(self.source.data) + 10)})
+            return original(url, **options)
+
+        with patch.object(self.source, "get", side_effect=get), self.assertLogs(refresh.LOG, level="ERROR"):
+            with self.assertRaises(RuntimeError):
+                self.run_job()
+        self.assertEqual(self.importer.archive_tar_path(DAY).read_bytes(), previous)
 
     def test_stale_archive_and_failed_match_are_resumed(self):
         with self.assertRaises(RuntimeError):

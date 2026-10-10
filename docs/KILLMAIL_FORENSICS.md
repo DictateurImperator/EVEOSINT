@@ -361,3 +361,20 @@ identity, interrupted state and endpoint access.
 `scripts.test_archive_refresh_progress_browser` exercises automatic transitions
 from scanning through downloading/importing to completion, button state and
 recovery from a non-JSON error with no real worker or external requests.
+
+The archive refresh card also has **View errors (including earlier entries)**.
+It extracts the last 20 ERROR/CRITICAL blocks, with their tracebacks, from the
+complete log across all runs. Progress lines cannot push these errors out of
+view. The read-only endpoint works with workers already running on previous
+versions: it needs no worker restart. Each error block is bounded to 100 lines,
+and the log is streamed so reading history does not load it all into memory.
+
+EVE Ref yearly indexes can lag behind the archive files themselves. A locally
+imported day missing from the index is checked with a HEAD request for that day
+only; its Last-Modified still must be later than the local download date. A
+missing file or missing modification time is skipped. For selected downloads,
+response Last-Modified is checked again before reading the body, and the actual
+response Content-Length is used for completeness verification. An outdated index
+size cannot reject a complete, valid archive. The tar/bzip2 parser still rejects
+corruption, and incomplete downloads preserve the previous archive. No HEAD
+requests are added for the entire history.

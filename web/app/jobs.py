@@ -1,8 +1,10 @@
 import json
 import os
+import re
 import signal
 import subprocess
 import sys
+from collections import deque
 from datetime import date, datetime
 from pathlib import Path
 
@@ -581,3 +583,35 @@ def read_killmail_archive_refresh_progress():
     elif progress and not runtime["running"] and progress.get("phase") not in {"completed", "stopped", "failed"}:
         progress = dict(progress, phase="interrupted")
     return {"running": runtime["running"], "progress": progress}
+
+
+def read_killmail_archive_errors(limit=20):
+    """Read bounded error blocks from the full append-only log, including tracebacks."""
+    job = get_job("refresh_killmail_archives")
+    path = Path(job["log_path"]).expanduser()
+    header = re.compile(r"^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}(?:[,.]\d+)?\s+(DEBUG|INFO|WARNING|ERROR|CRITICAL)\b")
+    blocks = deque(maxlen=limit)
+    current = None
+    truncated = False
+    try:
+        with path.open("r", encoding="utf-8", errors="replace") as handle:
+            for line in handle:
+                match = header.match(line)
+                if match:
+                    if current:
+                        blocks.append("".join(current))
+                    current = [line] if match.group(1) in {"ERROR", "CRITICAL"} else None
+                    truncated = False
+                elif line.startswith("Traceback (most recent call last):") and current is None:
+                    current = [line]
+                elif current is not None:
+                    if len(current) < 100:
+                        current.append(line)
+                    elif not truncated:
+                        current.append("[Traceback truncated after 100 lines]\n")
+                        truncated = True
+    except OSError as exc:
+        raise JobError("job_log_missing") from exc
+    if current:
+        blocks.append("".join(current))
+    return "\n".join(blocks) or "No errors recorded in the archive refresh log."

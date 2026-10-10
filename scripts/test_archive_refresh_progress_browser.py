@@ -29,6 +29,7 @@ def main():
     with patch.object(routes, "require_login", return_value=user), \
          patch.object(routes, "list_jobs_with_logs", return_value=[job]), \
          patch.object(routes, "read_killmail_archive_refresh_progress", side_effect=lambda: snapshot), \
+         patch.object(routes, "read_killmail_archive_errors", return_value="ValueError: sample earlier error"), \
          patch.object(routes, "run_killmail_archive_refresh_job") as launch, sync_playwright() as playwright:
         browser = playwright.chromium.launch(args=["--no-sandbox"])
         page = browser.new_page(viewport={"width": 1500, "height": 1000})
@@ -45,7 +46,7 @@ def main():
             response = client.get(parts.path)
             route.fulfill(status=response.status_code, content_type=response.headers.get("content-type", "text/html"), body=response.content)
 
-        page.route("**/*", handle)
+        page.context.route("**/*", handle)
         page.goto("http://jobs.test/admin/jobs")
         get = lambda name: page.locator("[data-refresh-" + name + "]")
         expect(get("total")).to_have_text("4 found (checking)")
@@ -72,6 +73,12 @@ def main():
         expect(get("error")).to_contain_text("Unable to read progress")
         bad_response = False
         expect(get("error")).to_be_hidden(timeout=6000)
+        with page.expect_popup() as opened:
+            page.get_by_role("link", name="View errors (including earlier entries)").click()
+        error_page = opened.value
+        expect(error_page.locator("body")).to_contain_text("ValueError: sample earlier error")
+        expect(error_page.locator("body")).to_contain_text("Last 20 error blocks")
+        error_page.close()
         assert not errors, errors
         launch.assert_not_called()
         browser.close()
