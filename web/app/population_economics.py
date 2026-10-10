@@ -268,7 +268,6 @@ def get_series(kind, entity_id, from_month, to_month, window=90, offset=0):
             for key, label in METRICS.items():
                 value = totals[key]
                 rows.append({'metric': key, 'label': label, 'total': str(value) if value is not None else None,
-                             'daily_average': str(value/days) if value is not None else None,
                              'ratios': {name: str(value/count) if value is not None and count else None
                                         for name, count in denominators.items()}})
             measurements.append({'month': day.strftime('%Y-%m'), 'rows': rows,
@@ -283,7 +282,7 @@ def get_series(kind, entity_id, from_month, to_month, window=90, offset=0):
 
 def get_evolution(kind, entity_id, from_month, to_month, basis='total', window=90, offset=0):
     """Monthly measurements; expensive PvP ratios are requested explicitly, in small batches."""
-    if basis not in {'total', 'daily', 'member', 'active', 'loss', 'kill'} or not 1 <= window <= 3650 or offset < 0:
+    if basis not in {'total', 'member', 'active', 'loss', 'kill'} or not 1 <= window <= 3650 or offset < 0:
         raise ValueError('Choose a valid chart basis, activity window and offset.')
     months = month_range(month(from_month), month(to_month))
     catalog = _catalog(kind, entity_id)
@@ -302,9 +301,7 @@ def get_evolution(kind, entity_id, from_month, to_month, basis='total', window=9
             if day in covered:
                 totals, _details = estimates(catalog, [day], {})
                 divisor = 1
-                if basis == 'daily':
-                    divisor = (next_month(day)-day).days
-                elif basis == 'member':
+                if basis == 'member':
                     divisor = average_population(official, dates, [day])
                 elif basis in {'active', 'loss', 'kill'}:
                     history = [d for d in catalog['months'] if d <= day]
@@ -317,3 +314,54 @@ def get_evolution(kind, entity_id, from_month, to_month, basis='total', window=9
                            'denominator': str(divisor) if divisor is not None else None})
     return {'points': points, 'basis': basis, 'next_offset': offset+len(batch) if offset+len(batch) < len(months) else None,
             'total_months': len(months)}
+
+
+def change(value, baseline):
+    """Exact decimal month-to-month changes; missing values and zero bases stay explicit."""
+    value = Decimal(str(value)) if value is not None else None
+    baseline = Decimal(str(baseline)) if baseline is not None else None
+    delta = value-baseline if value is not None and baseline is not None else None
+    percent = delta/abs(baseline)*100 if delta is not None and baseline else None
+    return {'value': str(value) if value is not None else None,
+            'base': str(baseline) if baseline is not None else None,
+            'delta': str(delta) if delta is not None else None,
+            'percent': str(percent) if percent is not None else None,
+            'direction': 'increase' if delta is not None and delta > 0 else
+                         'decrease' if delta is not None and delta < 0 else 'unchanged'}
+
+
+def get_comparison(kind, entity_id, base_month, observed_month, window=90):
+    month(base_month)
+    month(observed_month)
+    if not 1 <= window <= 3650:
+        raise ValueError('Choose an activity window from 1 to 3650 days.')
+    def measurement(selected):
+        data = get_series(kind, entity_id, selected, selected, window)
+        return data['months'][0] if data['months'] else None
+    baseline = measurement(base_month)
+    observed = baseline if base_month == observed_month else measurement(observed_month)
+    rows = []
+    base_rows = {r['metric']: r for r in baseline['rows']} if baseline else {}
+    current_rows = {r['metric']: r for r in observed['rows']} if observed else {}
+    for metric, label in METRICS.items():
+        old, new = base_rows.get(metric, {}), current_rows.get(metric, {})
+        values = {'total': change(new.get('total'), old.get('total'))}
+        for key in ['member', 'active', 'loss', 'kill']:
+            values[key] = change(new.get('ratios', {}).get(key), old.get('ratios', {}).get(key))
+        rows.append({'metric': metric, 'label': label, 'values': values})
+    denominators = {key: change(observed['denominators'].get(key) if observed else None,
+                               baseline['denominators'].get(key) if baseline else None)
+                    for key in ['member', 'active', 'loss', 'kill']}
+    return {'base_month': base_month, 'observed_month': observed_month, 'rows': rows,
+            'denominators': denominators, 'base': baseline, 'observed': observed,
+            'regions': get_series_regions(kind, entity_id, base_month, observed_month)}
+
+
+def get_series_regions(kind, entity_id, base_month, observed_month):
+    catalog = _catalog(kind, entity_id)
+    result = []
+    for selected in dict.fromkeys([month(base_month), month(observed_month)]):
+        if selected in catalog['months']:
+            _values, details = estimates(catalog, [selected], _topology()['regions'])
+            result.extend(details)
+    return result

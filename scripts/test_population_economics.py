@@ -76,7 +76,7 @@ class CalculationTests(unittest.TestCase):
         result=result['months'][0]
         self.assertEqual(result['economic_days'],28)
         self.assertEqual(result['denominators']['member'],'100')
-        self.assertEqual(result['rows'][0]['daily_average'],'10')
+        self.assertNotIn('daily_average',result['rows'][0])
         self.assertEqual(result['rows'][0]['ratios']['active'],'140')
         self.assertIsNone(result['rows'][0]['ratios']['loss'])
         self.assertIsNone(result['rows'][1]['total'])
@@ -179,6 +179,47 @@ class EvolutionTests(unittest.TestCase):
         with patch.object(module,'_catalog') as catalog:
             with self.assertRaises(ValueError):module.get_evolution('alliance',10,'2026-01','2026-03','bad')
             catalog.assert_not_called()
+
+
+class ComparisonTests(unittest.TestCase):
+    def test_changes_preserve_decimal_precision_and_sign(self):
+        data=module.change('3100123456789.123456','3000000000000')
+        self.assertEqual(data['delta'],'100123456789.123456')
+        self.assertEqual(data['direction'],'increase')
+        self.assertEqual(module.change('50','100')['percent'],'-50.0')
+        self.assertEqual(module.change('0','100')['direction'],'decrease')
+        self.assertEqual(module.change('100','100')['percent'],'0')
+
+    def test_missing_or_zero_baseline_has_no_infinite_percentage(self):
+        self.assertIsNone(module.change('100',None)['delta'])
+        self.assertIsNone(module.change(None,'100')['percent'])
+        self.assertEqual(module.change('100','0')['delta'],'100')
+        self.assertIsNone(module.change('100','0')['percent'])
+
+    def test_comparison_contains_one_row_per_indicator_and_separate_months(self):
+        def series(kind,eid,start,end,window):
+            amount='200' if start=='2026-03' else '100'
+            measurement={'month':start,'rows':[{'metric':key,'total':amount,'ratios':{'member':amount}} for key in module.METRICS],
+                         'denominators':{'member':amount}}
+            return {'months':[measurement]}
+        with patch.object(module,'get_series',side_effect=series) as load,patch.object(module,'get_series_regions',return_value=[]):
+            data=module.get_comparison('alliance',10,'2026-01','2026-03')
+        self.assertEqual(len(data['rows']),3)
+        self.assertEqual(data['rows'][0]['values']['total']['value'],'200')
+        self.assertEqual(data['rows'][0]['values']['total']['delta'],'100')
+        self.assertEqual(data['rows'][0]['values']['total']['percent'],'100')
+        self.assertEqual([call.args[2:4] for call in load.call_args_list],[('2026-01','2026-01'),('2026-03','2026-03')])
+
+    def test_unknown_baseline_keeps_observed_values(self):
+        with patch.object(module,'get_series',side_effect=[{'months':[]},{'months':[{'rows':[{'metric':'mining_isk','total':'10','ratios':{}}],'denominators':{}}]}]), \
+             patch.object(module,'get_series_regions',return_value=[]):
+            data=module.get_comparison('alliance',10,'2026-01','2026-03')
+        mining=next(row for row in data['rows'] if row['metric']=='mining_isk')
+        self.assertEqual(mining['values']['total']['value'],'10')
+        self.assertIsNone(mining['values']['total']['delta'])
+
+    def test_daily_chart_basis_is_removed(self):
+        with self.assertRaises(ValueError):module.get_evolution('alliance',10,'2026-01','2026-03','daily')
 
 
 class RouteTests(unittest.TestCase):

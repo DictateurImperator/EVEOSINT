@@ -6,7 +6,7 @@ from psycopg2.errors import QueryCanceled
 
 from .auth import require_login, require_permission_or_redirect
 from .map_economy import EconomyMapError
-from .population_economics import get_evolution, get_options, get_series
+from .population_economics import get_comparison, get_evolution, get_options, get_series
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -48,3 +48,9 @@ def economics_evolution(request: Request, kind: str, entity_id: int,
                         basis: str = Query('total'), window: int = Query(90), offset: int = Query(0)):
     return _response(request, kind, entity_id,
                      lambda: get_evolution(kind, entity_id, from_month, to_month, basis, window, offset))
+
+
+@router.get('/api/{kind}/{entity_id}/population-economics/comparison')
+def economics_comparison(request: Request, kind: str, entity_id: int,
+                         base: str = Query(...), observed: str = Query(...), window: int = Query(90)):
+    return _response(request, kind, entity_id, lambda: get_comparison(kind, entity_id, base, observed, window))
