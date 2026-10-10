@@ -10,6 +10,13 @@
   </div>
 </div>
 
+<div class="d-flex flex-wrap gap-2 mb-3" id="global-killboard-modes">
+  <button type="button" class="btn btn-sm {% if killmail_mode == 'api' %}btn-primary{% else %}btn-outline-primary{% endif %}" data-global-killmail-mode="api">Known</button>
+  <button type="button" class="btn btn-sm {% if killmail_mode == 'total' %}btn-primary{% else %}btn-outline-primary{% endif %}" data-global-killmail-mode="total">All</button>
+  <button type="button" class="btn btn-sm {% if killmail_mode == 'hidden' %}btn-primary{% else %}btn-outline-primary{% endif %}" data-global-killmail-mode="hidden">Hidden</button>
+</div>
+<div class="muted-line small mb-3">Known: available killmails · All: MER losses, including known and hidden · Hidden: MER losses without a matched killmail. MER filters use the victim and final blow ships; pilot and module details are unavailable.</div>
+
 {% include "killboard_filters.html" %}
 
 <div id="killboard-scan-progress" class="content-card p-3 mb-3 d-none">
@@ -79,7 +86,7 @@
   function activeFilterCount(params) {
     var count = 0;
     params.forEach(function (_, key) {
-      if (!['page', 'scan_month', 'scan_before', 'scan_row', 'remaining'].includes(key)) {
+      if (!['mode', 'page', 'scan_month', 'scan_before', 'scan_row', 'remaining'].includes(key)) {
         count += 1;
       }
     });
@@ -87,7 +94,7 @@
   }
 
   function hasActiveFilters(params) {
-    return activeFilterCount(params) > 0;
+    return ['total', 'hidden'].includes(params.get('mode')) || activeFilterCount(params) > 0;
   }
 
   function updateBrowserUrl() {
@@ -293,7 +300,7 @@
         var nextBefore = response.getResponseHeader('X-KB-Next-Before') || '';
         var nextRow = response.getResponseHeader('X-KB-Next-Row') || '';
 
-        currentCursor = nextMonth ? {
+        currentCursor = (nextMonth || nextBefore) ? {
           month: nextMonth,
           before: nextBefore || '',
           row: nextRow || ''
@@ -340,6 +347,7 @@
   }
 
   filterRoot.addEventListener('killboard:apply', function (event) {
+    var mode = filterParams.get('mode') || 'api';
     filterParams = new URLSearchParams(
       event.detail && event.detail.params ? event.detail.params.toString() : ''
     );
@@ -348,6 +356,7 @@
     filterParams.delete('scan_before');
     filterParams.delete('scan_row');
     filterParams.delete('remaining');
+    if (mode !== 'api') filterParams.set('mode', mode);
 
     updateBrowserUrl();
 
@@ -356,6 +365,21 @@
     } else {
       loadPage('1');
     }
+  });
+
+  document.getElementById('global-killboard-modes').addEventListener('click', function (event) {
+    var button = event.target.closest('[data-global-killmail-mode]');
+    if (!button) return;
+    var mode = button.getAttribute('data-global-killmail-mode');
+    filterParams.set('mode', mode);
+    this.querySelectorAll('[data-global-killmail-mode]').forEach(function (item) {
+      var selected = item === button;
+      item.classList.toggle('btn-primary', selected);
+      item.classList.toggle('btn-outline-primary', !selected);
+    });
+    updateBrowserUrl();
+    if (hasActiveFilters(filterParams)) startProgressiveSearch(null);
+    else loadPage('1');
   });
 
   root.addEventListener('click', function (event) {

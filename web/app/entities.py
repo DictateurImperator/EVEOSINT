@@ -1141,6 +1141,7 @@ def _resolved_entity_ref(entity_type, entity_id, fallback_name, lookup):
 
 def _normalize_killmail_filters(filters):
     raw = filters or {}
+    ship_groups = None
 
     def scalar(name, allowed=None, default=None):
         value = str(raw.get(name) or "").strip()
@@ -1204,6 +1205,7 @@ def _normalize_killmail_filters(filters):
         return [str(item).strip() for item in value if str(item or "").strip()]
 
     def ship_terms(name):
+        nonlocal ship_groups
         result = []
         seen = set()
         for item in raw_list(name):
@@ -1214,6 +1216,19 @@ def _normalize_killmail_filters(filters):
             role = role.strip().lower()
             if role not in {"both", "attacker", "victim"}:
                 raise EntityError(f"killmail_filter_invalid:{name}")
+            if raw_id.startswith("group:"):
+                group_name = raw_id[6:].strip()
+                if ship_groups is None:
+                    ship_groups = {}
+                    for option in get_killmail_ship_options():
+                        ship_groups.setdefault(str(option.get("group_name") or ""), []).append(int(option["entity_id"]))
+                if not group_name or group_name not in ship_groups:
+                    raise EntityError(f"killmail_filter_invalid:{name}")
+                key = (role, "group", group_name)
+                if key not in seen:
+                    seen.add(key)
+                    result.append({"role": role, "type_ids": sorted(set(ship_groups[group_name]))})
+                continue
             try:
                 type_id = int(raw_id)
             except ValueError as exc:
@@ -1396,14 +1411,15 @@ def _killmail_builder_ship_predicate(
     attacker_table_sql="rawkm.killmail_attackers",
 ):
     role = term["role"]
-    type_id = int(term["type_id"])
-    victim_predicate = f"{victim_alias}.victim_ship_type_id = %s"
+    type_id = term["type_ids"] if "type_ids" in term else int(term["type_id"])
+    comparison = "= ANY(%s)" if "type_ids" in term else "= %s"
+    victim_predicate = f"{victim_alias}.victim_ship_type_id {comparison}"
     attacker_predicate = (
         "EXISTS ("
         f"SELECT 1 FROM {attacker_table_sql} bsa "
         f"WHERE bsa.killmail_id = {victim_alias}.killmail_id "
         f"AND bsa.killmail_time = {victim_alias}.killmail_time "
-        "AND bsa.ship_type_id = %s"
+        f"AND bsa.ship_type_id {comparison}"
         ")"
     )
     if role == "victim":
@@ -4977,9 +4993,10 @@ def _mer_group_scope(entity_type):
     raise EntityError("entity_type_invalid")
 
 
-def _group_entity_mer_killmails(conn, entity_type, entity_id, page=1, per_page=100, filters=None, hidden_only=False):
+def _group_entity_mer_killmails(conn, entity_type, entity_id, page=1, per_page=100, filters=None, hidden_only=False, progressive=False, normalized_filters=None):
     scope = _mer_group_scope(entity_type)
-    normalized_filters = _normalize_killmail_filters(filters)
+    if normalized_filters is None:
+        normalized_filters = _normalize_killmail_filters(filters)
     global_scope = bool(scope.get("global_scope"))
     location_scope = bool(scope.get("location_scope"))
     coalition_scope = bool(scope.get("coalition_scope"))
@@ -5155,9 +5172,10 @@ def _group_entity_mer_killmails(conn, entity_type, entity_id, page=1, per_page=1
 
     def mer_ship_term(term):
         role = term["role"]
-        type_id = int(term["type_id"])
-        victim_sql = "m.victim_ship_type_id = %s"
-        attacker_sql = "m.killer_ship_type_id = %s"
+        type_id = term["type_ids"] if "type_ids" in term else int(term["type_id"])
+        comparison = "= ANY(%s)" if "type_ids" in term else "= %s"
+        victim_sql = f"m.victim_ship_type_id {comparison}"
+        attacker_sql = f"m.killer_ship_type_id {comparison}"
         if role == "victim":
             return victim_sql, [type_id]
         if role == "attacker":
@@ -5281,7 +5299,7 @@ def _group_entity_mer_killmails(conn, entity_type, entity_id, page=1, per_page=1
 
     progressive_pagination = None
 
-    if hidden_only:
+    if hidden_only or progressive:
         # Hidden rows can be extremely sparse (for example Supercap losses).
         # Scan explicit time windows so each HTTP request returns whatever was
         # found before nginx's timeout, then resume from the returned cursor.
@@ -5627,8 +5645,8 @@ def _group_entity_mer_killmails(conn, entity_type, entity_id, page=1, per_page=1
     return killmails, pagination
 
 
-def get_hidden_killmails_page(per_page=100, filters=None):
-    """Unmatched MER rows across all entities, with a resumable scan cursor."""
+def get_global_mer_killmails_scan(per_page=100, filters=None, hidden_only=False):
+    """MER rows across all entities, with a resumable scan cursor."""
     normalized = _normalize_killmail_filters(filters)
     if normalized["module_type_ids"] or any(
         term["entity_type"] == "character"
@@ -5640,10 +5658,11 @@ def get_hidden_killmails_page(per_page=100, filters=None):
         "affiliation_corporation_ids", "affiliation_alliance_ids", "heat_ship_include",
         "heat_ship_exclude", "heat_entity_include", "heat_entity_exclude",
     )):
-        raise EntityError("This filter is not supported in the hidden killmail workspace.")
+        raise EntityError("This filter is not supported for MER killmails.")
     with db() as conn:
         killmails, pagination = _group_entity_mer_killmails(
-            conn, "global", None, per_page=per_page, filters=filters, hidden_only=True,
+            conn, "global", None, per_page=per_page, filters=filters, hidden_only=hidden_only,
+            progressive=True, normalized_filters=normalized,
         )
     for km in killmails:
         km["selection_ref"] = {
@@ -5653,12 +5672,17 @@ def get_hidden_killmails_page(per_page=100, filters=None):
         }
     return {
         "global_context": True,
-        "killmail_mode": "hidden",
+        "killmail_mode": "hidden" if hidden_only else "total",
         "killmail_participation": "both",
         "killmails": killmails,
         "killmail_groups": _group_killmails_by_date(killmails),
         "killmail_pagination": pagination,
     }
+
+
+def get_hidden_killmails_page(per_page=100, filters=None):
+    """Unmatched MER rows across all entities, with a resumable scan cursor."""
+    return get_global_mer_killmails_scan(per_page=per_page, filters=filters, hidden_only=True)
 
 
 def get_mer_killmail_match_detail(source_month, source_row, kill_datetime_value=None):

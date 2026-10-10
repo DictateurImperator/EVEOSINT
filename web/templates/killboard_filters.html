@@ -98,7 +98,7 @@
           <div class="kb-family-default" data-kb-family-state>ALL</div>
         </div>
         <div class="kb-search-wrap">
-          <input class="form-control form-control-sm" type="search" placeholder="Search any ship or structure…" autocomplete="off" data-kb-search="ship">
+          <input class="form-control form-control-sm" type="search" placeholder="Search a ship, structure or group…" autocomplete="off" data-kb-search="ship">
           <div class="kb-search-results" data-kb-results="ship"></div>
         </div>
         <div class="kb-term-list" data-kb-terms="ship"></div>
@@ -196,6 +196,11 @@
 
       function addShip(raw, sign) {
         var parts = String(raw || '').split(':');
+        if (parts.length >= 3 && parts[1] === 'group') {
+          var group = parts.slice(2).join(':');
+          terms.ship.push({family:'ship', sign:sign, role:parts[0] || 'both', entity_type:'ship_group', entity_id:group, name:group, label:group + ' · all types', subtitle:'Ship / structure group', image_url:'', is_structure:false});
+          return;
+        }
         if (parts.length !== 2) return;
         var id = Number(parts[1]);
         if (!Number.isFinite(id)) return;
@@ -318,7 +323,7 @@
         sign: 1,
         role: kind === 'zone' ? null : 'both',
         entity_type: item.entity_type || (kind === 'ship' ? 'ship' : kind),
-        entity_id: (kind === 'zone' && item.entity_type === 'security') ? String(item.entity_id) : Number(item.entity_id),
+        entity_id: ((kind === 'zone' && item.entity_type === 'security') || item.entity_type === 'ship_group') ? String(item.entity_id) : Number(item.entity_id),
         name: item.name || item.label || ('ID ' + item.entity_id),
         label: item.label || item.name || ('ID ' + item.entity_id),
         subtitle: item.subtitle || '',
@@ -435,7 +440,7 @@
       if (dateTo && dateTo.value) params.set('date_to', dateTo.value);
 
       terms.ship.forEach(function (term) {
-        params.append(term.sign > 0 ? 'builder_ship_include' : 'builder_ship_exclude', (term.role || 'both') + ':' + term.entity_id);
+        params.append(term.sign > 0 ? 'builder_ship_include' : 'builder_ship_exclude', (term.role || 'both') + ':' + (term.entity_type === 'ship_group' ? 'group:' : '') + term.entity_id);
       });
       terms.entity.forEach(function (term) {
         params.append(term.sign > 0 ? 'builder_entity_include' : 'builder_entity_exclude', (term.role || 'both') + ':' + term.entity_type + ':' + term.entity_id);

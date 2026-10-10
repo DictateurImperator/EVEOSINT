@@ -14,6 +14,7 @@ from .entities import (
     EntityError,
     get_global_killmails_page,
     get_global_killmails_scan_month,
+    get_global_mer_killmails_scan,
     get_alliance_killmails_page,
     get_coalition_killmails_page,
     get_character_killmails_page,
@@ -608,6 +609,33 @@ def _killmail_filters_have_user_filters(filters):
     )
 
 
+def _global_killboard_mode(request):
+    mode = request.query_params.get("mode", "api")
+    return mode if mode in {"api", "total", "hidden"} else "api"
+
+
+def _global_killboard_scan(request, filters, per_page=100):
+    mode = _global_killboard_mode(request)
+    if mode == "api":
+        return get_global_killmails_scan_month(per_page=per_page, filters=filters)
+    result = get_global_mer_killmails_scan(per_page=per_page, filters=filters, hidden_only=mode == "hidden")
+    pagination = result.get("killmail_pagination") or {}
+    # MER's resumable scan uses a timestamp and optional row tie-breaker.
+    # Keep that tie-breaker intact; a reporting month must not become a cursor.
+    next_month = pagination.get("scan_month")
+    pagination.update({
+        "next_scan_month": date.fromisoformat(next_month) if next_month else None,
+        "next_scan_before": datetime.fromisoformat(pagination["scan_before"]) if pagination.get("scan_before") else None,
+        "next_scan_row": pagination.get("scan_row"),
+        "scan_month": date.fromisoformat(pagination["scan_end_label"]).replace(day=1) if pagination.get("scan_end_label") else None,
+        "scan_complete": not pagination.get("has_next"),
+    })
+    result["killmail_pagination"] = pagination
+    if pagination.get("scan_blocked"):
+        raise EntityError("MER scan timed out. Narrow the date range or filters and retry.")
+    return result
+
+
 @router.get("/killboard", response_class=HTMLResponse)
 def global_killboard(request: Request):
     user = require_login(request)
@@ -620,7 +648,7 @@ def global_killboard(request: Request):
     killboard_defer_scan = False
     request_filters = _killmail_filters_from_request(request)
 
-    if _killmail_filters_have_user_filters(request_filters):
+    if _global_killboard_mode(request) != "api" or _killmail_filters_have_user_filters(request_filters):
         # Filtered history must be loaded by /killboard/scan month by month.
         # Do not execute the old all-history query during SSR / browser refresh.
         killboard_defer_scan = True
@@ -650,7 +678,7 @@ def global_killboard(request: Request):
         "context_title": "Killboard",
         "context_menu": [],
         "killmail_page": killmail_page,
-        "killmail_mode": "api",
+        "killmail_mode": _global_killboard_mode(request),
         "killmail_base_url": None,
         "error": error,
         "killboard_defer_scan": killboard_defer_scan,
@@ -673,10 +701,10 @@ def global_killboard_fragment(request: Request):
     killmail_page = None
     request_filters = _killmail_filters_from_request(request)
     try:
-        if _killmail_filters_have_user_filters(request_filters):
+        if _global_killboard_mode(request) != "api" or _killmail_filters_have_user_filters(request_filters):
             # Safety net for stale pagination / old frontend code:
             # never send a filtered request through the monolithic history path.
-            killmail_page = get_global_killmails_scan_month(
+            killmail_page = _global_killboard_scan(request,
                 per_page=100,
                 filters=request_filters,
             )
@@ -687,7 +715,9 @@ def global_killboard_fragment(request: Request):
                 filters=request_filters,
             )
     except EntityError as exc:
-        return _entity_route_error_response(request, exc)
+        if _global_killboard_mode(request) == "api":
+            return _entity_route_error_response(request, exc)
+        error = str(exc)
     except QueryCanceled:
         error = "Killboard query timed out."
     except Exception:
@@ -700,7 +730,7 @@ def global_killboard_fragment(request: Request):
         context={
             "error": error,
             "killmail_page": killmail_page,
-            "killmail_mode": "api",
+            "killmail_mode": _global_killboard_mode(request),
         },
     )
 
@@ -720,12 +750,14 @@ def global_killboard_scan(request: Request):
             1,
             min(100, int(request.query_params.get("remaining", "100") or "100")),
         )
-        killmail_page = get_global_killmails_scan_month(
+        killmail_page = _global_killboard_scan(request,
             per_page=remaining,
             filters=_killmail_filters_from_request(request),
         )
     except EntityError as exc:
-        return _entity_route_error_response(request, exc)
+        if _global_killboard_mode(request) == "api":
+            return _entity_route_error_response(request, exc)
+        error = str(exc)
     except QueryCanceled:
         error = "This month exceeded the query time limit."
     except Exception:
@@ -738,7 +770,7 @@ def global_killboard_scan(request: Request):
         context={
             "error": error,
             "killmail_page": killmail_page,
-            "killmail_mode": "api",
+            "killmail_mode": _global_killboard_mode(request),
         },
     )
 

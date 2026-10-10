@@ -50,7 +50,13 @@ def search_killboard_filters(kind, query, limit=12, mer_only=False):
     if kind == "ship":
         needle = query.lower()
         items = []
-        for item in get_killmail_ship_options():
+        options = get_killmail_ship_options()
+        groups = sorted({item.get("group_name") for item in options if item.get("group_name")})
+        for group in groups:
+            if needle in group.lower():
+                items.append({"entity_type": "ship_group", "entity_id": group,
+                              "name": group, "label": group + " · all types", "subtitle": "Ship / structure group"})
+        for item in options:
             haystack = " ".join([
                 str(item.get("entity_id") or ""),
                 str(item.get("name") or ""),
@@ -72,6 +78,6 @@ def search_killboard_filters(kind, query, limit=12, mer_only=False):
             })
             if len(items) >= limit:
                 break
-        return items
+        return items[:limit]
 
     return []
