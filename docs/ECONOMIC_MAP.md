@@ -18,7 +18,7 @@ global balances and moon breakdowns are not added to regional ISK totals.
 - **Value / regional production** uses the region's production in the same
   period. Across several months it is `sum(values) / sum(production)`, not an
   average of ratios. The tooltip shows the actual ratio, which may exceed 100%.
-- **Value in ISK** displays absolute published amounts, including where relative
+- **Value in ISK** is the default and displays absolute published amounts, including where relative
   ratios cannot be calculated.
 
 Full brightness is set from the maximum of the selected series, and remains

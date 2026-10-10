@@ -50,6 +50,10 @@ def main():
         expect(lights).to_have_count(2)
         first=page.locator('[data-economic-region="10000001"]')
         second=page.locator('[data-economic-region="10000002"]')
+        expect(page.locator('#eve2dEconomyBasis')).to_have_value('absolute')
+        assert first.get_attribute('data-economic-value') == '30'
+        assert second.get_attribute('data-economic-value') == '10'
+        page.locator('#eve2dEconomyBasis').select_option('relative')
         expect(first.locator('title')).to_contain_text('10% of production')
         expect(second.locator('title')).to_contain_text('Production is zero')
         assert first.get_attribute('href')=='/map/region/10000001'
