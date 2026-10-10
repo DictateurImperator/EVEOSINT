@@ -24,6 +24,7 @@ from .routes_admin_system import router as admin_system_router
 from .routes_admin_sov_colors import router as admin_sov_colors_router
 from .routes_admin_users import router as admin_users_router
 from .routes_entities import router as entities_router
+from .routes_map_economy import router as map_economy_router
 from .routes_home import router as home_router
 from .routes_login import router as login_router
 from .routes_superintel import router as superintel_router
@@ -250,6 +251,7 @@ app.include_router(home_router)
 app.include_router(account_router)
 app.include_router(superintel_router)
 app.include_router(entities_router)
+app.include_router(map_economy_router)
 app.include_router(update_status_router)
 app.include_router(admin_users_router)
 app.include_router(admin_coalitions_router)

@@ -525,6 +525,7 @@
         <button class="eve2d-mode-option active" type="button" data-eve2d-mode="systems">Systems</button>
         <button class="eve2d-mode-option" type="button" data-eve2d-mode="influence">Influence</button>
         <button class="eve2d-mode-option" type="button" data-eve2d-mode="heat">Fight Heat Map</button>
+        <button class="eve2d-mode-option" type="button" data-eve2d-mode="economy">Economy</button>
       </div>
       <div class="eve2d-common-controls">
         <label class="eve2d-check-label" for="eve2dInteractive">
@@ -578,6 +579,29 @@
         </div>
 
         <div class="eve2d-influence-status" id="eve2dInfluenceStatus"></div>
+      </div>
+
+      <div class="eve2d-heat-controls" id="eve2dEconomyControls" hidden>
+        <label for="eve2dEconomyMode">Time mode</label>
+        <select class="form-select form-select-sm" id="eve2dEconomyMode"><option value="fixed">Fixed period</option><option value="animated">Monthly evolution</option></select>
+        <div class="eve2d-date-grid">
+          <div><label for="eve2dEconomyFrom">From month</label><input class="form-control form-control-sm" type="month" id="eve2dEconomyFrom"></div>
+          <div><label for="eve2dEconomyTo">Through month</label><input class="form-control form-control-sm" type="month" id="eve2dEconomyTo"></div>
+        </div>
+        <label>Indicators · ISK</label>
+        <div id="eve2dEconomyMetrics"></div>
+        <label class="eve2d-check-label mt-2"><input type="checkbox" id="eve2dEconomyCombined"><span>Combine selected indicators</span></label>
+        <div class="eve2d-heat-status">Combined = sum of selected amounts. Different activities may overlap.</div>
+        <label for="eve2dEconomyBasis">Light intensity</label>
+        <select class="form-select form-select-sm" id="eve2dEconomyBasis"><option value="relative">Value / regional production</option><option value="absolute">Value in ISK</option></select>
+        <button class="btn btn-sm btn-outline-primary mt-2" id="eve2dEconomyApply" type="button">Load economic data</button>
+        <div id="eve2dEconomyTimeline" hidden>
+          <div class="d-flex gap-2 align-items-center mt-2"><button class="btn btn-sm btn-outline-primary" id="eve2dEconomyPlay" type="button">Play</button><label for="eve2dEconomyFps">Frames / second</label><input class="form-control form-control-sm" id="eve2dEconomyFps" type="number" min="1" max="8" value="2" style="width:60px"></div>
+          <label for="eve2dEconomyFrame">Month</label><input id="eve2dEconomyFrame" type="range" min="0" max="0" value="0" class="w-100" aria-label="Economic month">
+        </div>
+        <div id="eve2dEconomyLegend" class="eve2d-heat-status"></div>
+        <div id="eve2dEconomyStatus" class="eve2d-heat-status" role="status" aria-live="polite"></div>
+        <div class="eve2d-heat-status">Regional MER totals are shown once per region. Missing values stay unlit. Wormhole aggregates are listed when no regional breakdown is published.</div>
       </div>
 
       <div class="eve2d-heat-controls" id="eve2dHeatControls" hidden>
@@ -847,6 +871,8 @@
   const influenceCache = new Map();
   let staticSvg = null;
   let staticViewBox = {x:0, y:0, width:WORLD_WIDTH, height:WORLD_HEIGHT};
+
+  {% include "map_economy.js" %}
 
   function resizeCanvas() {
     const rect = shell.getBoundingClientRect();
@@ -1305,6 +1331,7 @@
     ctx.fillStyle = "rgba(188,205,226,.14)";
 
     regionLabels.forEach(label => {
+      if (activeMode === "economy") return;
       if (!label.name) return;
       const p = worldToScreen(label);
       if (p.x < -180 || p.x > cssWidth + 180 || p.y < -60 || p.y > cssHeight + 60) return;
@@ -1411,6 +1438,7 @@
     ctx.clearRect(0, 0, cssWidth, cssHeight);
     drawGrid();
     drawHeat();
+    drawEconomy();
     drawInfluence();
     drawRegionLabels();
     drawAnoikisLayout();
@@ -1489,6 +1517,10 @@
   }
 
   function nearestNode(clientX, clientY) {
+    if (activeMode === "economy") {
+      const region = nearestEconomyRegion(clientX, clientY);
+      if (region) return region;
+    }
     const rect = canvas.getBoundingClientRect();
     const x = clientX - rect.left;
     const y = clientY - rect.top;
@@ -1524,7 +1556,13 @@
     const heatEntry = activeMode === "heat"
       ? heatBySystem.get(String(node.id))
       : null;
-    tooltip.innerHTML =
+    if (activeMode === "economy") {
+      const entry = economyRegionEntries.get(String(node.region_id));
+      tooltip.textContent = entry ? economicTooltip(entry) : (node.region_name || node.name) + " · No regional economic data";
+      tooltip.style.whiteSpace = "pre-line";
+    } else {
+      tooltip.style.whiteSpace = "normal";
+      tooltip.innerHTML =
       "<strong>" + escapeHtml(node.name) + "</strong>" +
       "<br><span class=\"muted\">" + escapeHtml(node.region_name || "") +
       " · " + escapeHtml(node.constellation_name || "") + "</span>" +
@@ -1532,6 +1570,7 @@
       (influenceGroup ? "<br>Influence: " + escapeHtml(influenceGroup.name || "") : "") +
       (heatEntry ? "<br>" + (heatMetric === "isk" ? "ISK: " : "Kills: ") +
         escapeHtml(formatHeatValue(heatEntry.value)) : "");
+    }
     tooltip.style.display = "block";
     const left = Math.min(shellRect.width - 280, Math.max(8, clientX - shellRect.left + 14));
     const top = Math.min(shellRect.height - 80, Math.max(8, clientY - shellRect.top + 14));
@@ -1587,6 +1626,10 @@
 
   function renderStaticSvg(resetView=false) {
     if (!staticHost) return;
+    if (activeMode === "economy" && staticSvg && staticSvg.dataset.mode === "economy" && !resetView) {
+      renderEconomicSvg(staticSvg);
+      return;
+    }
     const preparedHeatQuery = activeMode === "heat" ? heatKillboardQuery() : null;
 
     const svg = svgElement("svg", {
@@ -1637,6 +1680,7 @@
     }
 
     regionLabels.forEach(label => {
+      if (activeMode === "economy") return;
       if (!label.name) return;
       svg.appendChild(svgElement("text", {
         x:label._x,
@@ -1794,6 +1838,8 @@
       });
     }
 
+    svg.dataset.mode = activeMode;
+    if (activeMode === "economy") renderEconomicSvg(svg);
     staticHost.replaceChildren(svg);
     staticSvg = svg;
     if (resetView) fitStaticMap();
@@ -2716,19 +2762,27 @@
   function setMode(mode) {
     activeMode = mode === "influence"
       ? "influence"
-      : (mode === "heat" ? "heat" : "systems");
+      : (mode === "heat" ? "heat" : (mode === "economy" ? "economy" : "systems"));
     modeButtons.forEach(button => {
       button.classList.toggle("active", button.dataset.eve2dMode === activeMode);
     });
     if (influenceControls) influenceControls.hidden = activeMode !== "influence";
     if (heatControls) heatControls.hidden = activeMode !== "heat";
+    economyControls.hidden = activeMode !== "economy";
+    stopEconomicAnimation();
+    ++economyRequestToken;
+    if (economyAborter) economyAborter.abort();
     if (rankingPanel) rankingPanel.hidden = activeMode !== "influence";
 
     stopEvolution();
     stopHeatEvolution();
     changeOverlay = new Map();
 
-    if (activeMode === "influence") {
+    if (activeMode === "economy") {
+      ++influenceRequestToken;
+      ++heatRequestToken;
+      loadEconomy();
+    } else if (activeMode === "influence") {
       if (cinematicEnabled) refreshCinematic();
       else loadInfluence(influenceDate && influenceDate.value ? influenceDate.value : null);
     } else if (activeMode === "heat") {
