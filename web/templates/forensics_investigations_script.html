@@ -14,10 +14,10 @@
   }
   function fail(error) { errorBox.textContent = error.message || String(error); errorBox.hidden = false; }
   async function api(path, body) {
-    var options = {credentials:'same-origin',cache:'no-store'};
-    if (body !== undefined) {options.method='POST'; options.headers={'Content-Type':'application/json'}; options.body=JSON.stringify(body);}
+    var options = {credentials:'same-origin',cache:'no-store',headers:{'Accept':'application/json'}};
+    if (body !== undefined) {options.method='POST'; options.headers['Content-Type']='application/json'; options.body=JSON.stringify(body);}
     var response = await fetch('/admin/killmail-forensics/' + path, options);
-    var data = await response.json();
+    var data = await window.forensicsResponse(response);
     if (!response.ok) throw new Error(data.error || 'The request failed.');
     return data;
   }

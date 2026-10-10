@@ -3,14 +3,16 @@
 <div class="d-flex justify-content-between mb-4"><h1 class="h3">Recovered killmails</h1><a class="btn btn-outline-light" href="/admin/killmail-forensics">Back to investigations</a></div>
 <p class="muted-line">Hashes confirmed by CCP and checked against the corresponding MER loss.</p>
 <div class="content-card p-3"><div role="alert" id="recovered-error"></div><div class="table-responsive" id="recovered-table"></div><button type="button" class="btn btn-outline-light" id="recovered-prev" disabled>Previous</button> <button type="button" class="btn btn-outline-light" id="recovered-next" disabled>Next</button></div>
+{% include "forensics_api_script.html" %}
 <script>
 (function(){
   var page=1;
   function esc(value){return String(value==null?'':value).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
   async function load(){
     try{
-      var response=await fetch('/admin/killmail-forensics/cases?recovered=true&sort=date&page='+page,{credentials:'same-origin',cache:'no-store'});
-      var data=await response.json();if(!response.ok)throw new Error(data.error||'Could not load recovered kills.');
+      var response=await fetch('/admin/killmail-forensics/cases?recovered=true&sort=date&page='+page,{credentials:'same-origin',cache:'no-store',headers:{'Accept':'application/json'}});
+      var data=await window.forensicsResponse(response);if(!response.ok)throw new Error(data.error||'Could not load recovered kills.');
+      document.getElementById('recovered-error').textContent='';
       var rows=data.cases.map(function(c){return '<tr><td><a href="/admin/killmail-forensics/recovered/'+c.recovered_id+'">'+c.recovered_id+'</a></td><td>'+esc(c.kill_datetime)+'</td><td>'+esc(c.snapshot.victim_ship_type_name||'Type '+c.snapshot.victim_ship_type_id)+'</td><td><code>'+esc(c.recovered_hash)+'</code></td><td>MER '+esc(c.source_month)+' · row '+c.source_row+'</td></tr>';}).join('');
       document.getElementById('recovered-table').innerHTML='<table class="table"><thead><tr><th>CCP kill ID</th><th>Kill time (UTC)</th><th>Victim ship</th><th>Confirmed hash</th><th>MER reference</th></tr></thead><tbody>'+(rows||'<tr><td colspan="5">No recovered killmails yet.</td></tr>')+'</tbody></table>';
       document.getElementById('recovered-prev').disabled=page===1;document.getElementById('recovered-next').disabled=data.cases.length<50;

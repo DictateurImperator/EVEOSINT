@@ -98,6 +98,13 @@ class AnalysisEndpointTests(unittest.TestCase):
             403,
         )
 
+    def test_readiness_failure_returns_json_without_database_details(self):
+        with patch.object(store, "ready", side_effect=RuntimeError("private database details")):
+            response = self.client.get("/admin/killmail-forensics/analysis")
+        self.assertEqual(response.status_code, 500)
+        self.assertIn("error", response.json())
+        self.assertNotIn("private database", response.text)
+
     def test_batch_launch_requires_jobs_run_and_same_origin(self):
         with patch.object(store, "ready", return_value=True):
             self.assertEqual(

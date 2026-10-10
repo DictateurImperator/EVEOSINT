@@ -6,12 +6,16 @@ in test_forensics_reconstruction.py. Never imports production configuration.
 Run from the repository root: python -m scripts.test_forensics_browser
 """
 
+import ast
+import logging
 import sys
 import types
+from pathlib import Path
 from unittest.mock import patch
 from urllib.parse import urlsplit
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse, PlainTextResponse
 from fastapi.testclient import TestClient
 from playwright.sync_api import expect, sync_playwright
 
@@ -34,6 +38,20 @@ def main():
 def run(lab):
     f = r.f
     app = FastAPI()
+    # Exercise the actual global error normalizer, without importing live config.
+    source = ast.parse((Path(__file__).resolve().parents[1] / "web/app/main.py").read_text())
+    functions = []
+    for node in source.body:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name in {
+            "_is_document_navigation", "_friendly_error_response", "normalize_error_responses"
+        }:
+            node.decorator_list = []
+            functions.append(node)
+    scope = {"Request": Request, "JSONResponse": JSONResponse,
+             "PlainTextResponse": PlainTextResponse, "logger": logging.getLogger(__name__),
+             "templates": f.routes.templates}
+    exec(compile(ast.Module(body=functions, type_ignores=[]), "production_error_handlers", "exec"), scope)
+    app.middleware("http")(scope["normalize_error_responses"])
     app.include_router(f.routes.router)
     client = TestClient(app)
     user = {
@@ -47,7 +65,7 @@ def run(lab):
     hidden = f.page_fixture(rows=[tuple(row)])
     errors = []
     correct = r.engine.killmail_hash(10, 21, 587, r.AT)
-    state = {"http_calls": 0, "rate_limit": False}
+    state = {"http_calls": 0, "rate_limit": False, "status_failure": False}
 
     def fetch(kill_id, hash_value):
         state["http_calls"] += 1
@@ -89,7 +107,10 @@ def run(lab):
                 route.abort()
                 return
             path = parts.path + ("?" + parts.query if parts.query else "")
-            headers = {"Host": "forensics.test"}
+            if parts.path.endswith("/analysis") and state["status_failure"]:
+                route.fulfill(status=502, content_type="text/html", body="<h1>Bad gateway</h1>")
+                return
+            headers = {"Host": "forensics.test", "Accept": req.headers.get("accept", "*/*")}
             if req.method == "POST":
                 headers.update(
                     {
@@ -109,7 +130,24 @@ def run(lab):
             )
 
         page.route("**/*", handle)
+        # Missing setup must survive the global normalizer as actionable JSON.
+        with patch.object(r.store, "ready", return_value=False):
+            plain = client.get("/admin/killmail-forensics/analysis")
+            assert plain.status_code == 503 and plain.text == "Erreur 503"
+            response = client.get("/admin/killmail-forensics/analysis", headers={"Accept": "application/json"})
+            page.goto("http://forensics.test/admin/killmail-forensics")
+            expect(page.locator("[data-analysis-error]")).to_contain_text("Admin Jobs")
+        assert response.status_code == 503
+        assert response.json()["setup_required"]
+        assert "Admin Jobs" in response.json()["error"]
         page.goto("http://forensics.test/admin/killmail-forensics")
+        expect(page.locator("[data-analysis-error]")).to_be_hidden()
+        state["status_failure"] = True
+        page.reload()
+        expect(page.locator("[data-analysis-error]")).to_contain_text("HTTP 502")
+        assert "JSON.parse" not in page.locator("[data-analysis-error]").inner_text()
+        state["status_failure"] = False
+        expect(page.locator("[data-analysis-error]")).to_be_hidden(timeout=15000)
         expect(page.locator("[data-case]")).to_have_count(1)
         expect(page.locator("[data-forecast]")).to_contain_text("trials")
         assert "conditional" in page.locator("[data-forecast]").get_attribute("title")

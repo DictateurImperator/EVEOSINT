@@ -52,7 +52,9 @@ def _is_document_navigation(request: Request) -> bool:
     return "text/html" in accept
 
 
-def _friendly_error_response(request: Request, status_code: int):
+def _friendly_error_response(
+    request: Request, status_code: int, *, forensics_setup_required=False
+):
     if status_code == 401:
         title = "Authentication required"
         message = "Please log in to continue."
@@ -76,12 +78,18 @@ def _friendly_error_response(request: Request, status_code: int):
         message = "An unexpected error occurred. Please try again later."
 
     public_error = f"Erreur {status_code}"
+    payload = {"error": public_error}
+    if status_code == 503 and forensics_setup_required:
+        payload = {
+            "error": "Run “Forensics · Create investigation tables (run once)” from Admin Jobs after deploying this version, then reload this page.",
+            "setup_required": True,
+        }
 
     if not _is_document_navigation(request):
         accept = (request.headers.get("accept") or "").lower()
         if "application/json" in accept or request.url.path.startswith("/api/"):
             return JSONResponse(
-                {"error": public_error},
+                payload,
                 status_code=status_code,
                 headers={"Cache-Control": "no-store"},
             )
@@ -189,7 +197,11 @@ async def normalize_error_responses(request: Request, call_next):
         return response
 
     # No route is allowed to expose its raw error body to a browser.
-    return _friendly_error_response(request, response.status_code)
+    return _friendly_error_response(
+        request,
+        response.status_code,
+        forensics_setup_required=response.headers.get("X-Forensics-Setup-Required") == "1",
+    )
 
 
 @app.exception_handler(StarletteHTTPException)

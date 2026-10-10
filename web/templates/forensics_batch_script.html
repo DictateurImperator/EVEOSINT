@@ -3,16 +3,18 @@
   var root=document.getElementById('forensics-batch');if(!root)return;
   var start=root.querySelector('[data-analysis-start]'),stop=root.querySelector('[data-analysis-stop]');
   var status=root.querySelector('[data-analysis-status]'),summary=root.querySelector('[data-analysis-summary]'),errorBox=root.querySelector('[data-analysis-error]');
-  var lastVersion='',busy=false;
+  var lastVersion='',busy=false,pollFailed=false;
   function fail(error){errorBox.textContent=error.message||String(error);errorBox.hidden=false;}
   async function api(path,body){
-    var options={credentials:'same-origin',cache:'no-store'};
-    if(body!==undefined){options.method='POST';options.headers={'Content-Type':'application/json'};options.body=JSON.stringify(body);}
-    var response=await fetch('/admin/killmail-forensics/analysis'+path,options),data=await response.json();
+    var options={credentials:'same-origin',cache:'no-store',headers:{'Accept':'application/json'}};
+    if(body!==undefined){options.method='POST';options.headers['Content-Type']='application/json';options.body=JSON.stringify(body);}
+    var response=await fetch('/admin/killmail-forensics/analysis'+path,options),data=await window.forensicsResponse(response);
     if(!response.ok)throw new Error(data.error||'Analysis could not be loaded.');return data;
   }
+  function pollFail(error){pollFailed=true;fail(error);}
   async function load(){
     var data=await api(''),r=data.run,s=data.summary,running=r&&r.status==='running';
+    if(pollFailed){errorBox.hidden=true;pollFailed=false;}
     start.disabled=busy||running||start.dataset.canRun!=='yes';stop.hidden=!running;
     summary.textContent=s.investigations+' investigations · '+s.strong+' strong · '+s.moderate+' moderate · '+s.weak+' weak · '+s.blocked+' needing input / exhausted · '+s.recovered+' recovered · '+data.pending_refresh+' neighbor recalculations queued';
     status.textContent=r?(r.refresh_only?'Neighbor recalculation':'Hidden kill analysis')+': '+r.status+' · '+r.analyzed+' analyzed · '+r.failed+' failed · '+r.refreshed+' neighbors refreshed'+(r.total===null?'':' · '+r.total+' new / outdated analyses in scope')+(running&&r.remaining_seconds!==null&&!r.refresh_only?' · about '+Math.max(1,Math.ceil(r.remaining_seconds/60))+' minutes remaining':'')+(r.stop_requested&&running?' · stopping after the current kill':''):'No background analysis has been started.';
@@ -22,12 +24,12 @@
     lastVersion=version;
   }
   start.addEventListener('click',async function(){
-    busy=true;start.disabled=true;errorBox.hidden=true;
+    busy=true;start.disabled=true;errorBox.hidden=true;pollFailed=false;
     try{var data=await api('/start',{date_from:root.querySelector('[data-analysis-from]').value||null,date_to:root.querySelector('[data-analysis-to]').value||null});status.textContent=data.message;}
-    catch(error){fail(error);}finally{busy=false;await load().catch(fail);}
+    catch(error){fail(error);}finally{busy=false;await load().catch(pollFail);}
   });
   stop.addEventListener('click',async function(){stop.disabled=true;errorBox.hidden=true;try{await api('/stop',{});await load();}catch(error){fail(error);}finally{stop.disabled=false;}});
-  load().catch(fail);
-  setInterval(function(){if(!document.hidden&&!busy)load().catch(fail);},10000);
+  load().catch(pollFail);
+  setInterval(function(){if(!document.hidden&&!busy)load().catch(pollFail);},10000);
 })();
 </script>

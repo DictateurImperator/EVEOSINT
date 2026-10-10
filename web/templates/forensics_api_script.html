@@ -1,0 +1,12 @@
+<script>
+window.forensicsResponse = async function(response) {
+  var data;
+  try { data = await response.json(); }
+  catch (_) {
+    throw new Error(response.redirected ? 'Please reload the page and log in again.' :
+      'Forensics request failed (HTTP ' + response.status + '). Please retry; if it continues, check the server logs.');
+  }
+  if (!response.ok) throw new Error(data.error || 'Forensics request failed (HTTP ' + response.status + ').');
+  return data;
+};
+</script>

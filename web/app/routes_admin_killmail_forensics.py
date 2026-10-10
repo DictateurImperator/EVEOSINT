@@ -146,13 +146,27 @@ def _workspace_access(request, write=False):
             return JSONResponse(
                 {"error": "A JSON request is required."}, status_code=415
             )
-    if not forensics_store.ready():
+    try:
+        ready = forensics_store.ready()
+    except QueryCanceled:
+        return JSONResponse(
+            {"error": "Forensics setup check timed out. Please retry."},
+            status_code=503,
+        )
+    except Exception:
+        logger.exception("Forensics setup check failed")
+        return JSONResponse(
+            {"error": "Forensics setup could not be checked. Check the server logs and retry."},
+            status_code=500,
+        )
+    if not ready:
         return JSONResponse(
             {
                 "error": "Run “Forensics · Create investigation tables (run once)” from Admin Jobs first.",
                 "setup_required": True,
             },
             status_code=503,
+            headers={"X-Forensics-Setup-Required": "1"},
         )
     return None
 
