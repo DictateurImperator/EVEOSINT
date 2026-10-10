@@ -18,7 +18,10 @@
     <h1 class="h3 fw-bold mb-1">Killmail Forensics</h1>
     <div class="muted-line">Investigate losses recorded in the MER but missing from zKillboard.</div>
   </div>
-  <a class="btn btn-outline-info" href="/admin/killmail-forensics/recovered">Recovered killmails</a>
+  <div class="d-flex gap-2 flex-wrap">
+    {% if 'admin.jobs.view' in user.permissions %}<a class="btn btn-outline-light" href="/admin/killmail-statistics">Monthly statistics</a>{% endif %}
+    <a class="btn btn-outline-info" href="/admin/killmail-forensics/recovered">Recovered killmails</a>
+  </div>
 </div>
 
 {% include "forensics_api_script.html" %}

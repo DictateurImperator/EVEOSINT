@@ -202,6 +202,11 @@ def build_context_menu(user, active_module, active_menu_key):
             items.insert(insert_at, web_logs_item)
 
     if active_module == "admin" and "admin.jobs.view" in user.get("permissions", set()):
+        if not any(item.get("menu_key") == "admin.killmail_statistics" for item in items):
+            items.append({
+                "id": None, "menu_key": "admin.killmail_statistics", "label": "Killmail Statistics",
+                "href": "/admin/killmail-statistics", "icon": "▤", "permission_key": "admin.jobs.view",
+            })
         if not any(item.get("menu_key") == "admin.update_pipeline" for item in items):
             pipeline_item = {
                 "id": None,

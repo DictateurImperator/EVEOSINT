@@ -1,0 +1,85 @@
+{% extends "base.html" %}
+{% block content %}
+<style>
+  .km-stat-number { font-variant-numeric:tabular-nums; text-align:right; }
+  .km-stat-bar { display:flex; height:7px; border-radius:4px; overflow:hidden; background:#222c3b; margin-top:.4rem; }
+  .km-stat-known { background:#15803d; } .km-stat-recovered { background:#0891b2; }
+  .km-stat-hidden { background:#be123c; } .km-stat-ambiguous { background:#d97706; }
+</style>
+<div class="d-flex justify-content-between align-items-start flex-wrap gap-3 mb-4">
+  <div><h1 class="h3 fw-bold mb-1">Killmail Statistics</h1><p class="muted-line mb-0">Monthly archive coverage and MER losses, by kill time (UTC).</p></div>
+  <div class="d-flex gap-2">
+    {% if can_view_forensics %}<a class="btn btn-outline-info" href="/admin/killmail-forensics">Investigate hidden kills</a>{% endif %}
+    <a class="btn btn-outline-light" href="/admin/jobs">Archive refresh job</a>
+  </div>
+</div>
+<div class="content-card p-3 mb-3 d-flex gap-3 align-items-end flex-wrap">
+  <label for="km-stat-year">Year <select id="km-stat-year" class="form-select" disabled></select></label>
+  <button class="btn btn-outline-info" id="km-stat-refresh">Refresh statistics</button>
+  <span class="muted-line small" id="km-stat-status" role="status">Loading monthly statistics…</span>
+</div>
+<div class="alert alert-danger" id="km-stat-error" role="alert" hidden></div>
+<div class="row g-3 mb-3" id="km-stat-summary"></div>
+<div class="content-card p-3 mb-3">
+  <p class="muted-line small">Archive killmails count all locally imported kills. MER columns classify MER losses once: known, recovered, hidden or ambiguous. Recovered losses include archive additions and hashes confirmed by CCP; confirmed losses are counted once even if also found in an archive.</p>
+  <p class="muted-line small">Archive recoveries are tracked from the first use of the archive refresh job. Hidden losses exclude confirmed Forensics recoveries. Ambiguous matches are shown separately.</p>
+  <div class="table-responsive">
+    <table class="table align-middle mb-0">
+      <thead><tr><th>Month</th><th class="km-stat-number">Archive killmails</th><th class="km-stat-number">MER losses</th><th class="km-stat-number">Known</th><th class="km-stat-number">Hidden</th><th class="km-stat-number">Recovered</th><th class="km-stat-number">Ambiguous</th><th class="km-stat-number">MER coverage</th></tr></thead>
+      <tbody id="km-stat-rows"></tbody>
+    </table>
+  </div>
+</div>
+<script>
+(function () {
+  'use strict';
+  const year = document.getElementById('km-stat-year');
+  const refresh = document.getElementById('km-stat-refresh');
+  const status = document.getElementById('km-stat-status');
+  const error = document.getElementById('km-stat-error');
+  const rows = document.getElementById('km-stat-rows');
+  const summary = document.getElementById('km-stat-summary');
+  const number = n => Number(n).toLocaleString('en-US');
+  function cell(tr, text, cls) {
+    const td = document.createElement('td'); td.textContent = text;
+    if (cls) td.className = cls; tr.appendChild(td); return td;
+  }
+  async function load(selected) {
+    refresh.disabled = true; year.disabled = true; error.hidden = true;
+    status.textContent = 'Counting killmails…';
+    try {
+      const response = await fetch('/admin/killmail-statistics/data' + (selected ? '?year=' + encodeURIComponent(selected) : ''), {headers:{Accept:'application/json'}});
+      if (!response.headers.get('content-type')?.includes('application/json')) throw new Error('Unable to load statistics. Refresh the page and check your session.');
+      const data = await response.json(); if (!response.ok) throw new Error(data.error || 'Unable to load statistics.');
+      year.replaceChildren();
+      for (const value of data.years) { const option = document.createElement('option'); option.value = value; option.textContent = value; option.selected = value === data.year; year.appendChild(option); }
+      rows.replaceChildren(); summary.replaceChildren();
+      for (const [label, value] of [['Known MER losses', data.totals.known], ['Hidden MER losses', data.totals.hidden], ['Recovered MER losses', data.totals.recovered], ['MER coverage', data.totals.coverage === null ? '—' : data.totals.coverage + '%']]) {
+        const col = document.createElement('div'); col.className = 'col-6 col-lg-3';
+        const card = document.createElement('div'); card.className = 'content-card p-3';
+        const title = document.createElement('div'); title.className = 'small muted-line'; title.textContent = label;
+        const count = document.createElement('div'); count.className = 'h4 mb-0'; count.textContent = typeof value === 'number' ? number(value) : value;
+        card.append(title, count); col.appendChild(card); summary.appendChild(col);
+      }
+      for (const item of data.months) {
+        const tr = document.createElement('tr'); cell(tr, item.month);
+        for (const key of ['archive_killmails','mer_total','known','hidden']) cell(tr, number(item[key]), 'km-stat-number');
+        const recovered = cell(tr, number(item.recovered), 'km-stat-number text-info');
+        const details = document.createElement('div'); details.className = 'small muted-line'; details.textContent = number(item.recovered_archives) + ' archives · ' + number(item.recovered_forensics) + ' Forensics'; recovered.appendChild(details);
+        cell(tr, number(item.ambiguous), 'km-stat-number');
+        const coverage = cell(tr, item.coverage === null ? '—' : item.coverage + '%', 'km-stat-number');
+        if (item.mer_total) { const bar = document.createElement('div'); bar.className = 'km-stat-bar';
+          for (const key of ['known','recovered','hidden','ambiguous']) { const span = document.createElement('span'); span.className = 'km-stat-' + key; span.style.width = (100 * item[key] / item.mer_total) + '%'; span.title = key + ': ' + number(item[key]); bar.appendChild(span); }
+          coverage.appendChild(bar);
+        }
+        rows.appendChild(tr);
+      }
+      if (!data.months.length) { const tr = document.createElement('tr'); const td = cell(tr, 'No killmails available for this year.', 'muted-line'); td.colSpan = 8; rows.appendChild(tr); }
+      status.textContent = data.mer_available ? 'Updated ' + new Date().toLocaleTimeString() : 'MER data is not available yet.';
+    } catch (err) { error.textContent = err.message; error.hidden = false; status.textContent = 'Statistics could not be updated.'; }
+    finally { refresh.disabled = false; year.disabled = !year.options.length; }
+  }
+  year.addEventListener('change', () => load(year.value)); refresh.addEventListener('click', () => load(year.value)); load();
+})();
+</script>
+{% endblock %}

@@ -150,7 +150,7 @@ def _normalize_job(raw_job):
     log_path = raw_job.get("log_path")
     enabled = bool(raw_job.get("enabled", True))
 
-    if job_type not in {"sde", "killmails", "recent_kill_pilots_affiliation", "character_skill_inference", "population_alliances_init", "population_alliances_daily", "sovereignty_esi", "killmail_forensics_setup", "killmail_forensics_analysis"}:
+    if job_type not in {"sde", "killmails", "recent_kill_pilots_affiliation", "character_skill_inference", "population_alliances_init", "population_alliances_daily", "sovereignty_esi", "killmail_forensics_setup", "killmail_forensics_analysis", "killmail_archive_refresh"}:
         raise JobError(f"job_type_invalid:{key}")
 
     if not isinstance(command, list) or not command:
@@ -262,9 +262,20 @@ def load_jobs_config():
             "enabled": True,
         }))
 
+    if not any(job["key"] == "refresh_killmail_archives" for job in jobs):
+        jobs.append(_normalize_job({
+            "key": "refresh_killmail_archives",
+            "label": "Killmails · Refresh updated EVE Ref archives",
+            "type": "killmail_archive_refresh",
+            "command": [sys.executable, str(Path(__file__).resolve().parents[2] / "scripts/refresh_killmail_archives.py")],
+            "log_path": str(Path.home() / "eveosint/data/logs/killmail_archive_refresh.log"),
+            "enabled": True,
+        }))
+
     allowed_keys = {
         "sync_sde",
         "sync_killmails",
+        "refresh_killmail_archives",
         "sync_recent_kill_pilots_affiliation",
         "sync_character_skill_inference",
         "population_alliances_init",
@@ -374,6 +385,8 @@ def _parse_date(value, field_name):
 
 
 def run_killmail_job(from_date, to_date, workers):
+    if _cleanup_stale_pid("refresh_killmail_archives")[0]:
+        raise JobError("job_already_running:refresh_killmail_archives")
     job = get_job("sync_killmails")
     if job["type"] != "killmails":
         raise JobError("job_type_mismatch:sync_killmails")
@@ -514,6 +527,23 @@ def run_forensics_analysis_job(user_id, date_from=None, date_to=None, refresh_on
     if refresh_only:
         command.append("--refresh-only")
     for option, value in zip(("--date-from", "--date-to"), bounds):
+        if value:
+            command.extend([option, value.isoformat()])
+    return _start_process(job, command)
+
+
+def run_killmail_archive_refresh_job(date_from=None, date_to=None):
+    start = _parse_date(date_from, "from") if date_from else None
+    end = _parse_date(date_to, "to") if date_to else None
+    if start and end and start > end:
+        raise JobError("date_range_invalid")
+    if _cleanup_stale_pid("sync_killmails")[0]:
+        raise JobError("job_already_running:sync_killmails")
+    job = get_job("refresh_killmail_archives")
+    if job["type"] != "killmail_archive_refresh":
+        raise JobError("job_type_mismatch:refresh_killmail_archives")
+    command = list(job["command"])
+    for option, value in (("--from", start), ("--to", end)):
         if value:
             command.extend([option, value.isoformat()])
     return _start_process(job, command)

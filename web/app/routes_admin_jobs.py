@@ -8,6 +8,7 @@ from .jobs import (
     list_jobs_with_logs,
     read_job_log,
     run_killmail_job,
+    run_killmail_archive_refresh_job,
     run_population_alliances_init_job,
     run_population_alliances_daily_job,
     run_recent_kill_pilots_affiliation_job,
@@ -371,5 +372,23 @@ def admin_jobs_run_forensics_analysis(request: Request, date_from: str = Form(""
         audit_log(request, "admin_job_run", user_id=user["id"], username=user["username"],
                   target_type="job", target_id="analyze_hidden_killmails", details=message)
     except JobError as exc:
+        return _error_redirect(exc)
+    return RedirectResponse(url="/admin/jobs?success=job_started" if ok else "/admin/jobs?error=job_failed", status_code=302)
+
+
+@router.post("/admin/jobs/killmail-archives/refresh")
+def admin_jobs_refresh_killmail_archives(request: Request, date_from: str = Form(""), date_to: str = Form("")):
+    user = require_login(request)
+    redirect = require_permission_or_redirect(user, "admin.jobs.run")
+    if redirect:
+        return redirect
+    try:
+        ok, message = run_killmail_archive_refresh_job(date_from, date_to)
+        audit_log(request, "admin_job_run", user_id=user["id"], username=user["username"],
+                  target_type="job", target_id="refresh_killmail_archives",
+                  details=f"{message}; from={date_from}; to={date_to}")
+    except JobError as exc:
+        audit_log(request, "admin_job_run_failed", user_id=user["id"], username=user["username"],
+                  target_type="job", target_id="refresh_killmail_archives", details=str(exc))
         return _error_redirect(exc)
     return RedirectResponse(url="/admin/jobs?success=job_started" if ok else "/admin/jobs?error=job_failed", status_code=302)

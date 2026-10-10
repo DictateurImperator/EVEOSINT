@@ -274,3 +274,59 @@ The last `X-Ratelimit-Remaining` report is stored separately with its observatio
 time and bucket limit. It is not presented as an exact live server-wide balance:
 other services on the same IP can consume the same CCP bucket. No extra CCP call
 is made to display this card. See https://developers.eveonline.com/docs/services/esi/rate-limiting/ .
+
+## Refresh archives that received late killmails
+
+In **Administration → Jobs**, start **Killmails · Refresh updated EVE Ref
+archives** manually. Optional **From / Through** dates select archive days,
+inclusively. Empty dates check every day successfully imported by the regular
+killmail importer. This job does not schedule itself or backfill days that have
+never been imported.
+
+EVE Ref updates daily archives in place, using the kill date. The job reads
+`totals.json` and each relevant yearly `index.json` (ETag, last modification and
+size). On its first run, matching local/remote counts establish the baseline;
+count increases trigger a fresh download. Subsequent runs also detect changed
+index metadata. Downloads bypass the old cached archive. Only missing killmails,
+attackers and items are inserted; existing kill data is preserved. Payload kill
+timestamps determine the destination partition, including an unexpected date in
+another month. The job then runs strict MER matching for the affected months.
+
+Progress is in the job log (`INDEX_START`, `ARCHIVE_CHANGED`, `ARCHIVE_PROGRESS`,
+`ARCHIVE_DONE`, `MER_MATCH_DONE`, `DONE`). The durable checkpoint is
+`data/killmails/refresh_index.json`. Failed downloads preserve the old archive;
+committed batches and pending MER matching survive interruption. Relaunch to
+retry. Concurrent refresh workers are refused; Admin launches also prevent
+running the regular importer and refresh together. MER matching has a database
+lock shared by the manual MER action and this worker.
+
+The worker itself creates `rawkm.killmail_archive_recoveries` on its first manual
+launch, recording each newly imported kill in the same transaction. No extra
+migration is needed, and loading the website creates no tables. It calls EVE Ref,
+without spending CCP request credits or submitting anything to zKillboard.
+
+## Monthly coverage
+
+**Administration → Killmail Statistics** (`/admin/killmail-statistics`) requires
+`admin.jobs.view`. Select a year; statistics count kills by their actual UTC kill
+month. Archive killmails count all locally imported raw kills. MER losses have
+mutually exclusive categories:
+
+- **Known**: a unique MER match, without a tracked recovery.
+- **Hidden**: no MER match and no confirmed Forensics recovery.
+- **Recovered**: a unique match to an archive-refresh addition, or a CCP-confirmed
+  Forensics recovery. The two sources are shown separately; Forensics takes
+  precedence if both exist, so a loss is counted once.
+- **Ambiguous**: a non-unique MER match, without a confirmed Forensics recovery.
+
+MER coverage is `(known + recovered) / MER losses`. Archive recoveries are tracked
+from the first refresh-job run; historical recoveries cannot be inferred
+retroactively. The statistics page works before optional recovery tables exist.
+It performs read-only queries for the selected year and does not start any job.
+
+Validation: `scripts.test_killmail_archive_refresh` exercises decisions, Admin
+access, late additions, unchanged archives, duplicate avoidance, corrupted
+archives, resumable MER matching, month scope, concurrent matching and recovery
+counting in the disposable PostgreSQL lab. `scripts.test_killmail_statistics_browser`
+checks the year selector, rendered counts, recovery breakdown and error recovery
+in Chromium with all external traffic intercepted.

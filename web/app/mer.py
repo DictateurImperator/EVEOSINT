@@ -2922,7 +2922,7 @@ def enrich_mer_entity_ids():
 # MER -> EXISTING RAW KILLMAIL MATCHING
 # ============================================================
 
-def match_mer_killmails():
+def match_mer_killmails(months=None):
     """
     Matching strict incrémental MER -> rawkm.
 
@@ -2960,14 +2960,22 @@ def match_mer_killmails():
     Ecriture : mer.killmails.resolved_km et resolved_km_ambiguous uniquement.
     Aucun appel API / HTTP.
     """
+    selected_months = None if months is None else {str(m)[:7] for m in months}
     if not _match_killmails_lock.acquire(blocking=False):
         _mer_log("[KILL_MATCH] BUSY")
         return {"busy": True}
 
+    conn = None
     try:
         _mer_log("[KILL_MATCH] START STRICT_1TO1 INCREMENTAL")
 
-        with db() as conn:
+        conn = db()
+        with conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT pg_try_advisory_lock(472119050)")
+                if not cur.fetchone()[0]:
+                    _mer_log("[KILL_MATCH] BUSY")
+                    return {"busy": True}
             _ensure_mer_kill_tables(conn)
             conn.commit()
 
@@ -3034,6 +3042,8 @@ def match_mer_killmails():
 
                 year = match.group(1)
                 month = match.group(2)
+                if selected_months is not None and f"{year}-{month}" not in selected_months:
+                    continue
 
                 partition_table = (
                     f"{MER_DATA_SCHEMA}.{_quote_ident(partition_name)}"
@@ -3293,5 +3303,7 @@ def match_mer_killmails():
         raise
 
     finally:
+        if conn is not None:
+            conn.close()  # Releases the session lock across partition commits.
         _match_killmails_lock.release()
 

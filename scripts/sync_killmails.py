@@ -92,7 +92,7 @@ def load_db_config():
         return json.load(f)
 
 
-DB_CONFIG = load_db_config()
+DB_CONFIG = None  # Load credentials only when a connection is requested.
 
 
 # ============================================================
@@ -104,6 +104,9 @@ def t(name):
 
 
 def db():
+    global DB_CONFIG
+    if DB_CONFIG is None:
+        DB_CONFIG = load_db_config()
     return psycopg2.connect(
         dbname=DB_CONFIG["db_name"],
         user=DB_CONFIG["db_user"],
