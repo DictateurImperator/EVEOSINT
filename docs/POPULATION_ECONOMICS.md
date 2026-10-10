@@ -16,9 +16,9 @@ The population denominator is the arithmetic mean of the recorded population ove
 
 The configurable PvP window ends at each displayed month-end and intersects all available MER history, including earlier months when needed. The result for month X is independent of whether the display range starts at month X or earlier. Days in missing reports and beyond the final report are excluded. The default is 90 days, copied from Global metrics when first opening Economics. The page shows the effective coverage and all denominators.
 
-Only known PvP killmails with a player victim and a player attacker count. Active PvP means a distinct attacking character, irrespective of later departures. Alliance/corporation IDs on the killmail and coalition rules at combat time establish membership. Kills, losses and attacking characters are deduplicated across coalition members and temporal segments. NPC-only losses and pilotless victims are excluded. Hidden MER rows cannot identify active pilots and are not added to these denominators.
+Only known PvP killmails with a player victim and a player attacker establish active PvP participation. Active PvP means a distinct attacking character, irrespective of later departures. Alliance/corporation IDs on the killmail and coalition rules at combat time establish membership. Kills, losses and attacking characters are deduplicated across coalition members and temporal segments. NPC-only losses and pilotless victims are excluded. Hidden MER rows cannot identify active pilots and are not added to these denominators.
 
-Ratios divide each monthly economic amount by average population, active pilots, losses and inflicted kills. A zero denominator yields a dash. Mean population and PvP denominators are shown in a separate monthly table, with covered windows in the regional details. The chart provides monthly amounts and the same population/PvP ratios, with wheel zoom, drag pan, exact hover values, reset and CSV export of the visible range. Missing months interrupt the line. The comparison requests only its two months; the historical series endpoint remains batched six months at a time; chart requests twelve months at a time for economic/population views and one month at a time for PvP ratios, displaying each result immediately. PvP queries run only for the table or an explicitly selected PvP chart basis.
+Ratios divide each monthly economic amount by average population, active PvP pilots. Loss and kill ratios have been removed. A zero denominator yields a dash. Mean population and PvP denominators are shown in a separate monthly table, with covered windows in the regional details. The chart provides monthly amounts and the same population/PvP ratios, with wheel zoom, drag pan, exact hover values, reset and CSV export of the visible range. Missing months interrupt the line. The comparison requests only its two months; the historical series endpoint remains batched six months at a time; chart requests twelve months at a time for economic/population views and one month at a time for PvP ratios, displaying each result immediately. PvP queries run only for the table or an explicitly selected PvP chart basis.
 
 ## Validation
 
@@ -29,7 +29,7 @@ A read-only live check for Goonswarm Federation in August 2026 covered 31 MER da
 
 ### Ratio loading
 
-PvP activity uses separate filtered attacker and victim queries, with EXISTS for the presence of a player attacker on a loss. This avoids the previous OR across both sides of the attacker/victim join. Kill counts are summed over disjoint time segments; active character IDs are deduplicated across segments. A bounded five-minute cache shares the resulting activity counts between table and chart views, and between active/loss/kill bases. Its key includes the actual temporal coalition scopes.
+PvP activity now uses only the filtered attacker query; the loss query has been removed with the loss ratio. This avoids the previous OR across both sides of the attacker/victim join. Active character IDs are deduplicated across disjoint temporal membership segments. A bounded five-minute cache shares the resulting activity counts between table and chart views, and for the active-pilot basis. Its key includes the actual temporal coalition scopes.
 
 The chart shows completed/total months and the month currently being calculated. Later failures leave previously received points visible. A read-only check of the March 2016 Goonswarm Mining / kill ratio over a March 2016–August 2026 display range returned the first point in 3.07 seconds; reusing those counts for the active-pilot ratio took 0.02 seconds. The split SQL queries also passed the rollback-only local PostgreSQL fixture.
 
@@ -37,3 +37,12 @@ The chart shows completed/total months and the month currently being calculated.
 ### Monthly comparison
 
 `/api/{kind}/{entity_id}/population-economics/comparison?base=YYYY-MM&observed=YYYY-MM&window=90` computes each month independently using the same allocation and PvP counters as the chart. Changes use exact Decimal subtraction and percentage arithmetic on the server. The base value, complete absolute change and percentage are exposed in hover text. A separate denominator table shows both monthly population means and PvP counts, with their changes. The graph has no daily or weekly measurement modes.
+
+
+### Additional PPA indicators
+
+Nominal NPC bounties, mining and production remain unchanged. Each has an additional PPA indicator, including monthly amounts, per-average-member and per-active-PvP-pilot measurements. The independent reference month defaults to the latest available MER and is selectable from months having a published CPI. The comparison base month is a separate control.
+
+PPA amount = nominal amount × CPI(reference month) / CPI(amount month). Both compared months are independently converted before calculating absolute and percentage changes. Charts use the same conversion and reference; CSV exports include the reference month. The price index and ISK purchasing-power index are additional measurements with the reference set to 100, and can also be graphed.
+
+All calculations use the global `Consumer Price Index` from the single `20_economy_indices` published chart series in `mer.global_economy_history` (`price_index_levels/index_level`). CPI values are positive and required at both the amount and reference dates; missing data yields unavailable PPA values rather than a nominal fallback. This measures purchasing power over time with a global price basket, not regional price differences or physical mining/production volume. No database migration or re-import is required when CPI levels are already imported.

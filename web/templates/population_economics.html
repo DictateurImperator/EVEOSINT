@@ -11,23 +11,28 @@
   <div class="d-flex gap-2 flex-wrap align-items-center mb-3">
     <label>Base month <select id="pe-from" class="form-select form-select-sm"></select></label>
     <label>Observed month <select id="pe-to" class="form-select form-select-sm"></select></label>
+    <label>Purchasing-power reference month <select id="pe-reference" class="form-select form-select-sm"></select></label>
     <label>PvP activity window (days) <input id="pe-window" type="number" min="1" max="3650" value="90" class="form-control form-control-sm"></label>
     <button id="pe-apply" class="btn btn-sm btn-primary" type="button">Compare months</button>
   </div>
   <p class="muted-line small">The regional share is mean systems held / mean total player sovereignty systems, using UTC day-end ownership throughout each month. Coalition membership is evaluated on each day. Average population uses the latest recorded population on or before each covered day. PvP counts membership at the time of the kill, including pilots who later left; active pilots must have participated as attackers in a PvP kill. Killmails and pilots are deduplicated across coalition members. NPC-only kills are excluded. All amounts and population averages are calculated separately for each MER month.</p>
+  <p class="muted-line small">Nominal ISK indicators are kept. PPA indicators express each month's ISK in the purchasing power of the reference month, using the global Consumer Price Index (CPI). Formula: nominal ISK × CPI(reference) / CPI(month). This does not estimate local price differences or physical mining/production volumes.</p>
+  <div id="pe-ppa-status" class="muted-line small"></div>
   <div id="pe-status" class="muted-line" role="status"></div>
   <p id="pe-counts" class="mt-2 small"></p>
   <div class="table-responsive"><table class="table table-dark table-sm align-middle">
-    <thead><tr><th>Indicator (ISK)</th><th>Monthly estimate</th><th>/ average member</th><th>/ active PvP pilot</th><th>/ loss</th><th>/ kill inflicted</th></tr></thead>
+    <thead><tr><th>Indicator (ISK)</th><th>Monthly estimate</th><th>/ average member</th><th>/ active PvP pilot</th></tr></thead>
     <tbody id="pe-rows"></tbody>
   </table></div>
+  <h4>Price and purchasing-power indicators</h4>
+  <div class="table-responsive"><table class="table table-dark table-sm"><thead><tr><th>Indicator (reference = 100)</th><th id="pe-ppa-base">Base month</th><th id="pe-ppa-observed">Observed month</th><th>Change</th></tr></thead><tbody id="pe-ppa-rows"></tbody></table></div>
   <div class="mt-4" id="pe-evolution">
     <h4>Monthly evolution</h4>
     <div class="d-flex flex-wrap gap-2 align-items-end mb-2">
       <label>From <select id="pe-chart-from" class="form-select form-select-sm"></select></label>
       <label>Through <select id="pe-chart-to" class="form-select form-select-sm"></select></label>
-      <label>Indicator <select id="pe-chart-metric" class="form-select form-select-sm"><option value="npc_bounties_isk">NPC bounties</option><option value="mining_isk">Mining</option><option value="production_isk">Production</option></select></label>
-      <label>Display <select id="pe-chart-basis" class="form-select form-select-sm"><option value="total">Monthly estimate (ISK)</option><option value="member">Per average member</option><option value="active">Per active PvP pilot</option><option value="loss">Per loss</option><option value="kill">Per kill inflicted</option></select></label>
+      <label>Indicator <select id="pe-chart-metric" class="form-select form-select-sm"><option value="npc_bounties_isk">NPC bounties</option><option value="mining_isk">Mining</option><option value="production_isk">Production</option><option value="npc_bounties_ppa_isk">NPC bounties · PPA</option><option value="mining_ppa_isk">Mining · PPA</option><option value="production_ppa_isk">Production · PPA</option><option value="isk_purchasing_power_index">ISK purchasing power index</option><option value="consumer_price_index_relative_index">Price index (CPI)</option></select></label>
+      <label>Display <select id="pe-chart-basis" class="form-select form-select-sm"><option value="total">Monthly estimate (ISK)</option><option value="member">Per average member</option><option value="active">Per active PvP pilot</option></select></label>
       <button id="pe-chart-load" class="btn btn-sm btn-primary" type="button">Show evolution</button>
       <button id="pe-chart-reset" class="btn btn-sm btn-outline-secondary" type="button">Reset zoom</button>
       <button id="pe-chart-csv" class="btn btn-sm btn-outline-secondary" type="button">Download CSV</button>
@@ -67,25 +72,31 @@
   function compareCell(row,value){const td=document.createElement('td'),number=document.createElement('span');number.textContent=compact(value.value);number.title=full(value.value)+' ISK';td.append(number,evolution(value));row.appendChild(td);}
   async function calculate(){
     if(!ready)return;if(controller)controller.abort();controller=new AbortController();const signal=controller.signal;
+    document.getElementById('pe-ppa-rows').replaceChildren();document.getElementById('pe-ppa-status').textContent='';
     status.textContent='Comparing '+to.value+' with '+from.value+'…';rows.replaceChildren();document.getElementById('pe-counts').textContent='';document.getElementById('pe-month-counts').replaceChildren();document.getElementById('pe-regions').replaceChildren();document.getElementById('pe-coverage').textContent='';
-    const params=new URLSearchParams({base:from.value,observed:to.value,window:document.getElementById('pe-window').value});
+    const params=new URLSearchParams({base:from.value,observed:to.value,window:document.getElementById('pe-window').value,reference:document.getElementById('pe-reference').value});
     try{const d=await json(base+'/comparison?'+params,signal);if(signal.aborted)return;loaded=true;
       status.textContent='Observed month: '+d.observed_month+' · Base month: '+d.base_month;
-      for(const item of d.rows){const tr=document.createElement('tr');cell(tr,item.label);['total','member','active','loss','kill'].forEach(key=>compareCell(tr,item.values[key]));rows.appendChild(tr);}
+      for(const item of d.rows){const tr=document.createElement('tr');cell(tr,item.label);['total','member','active'].forEach(key=>compareCell(tr,item.values[key]));rows.appendChild(tr);}
       document.getElementById('pe-counts').textContent='Parentheses: absolute change and percentage versus the base month. Green = increase; red = decrease. A dash means missing data or a percentage with a zero baseline.';
       document.getElementById('pe-base-title').textContent=d.base_month+' (base)';document.getElementById('pe-observed-title').textContent=d.observed_month+' (observed)';
-      const labels={member:'Average population',active:'Active PvP pilots',loss:'Losses',kill:'Kills inflicted'};
+      const labels={member:'Average population',active:'Active PvP pilots'};
       for(const key of Object.keys(labels)){const value=d.denominators[key],tr=document.createElement('tr');cell(tr,labels[key]);cell(tr,fmt(value.base));cell(tr,fmt(value.value));const td=document.createElement('td');td.appendChild(evolution(value,false));tr.appendChild(td);document.getElementById('pe-month-counts').appendChild(tr);}
+      const power=d.purchasing_power;
+      document.getElementById('pe-ppa-base').textContent=d.base_month;document.getElementById('pe-ppa-observed').textContent=d.observed_month;
+      if(power){document.getElementById('pe-ppa-status').textContent='PPA reference: '+power.reference+' · CPI: '+full(power.reference_cpi)+(power.reference_cpi===null?' · CPI unavailable; PPA values are unavailable.':'');for(const [label,value] of [['Price index (CPI)',power.price_index],['ISK purchasing power',power.isk_power]]){const tr=document.createElement('tr');cell(tr,label);cell(tr,fmt(value.base));cell(tr,fmt(value.value));const td=document.createElement('td');td.appendChild(evolution(value,false));tr.appendChild(td);document.getElementById('pe-ppa-rows').appendChild(tr);}}
       const coverage=[d.base,d.observed].filter(Boolean).map(m=>m.month+': '+m.activity_days+' PvP days ('+m.activity_coverage.map(i=>i.from+' through '+i.through).join('; ')+')');
       document.getElementById('pe-coverage').textContent='PvP coverage: '+coverage.join(' | ')+(d.base?'':' · Base month data unavailable.')+(d.observed?'':' · Observed month data unavailable.');
       const regions=document.getElementById('pe-regions');for(const item of d.regions){const tr=document.createElement('tr');[item.month,item.region,fmt(item.owned_average),fmt(item.total_average),fmt(Number(item.share)*100)+'%'].forEach(v=>cell(tr,v));regions.appendChild(tr);}
     }catch(e){if(e.name!=='AbortError'){rows.replaceChildren();document.getElementById('pe-month-counts').replaceChildren();document.getElementById('pe-regions').replaceChildren();status.textContent=e.message;}}
   }
   window.eveosintLoadPopulationEconomics=()=>{if(ready && !window.eveosintEconomicsChartLoaded)loadEvolution();if(!loaded){const original=document.getElementById('pi-window-days');if(original)document.getElementById('pe-window').value=original.value;calculate();}};
-  document.getElementById('pe-apply').addEventListener('click',()=>{calculate();if(window.eveosintEconomicsChartLoaded && ['active','loss','kill'].includes(document.getElementById('pe-chart-basis').value))loadEvolution();});
+  document.getElementById('pe-apply').addEventListener('click',()=>{calculate();if(window.eveosintEconomicsChartLoaded && document.getElementById('pe-chart-basis').value==='active')loadEvolution();});
+  document.getElementById('pe-reference').addEventListener('change',()=>{calculate();if(window.eveosintEconomicsChartLoaded)loadEvolution();});
   json(base+'/options').then(d=>{
     if(!d.available)return;for(const m of d.months){from.add(new Option(m,m));to.add(new Option(m,m));}
     to.value=d.months[d.months.length-1];const previous=new Date(to.value+'-01T00:00:00Z');previous.setUTCMonth(previous.getUTCMonth()-1);const previousMonth=previous.toISOString().slice(0,7);if(!d.months.includes(previousMonth))from.add(new Option(previousMonth+' (no MER data)',previousMonth));from.value=previousMonth;
+    const reference=document.getElementById('pe-reference');for(const m of (d.purchasing_power_months||[])){reference.add(new Option(m,m));}reference.value=(d.purchasing_power_months||[]).includes(to.value)?to.value:(d.purchasing_power_months||[]).at(-1)||'';if(!reference.value){reference.disabled=true;document.getElementById('pe-ppa-status').textContent='CPI has not been imported; PPA indicators are unavailable.';}
     const cf=document.getElementById('pe-chart-from'),ct=document.getElementById('pe-chart-to');for(const m of d.months){cf.add(new Option(m,m));ct.add(new Option(m,m));}cf.value=d.months[Math.max(0,d.months.length-12)];ct.value=to.value;ready=true;button.hidden=false;
     if(window.eveosintRequestedPopulationEconomics)button.click();
   }).catch(()=>{});

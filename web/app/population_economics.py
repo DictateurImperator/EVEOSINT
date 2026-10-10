@@ -19,6 +19,7 @@ from .population_intelligence import (
 METRICS = {'npc_bounties_isk': 'NPC bounties', 'mining_isk': 'Mining', 'production_isk': 'Production'}
 _CACHE = {}
 _ACTIVITY_CACHE = {}
+_CPI_CACHE = None
 _LOCK = Lock()
 
 
@@ -143,9 +144,43 @@ def _catalog(kind, entity_id):
     return result
 
 
+def _cpi_levels():
+    """Use one published CPI series throughout; never mix charts, components or rebased baskets."""
+    global _CPI_CACHE
+    with _LOCK:
+        if _CPI_CACHE and monotonic()-_CPI_CACHE[0] < 300:
+            return _CPI_CACHE[1]
+    with db() as conn, conn.cursor() as cur:
+        cur.execute("SELECT to_regclass('mer.global_economy_history')")
+        if not cur.fetchone()[0]:
+            return {}
+        cur.execute("""SELECT period_start, value FROM mer.global_economy_history
+            WHERE dataset='price_index_levels' AND metric='index_level'
+              AND period_grain='month' AND unit='index'
+              AND dimensions->>'index'='Consumer Price Index'
+              AND dimensions->>'chart'='20_economy_indices' AND value > 0
+            ORDER BY period_start""")
+        levels = dict(cur.fetchall())
+    with _LOCK:
+        _CPI_CACHE = (monotonic(), levels)
+    return levels
+
+
+def _power(levels, reference, selected):
+    """Express selected-month ISK in reference-month purchasing power."""
+    ref = levels.get(reference)
+    current = levels.get(selected)
+    return ref/current if ref is not None and current is not None and ref > 0 and current > 0 else None
+
+
+def _adjust(value, factor):
+    return str(Decimal(str(value))*factor) if value is not None and factor is not None else None
+
+
 def get_options(kind, entity_id):
     catalog = _catalog(kind, entity_id)
-    return {'available': bool(catalog['months']), 'months': [d.strftime('%Y-%m') for d in catalog['months']]}
+    return {'available': bool(catalog['months']), 'months': [d.strftime('%Y-%m') for d in catalog['months']],
+            'purchasing_power_months': [d.strftime('%Y-%m') for d in sorted(_cpi_levels())]}
 
 
 def estimates(catalog, months, regions):
@@ -225,16 +260,6 @@ def _activity(conn, kind, entity_id, rules, intervals):
             pilot_ids, kill_count = cur.fetchone()
             active.update(pilot_ids or [])
             kills += kill_count or 0
-            cur.execute("""SELECT COUNT(DISTINCT km.killmail_id) FROM rawkm.killmails km
-                WHERE km.killmail_time >= %s AND km.killmail_time < %s
-                  AND km.victim_character_id > 0
-                  AND (km.victim_alliance_id=ANY(%s) OR km.victim_corporation_id=ANY(%s))
-                  AND EXISTS (SELECT 1 FROM rawkm.killmail_attackers ka
-                      WHERE ka.killmail_id=km.killmail_id AND ka.killmail_time=km.killmail_time
-                        AND ka.killmail_time >= %s AND ka.killmail_time < %s
-                        AND ka.character_id > 0)""",
-                (ts(first), ts(last), aids, cids, ts(first), ts(last)))
-            losses += cur.fetchone()[0] or 0
     result = (len(active), kills, losses)
     with _LOCK:
         if len(_ACTIVITY_CACHE) >= 256:
@@ -261,8 +286,8 @@ def get_series(kind, entity_id, from_month, to_month, window=90, offset=0):
             details.extend(allocated)
             intervals = activity_intervals([d for d in catalog['months'] if d <= day], window)
             population = average_population(official, dates, [day])
-            active, kills, losses = _activity(conn, kind, entity_id, catalog['rules'], intervals)
-            denominators = {'member': population, 'active': active, 'loss': losses, 'kill': kills}
+            active, _kills, _losses = _activity(conn, kind, entity_id, catalog['rules'], intervals)
+            denominators = {'member': population, 'active': active}
             days = (next_month(day)-day).days
             rows = []
             for key, label in METRICS.items():
@@ -280,16 +305,20 @@ def get_series(kind, entity_id, from_month, to_month, window=90, offset=0):
             'next_offset': offset+len(measurements) if offset+len(measurements) < len(months) else None}
 
 
-def get_evolution(kind, entity_id, from_month, to_month, basis='total', window=90, offset=0):
+def get_evolution(kind, entity_id, from_month, to_month, basis='total', window=90, offset=0, reference=None):
     """Monthly measurements; expensive PvP ratios are requested explicitly, in small batches."""
-    if basis not in {'total', 'member', 'active', 'loss', 'kill'} or not 1 <= window <= 3650 or offset < 0:
+    if basis not in {'total', 'member', 'active'} or not 1 <= window <= 3650 or offset < 0:
         raise ValueError('Choose a valid chart basis, activity window and offset.')
+    if reference:
+        month(reference)
     months = month_range(month(from_month), month(to_month))
     catalog = _catalog(kind, entity_id)
     covered = set(catalog['months'])
-    batch_size = 1 if basis in {'active', 'loss', 'kill'} else 12
+    batch_size = 1 if basis == 'active' else 12
     batch = months[offset:offset+batch_size]
     points = []
+    levels = _cpi_levels() if reference else {}
+    reference_day = month(reference) if reference else None
     with db() as conn:
         official, dates = ([], [])
         if basis == 'member':
@@ -303,14 +332,19 @@ def get_evolution(kind, entity_id, from_month, to_month, basis='total', window=9
                 divisor = 1
                 if basis == 'member':
                     divisor = average_population(official, dates, [day])
-                elif basis in {'active', 'loss', 'kill'}:
+                elif basis == 'active':
                     history = [d for d in catalog['months'] if d <= day]
                     intervals = activity_intervals(history, window)
-                    active, kills, losses = _activity(conn, kind, entity_id, catalog['rules'], intervals)
-                    divisor = {'active': active, 'loss': losses, 'kill': kills}[basis]
+                    active, _kills, _losses = _activity(conn, kind, entity_id, catalog['rules'], intervals)
+                    divisor = active
                 amounts = {key: str(value/divisor) if value is not None and divisor else None
                            for key, value in totals.items()}
+            factor = _power(levels, reference_day, day)
+            amounts.update({key.replace('_isk', '_ppa_isk'): _adjust(amounts[key], factor) for key in METRICS})
+            amounts['isk_purchasing_power_index'] = _adjust(100, factor)
+            amounts['consumer_price_index_relative_index'] = _adjust(100, Decimal(1)/factor if factor else None)
             points.append({'month': day.strftime('%Y-%m'), 'values': amounts,
+                           'purchasing_power_factor': str(factor) if factor is not None else None,
                            'denominator': str(divisor) if divisor is not None else None})
     return {'points': points, 'basis': basis, 'next_offset': offset+len(batch) if offset+len(batch) < len(months) else None,
             'total_months': len(months)}
@@ -330,9 +364,11 @@ def change(value, baseline):
                          'decrease' if delta is not None and delta < 0 else 'unchanged'}
 
 
-def get_comparison(kind, entity_id, base_month, observed_month, window=90):
+def get_comparison(kind, entity_id, base_month, observed_month, window=90, reference=None):
     month(base_month)
     month(observed_month)
+    if reference:
+        month(reference)
     if not 1 <= window <= 3650:
         raise ValueError('Choose an activity window from 1 to 3650 days.')
     def measurement(selected):
@@ -346,14 +382,34 @@ def get_comparison(kind, entity_id, base_month, observed_month, window=90):
     for metric, label in METRICS.items():
         old, new = base_rows.get(metric, {}), current_rows.get(metric, {})
         values = {'total': change(new.get('total'), old.get('total'))}
-        for key in ['member', 'active', 'loss', 'kill']:
+        for key in ['member', 'active']:
             values[key] = change(new.get('ratios', {}).get(key), old.get('ratios', {}).get(key))
         rows.append({'metric': metric, 'label': label, 'values': values})
     denominators = {key: change(observed['denominators'].get(key) if observed else None,
                                baseline['denominators'].get(key) if baseline else None)
-                    for key in ['member', 'active', 'loss', 'kill']}
+                    for key in ['member', 'active']}
+    power = None
+    if reference:
+        reference_day = month(reference)
+        levels = _cpi_levels()
+        base_factor = _power(levels, reference_day, month(base_month))
+        observed_factor = _power(levels, reference_day, month(observed_month))
+        adjusted_rows = []
+        for metric, label in METRICS.items():
+            old, new = base_rows.get(metric, {}), current_rows.get(metric, {})
+            values = {'total': change(_adjust(new.get('total'), observed_factor), _adjust(old.get('total'), base_factor))}
+            for key in ['member', 'active']:
+                values[key] = change(_adjust(new.get('ratios', {}).get(key), observed_factor),
+                                     _adjust(old.get('ratios', {}).get(key), base_factor))
+            adjusted_rows.append({'metric': metric.replace('_isk', '_ppa_isk'), 'label': label+' · PPA', 'values': values})
+        rows.extend(adjusted_rows)
+        ref_cpi = levels.get(reference_day)
+        power = {'reference': reference, 'reference_cpi': str(ref_cpi) if ref_cpi is not None else None,
+                 'price_index': change(_adjust(100, Decimal(1)/observed_factor if observed_factor else None),
+                                       _adjust(100, Decimal(1)/base_factor if base_factor else None)),
+                 'isk_power': change(_adjust(100, observed_factor), _adjust(100, base_factor))}
     return {'base_month': base_month, 'observed_month': observed_month, 'rows': rows,
-            'denominators': denominators, 'base': baseline, 'observed': observed,
+            'denominators': denominators, 'base': baseline, 'observed': observed, 'purchasing_power': power,
             'regions': get_series_regions(kind, entity_id, base_month, observed_month)}
 
 

@@ -78,7 +78,8 @@ class CalculationTests(unittest.TestCase):
         self.assertEqual(result['denominators']['member'],'100')
         self.assertNotIn('daily_average',result['rows'][0])
         self.assertEqual(result['rows'][0]['ratios']['active'],'140')
-        self.assertIsNone(result['rows'][0]['ratios']['loss'])
+        self.assertNotIn('loss',result['rows'][0]['ratios'])
+        self.assertNotIn('kill',result['rows'][0]['ratios'])
         self.assertIsNone(result['rows'][1]['total'])
         self.assertEqual(result['activity_days'],28)
 
@@ -110,14 +111,13 @@ class CalculationTests(unittest.TestCase):
         conn=Conn()
         with patch.object(module,'scope_at',side_effect=lambda k,i,r,d:{('alliance',10 if d.day<=15 else 20)}):
             result=module._activity(conn,'coalition',1,{},[(JAN,FEB)])
-        self.assertEqual(result,(2,4,2))
+        self.assertEqual(result,(2,4,0))
         queries=[(q,args) for q,args in conn.calls if args]
-        self.assertEqual(len(queries),4)
+        self.assertEqual(len(queries),2)
         self.assertEqual(queries[0][1][4],[10])
-        self.assertEqual(queries[2][1][4],[20])
+        self.assertEqual(queries[1][1][4],[20])
         self.assertIn('ka.killmail_time >=',queries[0][0])
         self.assertIn('km.victim_character_id > 0',queries[0][0])
-        self.assertIn('EXISTS',queries[1][0])
         count=len(conn.calls)
         with patch.object(module,'scope_at',side_effect=lambda k,i,r,d:{('alliance',10 if d.day<=15 else 20)}):
             self.assertEqual(module._activity(conn,'coalition',1,{},[(JAN,FEB)]),result)
@@ -169,10 +169,10 @@ class EvolutionTests(unittest.TestCase):
         with patch.object(module,'_catalog',return_value=catalog), patch.object(module,'db',db), \
              patch.object(module,'estimates',return_value=({key:Decimal(100) for key in module.METRICS},[])), \
              patch.object(module,'_activity',return_value=(2,4,1)) as pvp:
-            data=module.get_evolution('alliance',10,'2026-01','2026-03','kill',90)
+            data=module.get_evolution('alliance',10,'2026-01','2026-03','active',90)
         self.assertEqual(len(data['points']),1)
         self.assertEqual(data['next_offset'],1)
-        self.assertEqual(data['points'][0]['values']['mining_isk'],'25')
+        self.assertEqual(data['points'][0]['values']['mining_isk'],'50')
         self.assertEqual(pvp.call_count,1)
 
     def test_invalid_basis_does_not_query_database(self):
@@ -220,6 +220,51 @@ class ComparisonTests(unittest.TestCase):
 
     def test_daily_chart_basis_is_removed(self):
         with self.assertRaises(ValueError):module.get_evolution('alliance',10,'2026-01','2026-03','daily')
+
+
+class PurchasingPowerTests(unittest.TestCase):
+    def test_factor_direction_and_missing_indices(self):
+        levels={JAN:Decimal(100),MAR:Decimal(110)}
+        self.assertEqual(module._power(levels,JAN,JAN),Decimal(1))
+        self.assertEqual(module._power(levels,JAN,MAR),Decimal(100)/110)
+        self.assertIsNone(module._power(levels,JAN,FEB))
+        self.assertIsNone(module._power({JAN:Decimal(0),MAR:Decimal(100)},JAN,MAR))
+
+    def test_ppa_is_added_without_changing_nominal_indicators(self):
+        def series(kind,eid,start,end,window):
+            return {'months':[{'month':start,'rows':[{'metric':key,'total':'100','ratios':{'member':'10','active':'20'}} for key in module.METRICS],
+                               'denominators':{'member':10,'active':5}}]}
+        with patch.object(module,'get_series',side_effect=series),patch.object(module,'get_series_regions',return_value=[]), \
+             patch.object(module,'_cpi_levels',return_value={JAN:Decimal(100),MAR:Decimal(110)}):
+            data=module.get_comparison('alliance',10,'2026-01','2026-03',90,'2026-01')
+        self.assertEqual(len(data['rows']),6)
+        nominal=data['rows'][0]['values']['total'];ppa=data['rows'][3]['values']['total']
+        self.assertEqual(nominal['value'],'100')
+        self.assertEqual(nominal['percent'],'0')
+        self.assertLess(Decimal(ppa['value']),Decimal(100))
+        self.assertEqual(ppa['direction'],'decrease')
+        self.assertAlmostEqual(float(ppa['percent']),-9.09090909)
+        self.assertAlmostEqual(float(data['purchasing_power']['price_index']['value']),110)
+        self.assertEqual(data['purchasing_power']['reference'],'2026-01')
+        self.assertNotIn('loss',data['denominators'])
+        self.assertNotIn('kill',data['rows'][0]['values'])
+
+    def test_chart_ppa_uses_the_same_reference_and_keeps_raw_series(self):
+        @contextmanager
+        def db():yield object()
+        with patch.object(module,'_catalog',return_value={'months':[JAN,MAR],'rules':{}}),patch.object(module,'db',db), \
+             patch.object(module,'estimates',return_value=({key:Decimal(100) for key in module.METRICS},[])), \
+             patch.object(module,'_cpi_levels',return_value={JAN:Decimal(100),MAR:Decimal(200)}):
+            data=module.get_evolution('alliance',10,'2026-01','2026-03',reference='2026-01')
+        self.assertEqual(data['points'][0]['values']['mining_isk'],'100')
+        self.assertEqual(data['points'][0]['values']['mining_ppa_isk'],'100')
+        self.assertEqual(data['points'][2]['values']['mining_isk'],'100')
+        self.assertEqual(data['points'][2]['values']['mining_ppa_isk'],'50.0')
+        self.assertIsNone(data['points'][1]['values']['mining_ppa_isk'])
+
+    def test_removed_bases_are_rejected(self):
+        for basis in ['loss','kill']:
+            with self.assertRaises(ValueError):module.get_evolution('alliance',10,'2026-01','2026-03',basis)
 
 
 class RouteTests(unittest.TestCase):

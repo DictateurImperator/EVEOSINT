@@ -45,12 +45,12 @@ def economics_series(request: Request, kind: str, entity_id: int,
 @router.get('/api/{kind}/{entity_id}/population-economics/evolution')
 def economics_evolution(request: Request, kind: str, entity_id: int,
                         from_month: str = Query(alias='from'), to_month: str = Query(alias='to'),
-                        basis: str = Query('total'), window: int = Query(90), offset: int = Query(0)):
+                        basis: str = Query('total'), window: int = Query(90), offset: int = Query(0), reference: str | None = Query(None)):
     return _response(request, kind, entity_id,
-                     lambda: get_evolution(kind, entity_id, from_month, to_month, basis, window, offset))
+                     lambda: get_evolution(kind, entity_id, from_month, to_month, basis, window, offset, reference))
 
 
 @router.get('/api/{kind}/{entity_id}/population-economics/comparison')
 def economics_comparison(request: Request, kind: str, entity_id: int,
-                         base: str = Query(...), observed: str = Query(...), window: int = Query(90)):
-    return _response(request, kind, entity_id, lambda: get_comparison(kind, entity_id, base, observed, window))
+                         base: str = Query(...), observed: str = Query(...), window: int = Query(90), reference: str | None = Query(None)):
+    return _response(request, kind, entity_id, lambda: get_comparison(kind, entity_id, base, observed, window, reference))
