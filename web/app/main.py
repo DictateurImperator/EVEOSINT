@@ -6,29 +6,29 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, PlainTextResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-
 from .audit_middleware import audit_page_view_middleware
 from .main_objects import templates
-from .schema import ensure_tables
 from .routes_account import router as account_router
 from .routes_admin_audit import router as admin_audit_router
 from .routes_admin_coalitions import router as admin_coalitions_router
-from .routes_admin_jobs import router as admin_jobs_router
-from .routes_admin_killmail_statistics import router as admin_killmail_statistics_router
 from .routes_admin_debug import router as admin_debug_router
 from .routes_admin_git import router as admin_git_router
-from .routes_admin_update_pipeline import router as admin_update_pipeline_router
-from .routes_admin_mer import router as admin_mer_router
+from .routes_admin_jobs import router as admin_jobs_router
 from .routes_admin_killmail_forensics import router as admin_killmail_forensics_router
-from .routes_admin_system import router as admin_system_router
+from .routes_admin_killmail_statistics import router as admin_killmail_statistics_router
+from .routes_admin_mer import router as admin_mer_router
 from .routes_admin_sov_colors import router as admin_sov_colors_router
+from .routes_admin_system import router as admin_system_router
+from .routes_admin_update_pipeline import router as admin_update_pipeline_router
 from .routes_admin_users import router as admin_users_router
 from .routes_entities import router as entities_router
-from .routes_map_economy import router as map_economy_router
 from .routes_home import router as home_router
 from .routes_login import router as login_router
+from .routes_map_economy import router as map_economy_router
+from .routes_population_economics import router as population_economics_router
 from .routes_superintel import router as superintel_router
 from .routes_update_status import router as update_status_router
+from .schema import ensure_tables
 
 logger = logging.getLogger(__name__)
 
@@ -252,6 +252,7 @@ app.include_router(account_router)
 app.include_router(superintel_router)
 app.include_router(entities_router)
 app.include_router(map_economy_router)
+app.include_router(population_economics_router)
 app.include_router(update_status_router)
 app.include_router(admin_users_router)
 app.include_router(admin_coalitions_router)

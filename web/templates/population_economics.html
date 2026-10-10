@@ -1,0 +1,57 @@
+{% if profile.entity_type in ['alliance', 'coalition'] %}
+<section id="population-economics" class="content-card p-3 p-md-4 mb-4" hidden>
+  <h3>Economics</h3>
+  <p class="muted-line">Territorial estimates from the MER: regional NPC bounties, mining and production are apportioned by average daily sovereignty, then summed across regions. These are estimates of activity in held territory, including activity by other groups.</p>
+  <div class="d-flex gap-2 flex-wrap align-items-center mb-3">
+    <label>From <select id="pe-from" class="form-select form-select-sm"></select></label>
+    <label>Through <select id="pe-to" class="form-select form-select-sm"></select></label>
+    <label>PvP activity window (days) <input id="pe-window" type="number" min="1" max="3650" value="90" class="form-control form-control-sm"></label>
+    <button id="pe-apply" class="btn btn-sm btn-primary" type="button">Calculate</button>
+  </div>
+  <p class="muted-line small">The regional share is mean systems held / mean total player sovereignty systems, using UTC day-end ownership throughout each month. Coalition membership is evaluated on each day. Average population uses the latest recorded population on or before each covered day. PvP counts membership at the time of the kill, including pilots who later left; active pilots must have participated as attackers in a PvP kill. Killmails and pilots are deduplicated across coalition members. NPC-only kills are excluded.</p>
+  <div id="pe-status" class="muted-line" role="status"></div>
+  <p id="pe-counts" class="mt-2 small"></p>
+  <div class="table-responsive"><table class="table table-dark table-sm align-middle">
+    <thead><tr><th>Indicator (ISK)</th><th>Total estimate</th><th>Monthly average</th><th>Daily average</th><th>/ average member</th><th>/ active PvP pilot</th><th>/ loss</th><th>/ kill inflicted</th></tr></thead>
+    <tbody id="pe-rows"></tbody>
+  </table></div>
+  <details><summary>Regional allocation and covered periods</summary><p id="pe-coverage" class="small mt-2"></p>
+    <div class="table-responsive"><table class="table table-dark table-sm"><thead><tr><th>Month</th><th>Region</th><th>Mean systems held</th><th>Mean regional sovereignty systems</th><th>Share</th></tr></thead><tbody id="pe-regions"></tbody></table></div>
+  </details>
+</section>
+<script>
+(function(){
+  const panel=document.getElementById('population-economics');
+  const button=document.querySelector('[data-population-subtab="economics"]');
+  const from=document.getElementById('pe-from'),to=document.getElementById('pe-to');
+  const status=document.getElementById('pe-status'),rows=document.getElementById('pe-rows');
+  const base='/api/{{ profile.entity_type }}/{{ profile.entity_id | int }}/population-economics';
+  let ready=false, loaded=false, controller=null;
+  const fmt=value=>value===null || value===undefined?'—':Number(value).toLocaleString('en-US',{maximumFractionDigits:2});
+  function cell(row,value){const td=document.createElement('td');td.textContent=value;row.appendChild(td);}
+  async function json(url,signal){const r=await fetch(url,{credentials:'same-origin',cache:'no-store',headers:{Accept:'application/json'},signal});const d=await r.json().catch(()=>({}));if(!r.ok)throw new Error(d.error||'Unable to load economics.');return d;}
+  async function calculate(){
+    if(!ready)return;
+    if(controller)controller.abort();controller=new AbortController();const signal=controller.signal;
+    status.textContent='Calculating economics…';rows.replaceChildren();document.getElementById('pe-counts').textContent='';document.getElementById('pe-regions').replaceChildren();document.getElementById('pe-coverage').textContent='';
+    const input=document.getElementById('pe-window');
+    const params=new URLSearchParams({from:from.value,to:to.value,window:input.value});
+    try{const d=await json(base+'?'+params,signal);if(signal.aborted)return;
+      loaded=true;if(!d.available){status.textContent='No economic estimates available for this period.';return;}
+      status.textContent='Covered MER months: '+d.coverage.join(', ')+' · '+d.economic_days+' economic days';
+      const n=d.denominators;document.getElementById('pe-counts').textContent='Average population: '+fmt(n.member)+' · Active PvP pilots: '+fmt(n.active)+' · Losses: '+fmt(n.loss)+' · Kills inflicted: '+fmt(n.kill)+' · PvP window: '+d.activity_days+' covered days';
+      for(const item of d.rows){const tr=document.createElement('tr');[item.label,fmt(item.total),fmt(item.monthly_average),fmt(item.daily_average),...['member','active','loss','kill'].map(k=>fmt(item.ratios[k]))].forEach(v=>cell(tr,v));rows.appendChild(tr);}
+      document.getElementById('pe-coverage').textContent='PvP coverage: '+d.activity_coverage.map(i=>i.from+' through '+i.through).join('; ')+'. Unreported months and days beyond MER coverage are excluded. A dash means missing data or a zero denominator.';
+      const regions=document.getElementById('pe-regions');for(const item of d.regions){const tr=document.createElement('tr');[item.month,item.region,fmt(item.owned_average),fmt(item.total_average),fmt(Number(item.share)*100)+'%'].forEach(v=>cell(tr,v));regions.appendChild(tr);}
+    }catch(e){if(e.name!=='AbortError')status.textContent=e.message;}
+  }
+  window.eveosintLoadPopulationEconomics=()=>{if(!loaded){const original=document.getElementById('pi-window-days');if(original)document.getElementById('pe-window').value=original.value;calculate();}};
+  document.getElementById('pe-apply').addEventListener('click',calculate);
+  json(base+'/options').then(d=>{
+    if(!d.available)return;for(const m of d.months){from.add(new Option(m,m));to.add(new Option(m,m));}
+    from.value=d.months[d.months.length-1];to.value=from.value;ready=true;button.hidden=false;
+    if(window.eveosintRequestedPopulationEconomics)button.click();
+  }).catch(()=>{});
+})();
+</script>
+{% endif %}

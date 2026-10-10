@@ -10,6 +10,7 @@
 <div class="population-subnav" aria-label="Population Intelligence views">
   <button type="button" class="active" data-population-subtab="metrics">Global metrics</button>
   <button type="button" data-population-subtab="flows">Flows</button>
+  {% if profile.entity_type in ["alliance", "coalition"] %}<button type="button" data-population-subtab="economics" hidden>ECONOMICS</button>{% endif %}
 </div>
 
 <div id="dotlan-population-history-status" class="muted-line" hidden style="margin:.1rem .25rem .75rem .25rem; font-size:.78rem; color:#94a3b8;">
@@ -1842,13 +1843,18 @@
 
     function switchSubtab(view) {
       const flows = view === 'flows';
-      globalPanel.hidden = flows;
+      const economics = view === 'economics';
+      const economicsPanel = document.getElementById('population-economics');
+      if (economicsPanel) economicsPanel.hidden = !economics;
+      globalPanel.hidden = flows || economics;
       flowPanel.hidden = !flows;
       subtabButtons.forEach(btn => btn.classList.toggle('active', btn.dataset.populationSubtab === view));
       const url = new URL(window.location.href);
-      if (flows) url.searchParams.set('population_view','flows');
+      if (economics) url.searchParams.set('population_view','economics');
+      else if (flows) url.searchParams.set('population_view','flows');
       else url.searchParams.delete('population_view');
       history.replaceState(history.state, '', url.pathname + '?' + url.searchParams.toString());
+      if (economics && typeof window.eveosintLoadPopulationEconomics === 'function') window.eveosintLoadPopulationEconomics();
       if (flows && !hasLoadedFlows) loadFlows();
     }
 
@@ -1935,8 +1941,11 @@
       }
     });
 
+    window.eveosintRequestedPopulationEconomics = new URL(window.location.href).searchParams.get('population_view') === 'economics';
     const initialView = new URL(window.location.href).searchParams.get('population_view') === 'flows' ? 'flows' : 'metrics';
     switchSubtab(initialView);
   })();
   </script>
 </section>
+
+{% include "population_economics.html" %}
