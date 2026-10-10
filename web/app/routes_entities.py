@@ -196,15 +196,12 @@ def profiles_hub(request: Request):
 
 def _map_response(request: Request, user, payload):
     global_map = payload.get("scope") == "eve_2d"
-    tool_key = {
-        "influence": "tools.influence", "heat": "tools.heat", "economy": "tools.economy",
-    }.get(request.query_params.get("mode"), "tools.map_2d")
     context = app_context(
         request=request,
         user=user,
         title=f"EVEOSINT - MAP - {payload['title']}",
         active_module="tools" if global_map else "entities",
-        active_menu_key=tool_key if global_map else "entities.map",
+        active_menu_key="tools.map_2d" if global_map else "entities.map",
     )
     context.update({
         "map_payload": payload,

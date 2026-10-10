@@ -6,10 +6,7 @@ TOOLS = (
     ("tools.super_evolution", "Super Evolution", "/superintel/evolution", "Compare the evolution of supercapital pilot intelligence on a graph.", "superintel.view"),
     ("tools.population", "Population comparison", "/tools/population", "Compare population and PvP activity across alliances and coalitions.", "entities.view"),
     ("tools.economics", "Economics comparison", "/tools/economics", "Compare monthly economic estimates and purchasing power across entities.", "entities.view"),
-    ("tools.map_2d", "2D EVE map", "/map/eve-2d", "Explore New Eden and Anoikis on an interactive map.", "entities.view"),
-    ("tools.influence", "Sovereignty history", "/map/eve-2d?mode=influence", "Follow alliance and coalition territory through time.", "entities.view"),
-    ("tools.heat", "Fight heat map", "/map/eve-2d?mode=heat", "Explore known and hidden combat activity with killboard filters.", "entities.view"),
-    ("tools.economy", "Economic map", "/map/eve-2d?mode=economy", "Compare regional mining, production and NPC bounties from the MER.", "entities.view"),
+    ("tools.map_2d", "2D map", "/map/eve-2d", "Explore New Eden and Anoikis on an interactive map.", "entities.view"),
 )
 
 

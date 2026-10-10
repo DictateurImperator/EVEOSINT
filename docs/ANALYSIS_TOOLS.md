@@ -27,6 +27,7 @@ the visible dates, raw returned values, entity IDs and shared parameters.
 Unknown values remain empty. The summary compares the first and last available
 point separately for each entity and labels those dates explicitly.
 
+Tools has one **2D map** entry; its modes are selected within the map.
 The map accepts `?mode=influence`, `?mode=heat` and `?mode=economy` to open the
 requested tool directly; unrecognized modes retain the normal systems view.
 
