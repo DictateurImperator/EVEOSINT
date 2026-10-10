@@ -14,6 +14,7 @@ import signal
 import sys
 import tarfile
 import tempfile
+import time
 from datetime import UTC, date, datetime
 from pathlib import Path
 
@@ -42,6 +43,23 @@ def save_state(path, state):
         handle.flush()
         os.fsync(handle.fileno())
     temporary.replace(path)
+
+
+class Progress:
+    def __init__(self, path):
+        self.path = path
+        self.data = {
+            "pid": os.getpid(), "phase": "starting", "started_at": datetime.now(UTC).isoformat(),
+            "scanned": 0, "archives_total": 0, "to_update": 0, "scan_complete": False,
+            "processed": 0, "updated": 0, "failed": 0, "added": 0, "current_day": None,
+            "bytes_downloaded": 0, "bytes_total": None, "files_read": 0,
+        }
+        self.update()
+
+    def update(self, **values):
+        self.data.update(values)
+        self.data["updated_at"] = datetime.now(UTC).isoformat()
+        save_state(self.path, self.data)
 
 
 def get_json(session, url):
@@ -153,7 +171,7 @@ def import_batch(conn, importer, payloads, archive_day, months, state, state_pat
     return added
 
 
-def refresh_archive(conn, importer, session, day, entry, state, state_path):
+def refresh_archive(conn, importer, session, day, entry, state, state_path, report=lambda **_values: None):
     destination = importer.archive_tar_path(day)
     destination.parent.mkdir(parents=True, exist_ok=True)
     descriptor, filename = tempfile.mkstemp(prefix=".refresh-", suffix=".tar.bz2", dir=destination.parent)
@@ -161,13 +179,21 @@ def refresh_archive(conn, importer, session, day, entry, state, state_path):
     temporary = Path(filename)
     count = added = 0
     months, ensured, batch = set(), set(), []
+    report(phase="downloading", current_day=day.isoformat(), bytes_downloaded=0,
+           bytes_total=entry.get("size"), files_read=0, current_added=0)
     try:
         # Always fetch anew: the original import cache may be the outdated file.
         with session.get(importer.day_url(day), stream=True, timeout=(15, 300)) as response:
             response.raise_for_status()
             with temporary.open("wb") as handle:
+                downloaded, last_report = 0, 0
                 for chunk in response.iter_content(chunk_size=1024 * 1024):
                     handle.write(chunk)
+                    downloaded += len(chunk)
+                    if time.monotonic() - last_report >= 1:
+                        report(bytes_downloaded=downloaded)
+                        last_report = time.monotonic()
+        report(phase="importing", bytes_downloaded=downloaded)
         if entry.get("size") is not None and temporary.stat().st_size != int(entry["size"]):
             raise ValueError("Archive size changed since the index was read; retry the job")
         with tarfile.open(temporary, "r:bz2") as archive:
@@ -180,10 +206,12 @@ def refresh_archive(conn, importer, session, day, entry, state, state_path):
                 count += 1
                 if len(batch) >= BATCH_SIZE:
                     added += import_batch(conn, importer, batch, day, months, state, state_path, ensured)
+                    report(files_read=count, current_added=added)
                     LOG.info("ARCHIVE_PROGRESS day=%s read=%s added=%s", day, count, added)
                     batch.clear()
             if batch:
                 added += import_batch(conn, importer, batch, day, months, state, state_path, ensured)
+        report(files_read=count, current_added=added)
         temporary.replace(destination)
         importer.mark_day(conn, day, "success", files_count=count, archive_count=1)
         state["archives"][day.isoformat()] = signature(entry) | {
@@ -196,7 +224,7 @@ def refresh_archive(conn, importer, session, day, entry, state, state_path):
         temporary.unlink(missing_ok=True)
 
 
-def run_refresh(conn, importer, session, state_path, match, start=None, end=None):
+def run_refresh(conn, importer, session, state_path, match, start=None, end=None, report=lambda **_values: None):
     state = load_state(state_path)
     with conn.cursor() as cur:
         cur.execute("""
@@ -206,48 +234,74 @@ def run_refresh(conn, importer, session, state_path, match, start=None, end=None
         """, (start, start, end, end))
         days = cur.fetchall()
     conn.commit()
+    report(phase="checking", archives_total=len(days), date_from=start.isoformat() if start else None,
+           date_to=end.isoformat() if end else None)
     LOG.info("START imported_days=%s from=%s through=%s", len(days), start or "all", end or "all")
     indexes = {}
     for year in sorted({day.year for day, _count in days}):
+        report(current_year=year)
         LOG.info("INDEX_START year=%s", year)
         try:
             indexes[year] = year_index(session, year)
         except Exception:
             LOG.exception("INDEX_FAILED year=%s (will retry next launch)", year)
             indexes[year] = None
-    checked = changed = added = failed = 0
-    for day, local_count in days:
-        if indexes[day.year] is None:
-            failed += 1
-            continue
+    checked = added = failed = 0
+    candidates = []
+    for day, _local_count in days:
+        checked += 1
         try:
+            if indexes[day.year] is None:
+                failed += 1
+                continue
             entry = indexes[day.year].get(day.isoformat())
             if entry is None:
                 raise ValueError("Previously imported archive is missing from the EVE Ref index")
             downloaded_at = download_time(importer.archive_tar_path(day), state["archives"].get(day.isoformat()))
-            checked += 1
             if downloaded_at is None:
                 LOG.warning("ARCHIVE_SKIPPED day=%s reason=unknown_download_date", day)
             if needs_refresh(downloaded_at, entry):
-                changed += 1
+                candidates.append((day, entry))
                 LOG.info("ARCHIVE_CHANGED day=%s downloaded=%s modified=%s", day, downloaded_at.isoformat(), entry["last_modified"])
-                # Even a failed, partially committed import must be reconciled.
-                state["pending_months"] = sorted(set(state["pending_months"]) | {day.isoformat()[:7]})
-                save_state(state_path, state)
-                added += refresh_archive(conn, importer, session, day, entry, state, state_path)
             else:
                 state["archives"][day.isoformat()] = signature(entry) | {
                     "downloaded_at": downloaded_at.isoformat() if downloaded_at else None,
                 }
-            if checked % 100 == 0:
-                save_state(state_path, state)
-                LOG.info("CHECK_PROGRESS checked=%s/%s changed=%s added=%s failed=%s", checked, len(days), changed, added, failed)
         except Exception:
-            conn.rollback()
             failed += 1
             LOG.exception("ARCHIVE_FAILED day=%s (will retry next launch)", day)
+        finally:
+            if checked % 100 == 0 or checked == len(days):
+                save_state(state_path, state)
+                report(scanned=checked, to_update=len(candidates), failed=failed)
+                LOG.info("CHECK_PROGRESS checked=%s/%s changed=%s failed=%s", checked, len(days), len(candidates), failed)
     save_state(state_path, state)
+    report(scanned=checked, to_update=len(candidates), scan_complete=True, current_year=None)
+    updated = 0
+    for processed, (day, entry) in enumerate(candidates, 1):
+        archive_added = [0]
+        try:
+            state["pending_months"] = sorted(set(state["pending_months"]) | {day.isoformat()[:7]})
+            save_state(state_path, state)
+
+            def archive_report(_previous_added=added, _archive_added=archive_added, **values):
+                current_added = values.pop("current_added", None)
+                if current_added is not None:
+                    _archive_added[0] = current_added
+                    values["added"] = _previous_added + current_added
+                report(**values)
+
+            added += refresh_archive(conn, importer, session, day, entry, state, state_path, archive_report)
+            updated += 1
+        except Exception:
+            conn.rollback()
+            added += archive_added[0]
+            failed += 1
+            LOG.exception("ARCHIVE_FAILED day=%s (will retry next launch)", day)
+        finally:
+            report(processed=processed, updated=updated, failed=failed, added=added)
     if state["pending_months"]:
+        report(phase="matching", current_day=None, months=state["pending_months"])
         LOG.info("MER_MATCH_START months=%s", ",".join(state["pending_months"]))
         result = match(months=state["pending_months"])
         if result.get("busy"):
@@ -255,10 +309,11 @@ def run_refresh(conn, importer, session, state_path, match, start=None, end=None
         LOG.info("MER_MATCH_DONE %s", json.dumps(result, sort_keys=True))
         state["pending_months"] = []
         save_state(state_path, state)
-    LOG.info("DONE checked=%s changed=%s added=%s failed=%s", checked, changed, added, failed)
+    LOG.info("DONE checked=%s changed=%s added=%s failed=%s", checked, len(candidates), added, failed)
+    report(phase="failed" if failed else "completed", current_day=None, finished_at=datetime.now(UTC).isoformat())
     if failed:
         raise RuntimeError(f"{failed} archive(s) failed; see ARCHIVE_FAILED entries and restart to retry")
-    return {"checked": checked, "changed": changed, "added": added, "failed": failed}
+    return {"checked": checked, "changed": len(candidates), "added": added, "failed": failed}
 
 
 def main():
@@ -281,6 +336,7 @@ def main():
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
             raise RuntimeError("An archive refresh is already running") from None
+        progress = Progress(state_path.parent / "refresh_progress.json")
         cleanup_downloads(importer.ARCHIVE_DIR)
 
         def stop(_signal, _frame):
@@ -294,9 +350,13 @@ def main():
             ensure_recovery_table(conn)
             with requests.Session() as session:
                 session.headers["User-Agent"] = USER_AGENT
-                run_refresh(conn, importer, session, state_path, match_mer_killmails, args.start, args.end)
+                run_refresh(conn, importer, session, state_path, match_mer_killmails, args.start, args.end, progress.update)
         except KeyboardInterrupt:
+            progress.update(phase="stopped", finished_at=datetime.now(UTC).isoformat())
             LOG.info("STOPPED (completed batches retained; temporary download removed)")
+        except Exception:
+            progress.update(phase="failed", finished_at=datetime.now(UTC).isoformat())
+            raise
         finally:
             conn.close()
 

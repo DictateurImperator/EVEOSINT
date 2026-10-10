@@ -1,12 +1,13 @@
 from fastapi import APIRouter, Form, Request
-from fastapi.responses import HTMLResponse, PlainTextResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse
 
 from .audit import audit_log
-from .auth import require_login, require_permission_or_redirect
+from .auth import has_permission, require_login, require_permission_or_redirect
 from .jobs import (
     JobError,
     list_jobs_with_logs,
     read_job_log,
+    read_killmail_archive_refresh_progress,
     run_killmail_job,
     run_killmail_archive_refresh_job,
     stop_killmail_archive_refresh_job,
@@ -408,3 +409,13 @@ def admin_jobs_stop_killmail_archives(request: Request):
     except JobError as exc:
         return _error_redirect(exc)
     return RedirectResponse(url="/admin/jobs?success=job_stop_requested", status_code=302)
+
+
+@router.get("/admin/jobs/killmail-archives/progress")
+def admin_jobs_killmail_archive_progress(request: Request):
+    user = require_login(request)
+    if not user:
+        return JSONResponse({"error": "Please log in to continue."}, status_code=401)
+    if not has_permission(user, "admin.jobs.view"):
+        return JSONResponse({"error": "The admin.jobs.view permission is required."}, status_code=403)
+    return JSONResponse(read_killmail_archive_refresh_progress(), headers={"Cache-Control": "no-store"})

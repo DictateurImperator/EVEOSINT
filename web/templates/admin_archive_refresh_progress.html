@@ -1,0 +1,64 @@
+<div class="border rounded p-3 mb-3" id="archive-refresh-progress" data-enabled="{{ 'yes' if job.enabled else 'no' }}" data-can-run="{{ 'yes' if 'admin.jobs.run' in user.permissions else 'no' }}">
+  <div class="d-flex justify-content-between gap-2 mb-2">
+    <strong>Archive refresh progress</strong><span class="badge text-bg-secondary" data-refresh-state>Loading…</span>
+  </div>
+  <div class="small muted-line" data-refresh-stage role="status">Checking job status…</div>
+  <div class="d-flex flex-wrap gap-3 mt-2 small">
+    <span>Checked: <strong data-refresh-checked>—</strong></span>
+    <span>To update: <strong data-refresh-total>—</strong></span>
+    <span>Processed: <strong data-refresh-processed>—</strong></span>
+    <span>Updated: <strong data-refresh-updated>—</strong></span>
+    <span>New killmails: <strong data-refresh-added>—</strong></span>
+    <span>Errors: <strong data-refresh-failed>—</strong></span>
+  </div>
+  <progress class="w-100 mt-2" data-refresh-bar max="1" value="0" aria-label="Archive refresh progress"></progress>
+  <div class="small muted-line mt-1" data-refresh-current></div>
+  <div class="small text-warning mt-2" data-refresh-error hidden></div>
+</div>
+<script>
+(function () {
+  'use strict';
+  const panel = document.getElementById('archive-refresh-progress');
+  const card = panel.closest('section');
+  const get = name => panel.querySelector('[data-refresh-' + name + ']');
+  const launch = card.querySelector('form[action="/admin/jobs/killmail-archives/refresh"] button');
+  const stop = card.querySelector('form[action="/admin/jobs/killmail-archives/stop"]');
+  const number = value => Number(value || 0).toLocaleString('en-US');
+  const bytes = value => (Number(value || 0) / 1048576).toFixed(1) + ' MB';
+  const labels = {starting:'Starting', checking:'Checking archive dates', downloading:'Downloading archive', importing:'Importing missing killmails', matching:'Matching MER losses', completed:'Completed', stopped:'Stopped', interrupted:'Interrupted', failed:'Failed — see job log'};
+  async function update() {
+    if (document.hidden) { window.setTimeout(update, 3000); return; }
+    try {
+      const response = await fetch('/admin/jobs/killmail-archives/progress', {headers:{Accept:'application/json'}, cache:'no-store'});
+      if (!response.headers.get('content-type')?.includes('application/json')) throw new Error('Unable to read progress. Check your session and retry.');
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || 'Unable to read progress.');
+      get('error').hidden = true;
+      if (launch) launch.disabled = data.running || panel.dataset.enabled !== 'yes' || panel.dataset.canRun !== 'yes';
+      if (stop) stop.hidden = !data.running;
+      const header = card.querySelector('[data-archive-job-header] .badge');
+      if (header) { header.textContent = data.running ? 'running' : (panel.dataset.enabled === 'yes' ? 'idle' : 'disabled'); header.className = 'badge ' + (data.running ? 'text-bg-warning' : 'text-bg-secondary'); }
+      get('state').textContent = data.running ? 'Running' : (data.progress ? labels[data.progress.phase] || 'Idle' : 'Not started');
+      get('state').className = 'badge ' + (data.running ? 'text-bg-warning' : 'text-bg-secondary');
+      const p = data.progress || {};
+      get('stage').textContent = labels[p.phase] || 'No archive refresh has been recorded yet.';
+      get('checked').textContent = number(p.scanned) + ' / ' + number(p.archives_total);
+      get('total').textContent = p.scan_complete ? number(p.to_update) : (p.phase === 'checking' ? number(p.to_update) + ' found (checking)' : '—');
+      get('processed').textContent = number(p.processed) + (p.scan_complete ? ' / ' + number(p.to_update) : '');
+      for (const key of ['updated','added','failed']) get(key).textContent = number(p[key]);
+      const bar = get('bar');
+      if (p.phase === 'checking') { bar.max = Math.max(1, p.archives_total || 0); bar.value = p.scanned || 0; }
+      else if (p.scan_complete) { bar.max = Math.max(1, p.to_update || 0); bar.value = p.to_update ? p.processed || 0 : 1; }
+      else { bar.max = 1; bar.value = 0; }
+      let detail = p.current_day ? 'Archive ' + p.current_day : '';
+      if (p.phase === 'checking' && p.current_year) detail = 'Reading the ' + p.current_year + ' archive index';
+      if (p.phase === 'downloading') detail += ' · ' + bytes(p.bytes_downloaded) + (p.bytes_total ? ' / ' + bytes(p.bytes_total) : '');
+      if (p.phase === 'importing') detail += ' · ' + number(p.files_read) + ' killmails read';
+      if (p.phase === 'matching') detail = (p.months || []).join(', ');
+      get('current').textContent = detail;
+    } catch (error) { get('error').textContent = error.message; get('error').hidden = false; }
+    window.setTimeout(update, 3000);
+  }
+  update();
+})();
+</script>

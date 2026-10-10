@@ -336,3 +336,28 @@ archives, resumable MER matching, month scope, concurrent matching and recovery
 counting in the disposable PostgreSQL lab. `scripts.test_killmail_statistics_browser`
 checks the year selector, rendered counts, recovery breakdown and error recovery
 in Chromium with all external traffic intercepted.
+
+## Live archive refresh progress
+
+The archive refresh card in **Administration → Jobs** polls its read-only progress
+endpoint every three seconds while the tab is visible. The worker checks the
+selected archive dates first, so the exact **To update** count is known before
+any archive download begins. During scanning the card shows how many days have
+been checked and how many updates have been found so far. It then displays
+processed/total archives, successful updates, errors, newly imported killmails,
+the current archive, download bytes and import file count. MER matching is a
+separate visible phase. Completed and stopped summaries remain available.
+
+The worker writes `data/killmails/refresh_progress.json` atomically; reading the
+card starts no job, imports no data and calls no external API. Viewing requires
+`admin.jobs.view`. The launch/stop controls follow the live worker state. The
+reader detects a newly started worker and an unexpectedly terminated worker
+instead of displaying another run's progress as current. Workers launched before
+this version cannot emit this progress file; use the next manual launch after
+deploying.
+
+Tests cover exact scan totals before downloads, persisted counters, worker
+identity, interrupted state and endpoint access.
+`scripts.test_archive_refresh_progress_browser` exercises automatic transitions
+from scanning through downloading/importing to completion, button state and
+recovery from a non-JSON error with no real worker or external requests.

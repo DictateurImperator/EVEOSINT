@@ -565,3 +565,19 @@ def stop_killmail_archive_refresh_job():
     except OSError as exc:
         raise JobError("job_stop_failed:refresh_killmail_archives") from exc
     return True, "stop_requested"
+
+
+def read_killmail_archive_refresh_progress():
+    runtime = _read_runtime_status("refresh_killmail_archives")
+    path = Path.home() / "eveosint/data/killmails/refresh_progress.json"
+    try:
+        progress = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(progress, dict):
+            progress = None
+    except (OSError, ValueError):
+        progress = None
+    if runtime["running"] and (not progress or progress.get("pid") != runtime["pid"]):
+        progress = {"phase": "starting"}
+    elif progress and not runtime["running"] and progress.get("phase") not in {"completed", "stopped", "failed"}:
+        progress = dict(progress, phase="interrupted")
+    return {"running": runtime["running"], "progress": progress}

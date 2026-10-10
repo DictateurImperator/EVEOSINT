@@ -42,7 +42,7 @@
             <div class="muted-line small">{{ job.key }}</div>
           </div>
 
-          <div class="text-end">
+          <div class="text-end" {% if job.type == "killmail_archive_refresh" %}data-archive-job-header{% endif %}>
             {% if job.running %}
               <span class="badge text-bg-warning">running</span>
               {% if job.started_at %}
@@ -99,11 +99,12 @@
               <button class="btn btn-primary" type="submit" {% if job.running or not job.enabled %}disabled{% endif %}>Refresh updated archives</button>
             </div>
           </form>
-          {% if job.running %}
-          <form method="post" action="/admin/jobs/killmail-archives/stop" class="mb-3">
+          {% if 'admin.jobs.run' in user.permissions %}
+          <form method="post" action="/admin/jobs/killmail-archives/stop" class="mb-3" {% if not job.running %}hidden{% endif %}>
             <button class="btn btn-outline-danger" type="submit">Stop archive refresh</button>
           </form>
           {% endif %}
+          {% include "admin_archive_refresh_progress.html" %}
           <a href="/admin/killmail-statistics">View monthly killmail statistics</a>
         {% elif job.type == "killmail_forensics_analysis" %}
           <p class="muted-line small">Analyze all hidden MER losses in the background. Existing investigations and tests are preserved. Leave dates empty for all available exports. No CCP requests are sent.</p>

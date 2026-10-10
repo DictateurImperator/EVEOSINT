@@ -157,6 +157,45 @@ class DecisionTests(unittest.TestCase):
                 jobs.stop_killmail_archive_refresh_job()
             kill.assert_not_called()
 
+    def test_progress_read_checks_worker_identity_and_unexpected_termination(self):
+        import sys
+        config = sys.modules[f.PACKAGE + ".config"]
+        with patch.object(config, "JOBS_CONFIG_PATH", f.ROOT / "config/offline-jobs.json", create=True):
+            jobs = f.load("jobs")
+        with patch.object(jobs, "_read_runtime_status", return_value={"running": True, "pid": 123}), \
+             patch.object(Path, "read_text", return_value=json.dumps({"pid": 122, "phase": "completed"})):
+            self.assertEqual(jobs.read_killmail_archive_refresh_progress()["progress"]["phase"], "starting")
+        with patch.object(jobs, "_read_runtime_status", return_value={"running": False, "pid": None}), \
+             patch.object(Path, "read_text", return_value=json.dumps({"pid": 123, "phase": "downloading"})):
+            self.assertEqual(jobs.read_killmail_archive_refresh_progress()["progress"]["phase"], "interrupted")
+        with patch.object(jobs, "_read_runtime_status", return_value={"running": False, "pid": None}), \
+             patch.object(Path, "read_text", side_effect=FileNotFoundError):
+            self.assertIsNone(jobs.read_killmail_archive_refresh_progress()["progress"])
+
+    def test_progress_endpoint_requires_admin_view_and_never_launches_job(self):
+        import sys
+        config = sys.modules[f.PACKAGE + ".config"]
+        with patch.object(config, "JOBS_CONFIG_PATH", f.ROOT / "config/offline-jobs.json", create=True):
+            f.load("jobs")
+            routes = f.load("routes_admin_jobs")
+        app = FastAPI()
+        app.include_router(routes.router)
+        client = TestClient(app)
+        user = {"id": 1, "username": "admin", "permissions": {"admin.jobs.view"}}
+        with patch.object(routes, "require_login", return_value=user), \
+             patch.object(routes, "read_killmail_archive_refresh_progress", return_value={"running": True, "progress": {"to_update": 7}}) as read, \
+             patch.object(routes, "run_killmail_archive_refresh_job") as launch:
+            response = client.get("/admin/jobs/killmail-archives/progress")
+            self.assertEqual(response.json()["progress"]["to_update"], 7)
+            self.assertEqual(response.headers["cache-control"], "no-store")
+            launch.assert_not_called()
+            read.reset_mock()
+            user["permissions"] = set()
+            self.assertEqual(client.get("/admin/jobs/killmail-archives/progress").status_code, 403)
+            read.assert_not_called()
+        with patch.object(routes, "require_login", return_value=None):
+            self.assertEqual(client.get("/admin/jobs/killmail-archives/progress").status_code, 401)
+
     def test_statistics_access_and_year_validation(self):
         app = FastAPI()
         app.include_router(stat_routes.router)
@@ -232,6 +271,32 @@ class RefreshIntegrationTests(unittest.TestCase):
     def statistics(self):
         with patch.object(stats, "db", self.connect):
             return stats.monthly_statistics(2026)
+
+    def test_scan_reports_exact_total_before_any_download_and_records_completion(self):
+        events = []
+        progress = refresh.Progress(self.base / "refresh_progress.json")
+
+        def report(**values):
+            progress.update(**values)
+            events.append(dict(progress.data))
+
+        original_get = self.source.get
+
+        def get(url, **options):
+            if url.endswith(".tar.bz2"):
+                self.assertTrue(events[-1]["scan_complete"])
+                self.assertEqual(events[-1]["to_update"], 1)
+                self.assertEqual(events[-1]["scanned"], 1)
+            return original_get(url, **options)
+
+        with self.connect() as conn, patch.object(mer, "db", self.connect), patch.object(mer, "_mer_log"), patch.object(self.source, "get", side_effect=get):
+            refresh.run_refresh(conn, self.importer, self.source, self.state, mer.match_mer_killmails, report=report)
+        saved = json.loads(progress.path.read_text())
+        self.assertEqual(saved["phase"], "completed")
+        self.assertEqual((saved["to_update"], saved["processed"], saved["updated"], saved["added"]), (1, 1, 1, 1))
+        self.assertEqual(saved["bytes_downloaded"], len(self.source.data))
+        self.assertEqual(saved["files_read"], 2)
+        self.assertEqual({event["phase"] for event in events}, {"checking", "downloading", "importing", "matching", "completed"})
 
     def test_late_kill_is_imported_matched_counted_once_and_not_redownloaded(self):
         result = self.run_job()
