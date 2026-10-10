@@ -96,3 +96,14 @@ CREATE INDEX IF NOT EXISTS forensics_cases_pilot_evidence_idx ON web.forensics_c
 CREATE INDEX IF NOT EXISTS forensics_cases_context_evidence_idx ON web.forensics_cases
     USING gin((forecast->'context_flags') jsonb_path_ops);
 ALTER TABLE web.forensics_cases ADD COLUMN IF NOT EXISTS analysis_version INTEGER;
+
+CREATE TABLE IF NOT EXISTS web.forensics_zkill_submissions (
+    killmail_id BIGINT PRIMARY KEY REFERENCES web.forensics_recovered(killmail_id),
+    status TEXT NOT NULL CHECK(status IN ('accepted','failed','uncertain')),
+    submitted_by BIGINT,
+    last_attempt_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    accepted_at TIMESTAMPTZ,
+    next_retry_at TIMESTAMPTZ NOT NULL,
+    http_status INTEGER
+);
+ALTER TABLE web.forensics_esi_gate ADD COLUMN IF NOT EXISTS rate_limit JSONB;

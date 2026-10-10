@@ -10,10 +10,11 @@ and advanced filters. Character and module filters cannot be evaluated from MER.
 After deploying this branch, open **Administration → Jobs** and run
 **Forensics · Create investigation tables (run once)** using **Create Forensics
 tables**. This executes `scripts/setup_killmail_forensics.py` with the application
-DB configuration and `web/app/forensics_schema.sql`. The seven Forensics tables are
+DB configuration and `web/app/forensics_schema.sql`. The eight Forensics tables are
 created in one transaction with timeouts and an advisory lock. After upgrading
 from an earlier Forensics branch, run this same job again to add forecast columns,
-the analysis-run table, refresh queue and sorting indexes. Repeating the script
+the analysis-run table, refresh queue, sorting indexes, zKillboard submission ledger
+and last CCP credit report. Repeating the script
 preserves records and existing custom plans. The job requires `admin.jobs.run`.
 
 The web process only checks whether the tables exist. It never creates them at
@@ -229,3 +230,47 @@ current inferred skills. These are simulated attempts, not CCP recoveries.
 - [CCP: killReport links contain ID and hash](https://developers.eveonline.com/docs/guides/eve-html/).
 - [CCP: rate limiting](https://developers.eveonline.com/docs/services/esi/rate-limiting/).
 - [CCP: best practices and error limits](https://developers.eveonline.com/docs/services/esi/best-practices/).
+
+
+## Recovered killboard, publishing and credits
+
+The recovered screen uses the killboard's ships, corporation/alliance logos,
+confirmed character portraits and location links. It shows the MER `ccp_isk_lost`
+estimate (including a zero estimate) and the number of distinct stored hash tests
+per recovered case. This count includes reused results and excludes temporary API
+errors; it is not a count of transport retries. Individual scores, candidate IDs,
+results and timestamps remain in `web.forensics_attempts` for later evaluation.
+MER value is also visible on the investigation rows.
+
+Recovered filters use the shared advanced builder: inclusive UTC date bounds,
+ships, characters, corporations/alliances with victim/attacker/both roles,
+locations/security presets and exclusions. Attacker filtering examines every
+attacker in the confirmed CCP payload, rather than only the final blow. Filtering
+and pagination apply to the full saved recovered collection. Missing NPC/object
+fields do not incorrectly exclude rows from negative filters.
+
+**Send to zKillboard** and **Send selected to zKillboard** publish only after an
+explicit click. They use the official POST submission API:
+https://zkillboard.com/api/docs/#posting-killmails . Only stored, CCP-confirmed
+ID/hash pairs can be sent. Accepted responses are recorded and subsequent clicks
+do not repost. Status can be filtered as not submitted, accepted, failed or
+uncertain. Accepted means zKillboard accepted the request; publication may lag.
+The server serializes submissions across users/workers, spaces successes by two
+seconds and respects rate-limit retries. Failed/ambiguous requests stop the batch
+and apply a cooldown. The reservation is committed before HTTP, preserving an
+uncertain state if a worker exits. Stop sending stops between requests.
+
+After deploying, rerun **Forensics · Create investigation tables (run once)** to
+create the publication ledger and CCP report column. Reading recovered kills and
+the local credit budget still works before this upgrade; publishing stays disabled.
+No live zKillboard posts or production migrations were made during development.
+
+The CCP credit card refreshes every ten seconds and after each validation. It
+shows the remaining local Forensics allowance (3,300 credits per rolling fifteen
+minutes), when credits first return, and any active cooldown. Each reservation
+initially costs five; finishing updates to CCP's `X-Ratelimit-Used`, or documented
+status costs when that header is absent. Expired calls leave the rolling sum.
+The last `X-Ratelimit-Remaining` report is stored separately with its observation
+time and bucket limit. It is not presented as an exact live server-wide balance:
+other services on the same IP can consume the same CCP bucket. No extra CCP call
+is made to display this card. See https://developers.eveonline.com/docs/services/esi/rate-limiting/ .

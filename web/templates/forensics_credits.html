@@ -1,0 +1,24 @@
+<div class="content-card p-3 mb-3" data-forensics-credits>
+  <div class="fw-bold">CCP request credits · rolling 15 minutes</div>
+  <div class="mt-1" data-credit-budget>Loading available credits…</div>
+  <div class="small muted-line" data-credit-reported></div>
+</div>
+<script>
+(function(){
+  var root=document.querySelector('[data-forensics-credits]');if(!root)return;
+  var busy=false;
+  async function load(){
+    if(busy)return;busy=true;
+    try{
+      var response=await fetch('/admin/killmail-forensics/credits',{credentials:'same-origin',cache:'no-store',headers:{'Accept':'application/json'}});
+      var data=await window.forensicsResponse(response);
+      root.querySelector('[data-credit-budget]').textContent='Local Forensics budget: '+data.remaining.toLocaleString()+' / '+data.limit.toLocaleString()+' credits remaining · '+data.used.toLocaleString()+' used'+(data.wait_seconds?' · next request in '+data.wait_seconds+'s':'')+(data.next_refill_seconds?' · first credits return in '+data.next_refill_seconds+'s':'');
+      var report=data.reported;
+      root.querySelector('[data-credit-reported]').textContent=report?'Last reported by CCP: '+report.remaining.toLocaleString()+' credits'+(report.limit?' · bucket '+report.limit:'')+' · '+new Date(report.observed_at).toLocaleTimeString()+'. Other requests from the same server may also consume these credits.':'CCP has not reported its remaining balance yet. The local budget keeps a safety margin and counts Forensics calls only.';
+    }catch(error){root.querySelector('[data-credit-budget]').textContent=error.message;}
+    finally{busy=false;}
+  }
+  document.addEventListener('forensics:credits-updated',load);
+  load();setInterval(function(){if(!document.hidden)load();},10000);
+})();
+</script>

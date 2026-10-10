@@ -37,20 +37,43 @@ def main():
 
 def run(lab):
     f = r.f
+    with lab.connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "ALTER TABLE mer.killmails ADD COLUMN ccp_isk_lost numeric DEFAULT 123456789"
+            )
+            cur.execute(
+                "UPDATE web.forensics_cases SET snapshot=snapshot||'{\"ccp_isk_lost\":123456789}'::jsonb"
+            )
     app = FastAPI()
     # Exercise the actual global error normalizer, without importing live config.
-    source = ast.parse((Path(__file__).resolve().parents[1] / "web/app/main.py").read_text())
+    source = ast.parse(
+        (Path(__file__).resolve().parents[1] / "web/app/main.py").read_text()
+    )
     functions = []
     for node in source.body:
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name in {
-            "_is_document_navigation", "_friendly_error_response", "normalize_error_responses"
+            "_is_document_navigation",
+            "_friendly_error_response",
+            "normalize_error_responses",
         }:
             node.decorator_list = []
             functions.append(node)
-    scope = {"Request": Request, "JSONResponse": JSONResponse,
-             "PlainTextResponse": PlainTextResponse, "logger": logging.getLogger(__name__),
-             "templates": f.routes.templates}
-    exec(compile(ast.Module(body=functions, type_ignores=[]), "production_error_handlers", "exec"), scope)
+    scope = {
+        "Request": Request,
+        "JSONResponse": JSONResponse,
+        "PlainTextResponse": PlainTextResponse,
+        "logger": logging.getLogger(__name__),
+        "templates": f.routes.templates,
+    }
+    exec(
+        compile(
+            ast.Module(body=functions, type_ignores=[]),
+            "production_error_handlers",
+            "exec",
+        ),
+        scope,
+    )
     app.middleware("http")(scope["normalize_error_responses"])
     app.include_router(f.routes.router)
     client = TestClient(app)
@@ -94,6 +117,11 @@ def run(lab):
         patch.object(f.routes, "require_login", return_value=user),
         patch.object(f.routes, "get_hidden_killmails_page", return_value=hidden),
         patch.object(r.store, "fetch_ccp", side_effect=fetch),
+        patch.object(
+            f.routes.recovered_service,
+            "post_zkill",
+            return_value=(200, {}, {"status": "success"}),
+        ) as zkill_post,
         sync_playwright() as p,
     ):
         browser = p.chromium.launch(args=["--no-sandbox"])
@@ -108,9 +136,14 @@ def run(lab):
                 return
             path = parts.path + ("?" + parts.query if parts.query else "")
             if parts.path.endswith("/analysis") and state["status_failure"]:
-                route.fulfill(status=502, content_type="text/html", body="<h1>Bad gateway</h1>")
+                route.fulfill(
+                    status=502, content_type="text/html", body="<h1>Bad gateway</h1>"
+                )
                 return
-            headers = {"Host": "forensics.test", "Accept": req.headers.get("accept", "*/*")}
+            headers = {
+                "Host": "forensics.test",
+                "Accept": req.headers.get("accept", "*/*"),
+            }
             if req.method == "POST":
                 headers.update(
                     {
@@ -134,7 +167,10 @@ def run(lab):
         with patch.object(r.store, "ready", return_value=False):
             plain = client.get("/admin/killmail-forensics/analysis")
             assert plain.status_code == 503 and plain.text == "Erreur 503"
-            response = client.get("/admin/killmail-forensics/analysis", headers={"Accept": "application/json"})
+            response = client.get(
+                "/admin/killmail-forensics/analysis",
+                headers={"Accept": "application/json"},
+            )
             page.goto("http://forensics.test/admin/killmail-forensics")
             expect(page.locator("[data-analysis-error]")).to_contain_text("Admin Jobs")
         assert response.status_code == 503
@@ -149,12 +185,16 @@ def run(lab):
         state["status_failure"] = False
         expect(page.locator("[data-analysis-error]")).to_be_hidden(timeout=15000)
         expect(page.locator("[data-case]")).to_have_count(1)
+        expect(page.locator("[data-credit-budget]")).to_contain_text("3,300 / 3,300")
+        expect(page.locator("[data-case]")).to_contain_text("123,456,789 ISK")
         expect(page.locator("[data-forecast]")).to_contain_text("trials")
         assert "conditional" in page.locator("[data-forecast]").get_attribute("title")
-        expect(page.locator('[data-case] img.killmail-type-icon')).to_have_count(2)
+        expect(page.locator("[data-case] img.killmail-type-icon")).to_have_count(2)
         expect(page.locator('[data-case] a[href="/corporation/100"]')).to_have_count(1)
         expect(page.locator('[data-case] a[href="/system/30000142"]')).to_have_count(1)
-        assert "forensics-difficulty-" in page.locator('[data-case]').get_attribute('class')
+        assert "forensics-difficulty-" in page.locator("[data-case]").get_attribute(
+            "class"
+        )
         # All pilot flags must concern the same candidate in the chosen role.
         evidence = page.locator('[data-evidence-filter][value="same_ship_local"]')
         evidence.locator("xpath=ancestor::details").locator("summary").click()
@@ -236,6 +276,35 @@ def run(lab):
         assert state["http_calls"] == 3
         page.get_by_role("link", name="Recovered killmails", exact=True).click()
         expect(page.locator("#recovered-table")).to_contain_text(correct)
+        expect(page.locator("#recovered-table")).to_contain_text("123.46m ISK")
+        expect(page.locator("#recovered-table")).to_contain_text(
+            "2 hash tests to recover"
+        )
+        expect(page.locator("#recovered-table img.killmail-type-icon")).to_have_count(1)
+        zkill_post.assert_not_called()
+        # Shared recovered filters apply to confirmed attackers, and reset correctly.
+        page.evaluate(
+            "document.querySelector('[data-killboard-filters]').dispatchEvent(new CustomEvent('killboard:apply',{bubbles:true,detail:{params:new URLSearchParams({'builder_entity_include':'victim:character:999'})}}))"
+        )
+        expect(page.locator("[data-recovered-kill]")).to_have_count(0)
+        page.evaluate(
+            "document.querySelector('[data-killboard-filters]').dispatchEvent(new CustomEvent('killboard:apply',{bubbles:true,detail:{params:new URLSearchParams()}}))"
+        )
+        expect(page.locator("[data-recovered-kill]")).to_have_count(1)
+        page.locator("#recovered-select-displayed").click()
+        expect(page.locator("#recovered-selected")).to_have_text("1 selected")
+        page.locator("#recovered-send-selected").click()
+        expect(page.locator("[data-publication-state]")).to_have_text(
+            "Accepted by zKillboard"
+        )
+        zkill_post.assert_called_once_with(1001, correct)
+        expect(page.locator("[data-recovered-submit]")).to_be_disabled()
+        page.reload()
+        expect(page.locator("[data-publication-state]")).to_have_text(
+            "Accepted by zKillboard"
+        )
+        zkill_post.assert_called_once()
+
         page.get_by_role("link", name="1001", exact=True).click()
         expect(
             page.get_by_role("heading", name="Recovered killmail 1001")

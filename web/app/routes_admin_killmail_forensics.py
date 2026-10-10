@@ -9,6 +9,7 @@ from psycopg2.errors import QueryCanceled
 from pydantic import BaseModel, Field, StrictInt
 
 from . import forensics_store, forensics_batch
+from . import forensics_recovered as recovered_service
 from .auth import has_permission, require_login, require_permission_or_redirect
 from .entities import EntityError, get_hidden_killmails_page
 from .forensics_forecast import EVIDENCE_FILTERS
@@ -156,7 +157,9 @@ def _workspace_access(request, write=False):
     except Exception:
         logger.exception("Forensics setup check failed")
         return JSONResponse(
-            {"error": "Forensics setup could not be checked. Check the server logs and retry."},
+            {
+                "error": "Forensics setup could not be checked. Check the server logs and retry."
+            },
             status_code=500,
         )
     if not ready:
@@ -296,8 +299,60 @@ def forensics_recovered(request: Request):
             title="EVEOSINT - Recovered killmails",
             active_module="admin",
             active_menu_key="admin.killmail_forensics",
-        ),
+        )
+        | {"killboard_search_url": "/admin/killmail-forensics/recovered/search"},
     )
+
+
+@router.get("/admin/killmail-forensics/recovered/data")
+def recovered_data(request: Request, page: int = Query(1, ge=1), publication: str = ""):
+    denied = _workspace_access(request)
+    if denied is not None:
+        return denied
+
+    def result():
+        data = recovered_service.page(
+            killmail_filters_from_request(request), page, publication
+        )
+        html = templates.env.get_template("forensics_recovered_rows.html").render(
+            **data
+        )
+        return {
+            "html": html,
+            "count": len(data["kills"]),
+            "has_next": data["has_next"],
+            "publishing_ready": data["publishing_ready"],
+        }
+
+    return _workspace_result(result)
+
+
+@router.get("/admin/killmail-forensics/recovered/search")
+def recovered_search(request: Request, kind: str, q: str = "", limit: int = 15):
+    denied = _data_access_error(request)
+    if denied is not None:
+        return denied
+    return _workspace_result(
+        lambda: {"results": search_killboard_filters(kind, q, limit)}
+    )
+
+
+@router.post("/admin/killmail-forensics/recovered/{kill_id}/submit")
+def recovered_submit(request: Request, kill_id: int):
+    denied = _workspace_access(request, True)
+    if denied is not None:
+        return denied
+    return _workspace_result(
+        lambda: recovered_service.submit(kill_id, require_login(request)["id"])
+    )
+
+
+@router.get("/admin/killmail-forensics/credits")
+def forensics_credits(request: Request):
+    denied = _workspace_access(request)
+    if denied is not None:
+        return denied
+    return _workspace_result(forensics_store.request_budget)
 
 
 @router.get(

@@ -421,6 +421,33 @@ def refresh_case(case_id):
         return _save_choices(conn, case, choices)
 
 
+def request_budget():
+    """Local sliding budget and the last CCP report, without an extra ESI call."""
+    with connection() as conn:
+        used = execute(
+            conn,
+            """SELECT COALESCE(SUM(cost),0) AS used,
+            EXTRACT(EPOCH FROM MIN(reserved_at)+INTERVAL '15 minutes'-NOW()) AS next_refill
+            FROM web.forensics_esi_requests WHERE reserved_at>NOW()-INTERVAL '15 minutes'""",
+            one=True,
+        )
+        gate = execute(
+            conn,
+            """SELECT to_jsonb(g)->'rate_limit' AS reported,
+            GREATEST(0,EXTRACT(EPOCH FROM blocked_until-NOW())) AS wait
+            FROM web.forensics_esi_gate g WHERE singleton=TRUE""",
+            one=True,
+        )
+        return {
+            "limit": 3300,
+            "used": int(used["used"]),
+            "remaining": max(0, 3300 - int(used["used"])),
+            "next_refill_seconds": math.ceil(used["next_refill"] or 0),
+            "wait_seconds": math.ceil(gate["wait"]),
+            "reported": gate["reported"],
+        }
+
+
 def reserve_request():
     """One global PostgreSQL gate across web workers, plus a sliding token ledger."""
     with connection() as conn:
@@ -495,15 +522,45 @@ def retry_seconds(headers, status):
 def finish_request(request_id, status, headers):
     delay = retry_seconds(headers, status)
     with connection() as conn:
+        lower_headers = {str(k).lower(): str(v) for k, v in headers.items()}
+        gate_columns = execute(
+            conn,
+            "SELECT to_jsonb(g) AS fields FROM web.forensics_esi_gate g WHERE singleton=TRUE",
+            one=True,
+        )["fields"]
+        if "rate_limit" in gate_columns and "x-ratelimit-remaining" in lower_headers:
+            try:
+                reported = {
+                    "remaining": max(0, int(lower_headers["x-ratelimit-remaining"])),
+                    "limit": lower_headers.get("x-ratelimit-limit"),
+                    "observed_at": datetime.now(timezone.utc).isoformat(),
+                }
+            except (ValueError, TypeError):
+                reported = None
+            execute(
+                conn,
+                "UPDATE web.forensics_esi_gate SET rate_limit=%s WHERE singleton=TRUE",
+                (Json(reported),),
+            )
+        cost = (
+            2
+            if 200 <= status < 300
+            else (
+                1
+                if 300 <= status < 400
+                else (5 if 400 <= status < 500 and status not in (420, 429) else 0)
+            )
+        )
+        try:
+            reported_cost = int(lower_headers.get("x-ratelimit-used", cost))
+            if 0 <= reported_cost <= 3300:
+                cost = reported_cost
+        except (ValueError, TypeError):
+            pass
         execute(
             conn,
             "UPDATE web.forensics_esi_requests SET cost=%s WHERE id=%s",
-            (
-                2
-                if 200 <= status < 300
-                else (5 if 400 <= status < 500 and status not in (420, 429) else 0),
-                request_id,
-            ),
+            (cost, request_id),
         )
         if delay:
             execute(
@@ -738,7 +795,7 @@ def recovered_detail(kill_id):
     with connection() as conn:
         found = execute(
             conn,
-            """SELECT r.*,c.snapshot FROM web.forensics_recovered r
+            """SELECT r.*,c.snapshot,(SELECT COUNT(*) FROM web.forensics_attempts a WHERE a.case_id=r.case_id) AS hash_tests FROM web.forensics_recovered r
             JOIN web.forensics_cases c ON c.id=r.case_id WHERE killmail_id=%s""",
             (kill_id,),
         )

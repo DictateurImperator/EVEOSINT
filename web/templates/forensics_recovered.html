@@ -1,25 +1,61 @@
 {% extends "base.html" %}
 {% block content %}
-<div class="d-flex justify-content-between mb-4"><h1 class="h3">Recovered killmails</h1><a class="btn btn-outline-light" href="/admin/killmail-forensics">Back to investigations</a></div>
-<p class="muted-line">Hashes confirmed by CCP and checked against the corresponding MER loss.</p>
-<div class="content-card p-3"><div role="alert" id="recovered-error"></div><div class="table-responsive" id="recovered-table"></div><button type="button" class="btn btn-outline-light" id="recovered-prev" disabled>Previous</button> <button type="button" class="btn btn-outline-light" id="recovered-next" disabled>Next</button></div>
+{% include "killmail_table_styles.html" %}
 {% include "forensics_api_script.html" %}
+<div class="d-flex justify-content-between mb-4"><h1 class="h3">Recovered killmails</h1><a class="btn btn-outline-light" href="/admin/killmail-forensics">Back to investigations</a></div>
+<p class="muted-line">Hashes confirmed by CCP and checked against the corresponding MER loss. Filter confirmed victims and all attackers before choosing which kills to publish.</p>
+{% include "forensics_credits.html" %}
+{% include "killboard_filters.html" %}
+<div class="content-card p-3 mb-3 d-flex flex-wrap align-items-center gap-2">
+  <label class="small">zKillboard status <select class="form-select form-select-sm" id="recovered-publication"><option value="">All</option><option value="pending">Not submitted</option><option value="accepted">Accepted</option><option value="failed">Failed</option><option value="uncertain">Uncertain</option></select></label>
+  <span class="small ms-auto" id="recovered-selected">0 selected</span>
+  <button type="button" class="btn btn-sm btn-outline-info" id="recovered-select-displayed">Select displayed</button>
+  <button type="button" class="btn btn-sm btn-primary" id="recovered-send-selected" disabled>Send selected to zKillboard</button>
+  <button type="button" class="btn btn-sm btn-outline-danger" id="recovered-stop" hidden>Stop sending</button>
+</div>
+<div class="content-card p-3"><div role="alert" id="recovered-error" class="text-danger"></div><div role="status" aria-live="polite" id="recovered-status" class="mb-2 small"></div><div id="recovered-setup" class="text-warning mb-2" hidden>To enable publishing, run “Forensics · Create investigation tables (run once)” in Admin Jobs after deploying this version.</div><div class="table-responsive" id="recovered-table"></div><div class="d-flex gap-2 mt-3"><button type="button" class="btn btn-sm btn-outline-light" id="recovered-prev" disabled>Previous</button><button type="button" class="btn btn-sm btn-outline-light" id="recovered-next" disabled>Next</button></div></div>
 <script>
 (function(){
-  var page=1;
-  function esc(value){return String(value==null?'':value).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
-  async function load(){
-    try{
-      var response=await fetch('/admin/killmail-forensics/cases?recovered=true&sort=date&page='+page,{credentials:'same-origin',cache:'no-store',headers:{'Accept':'application/json'}});
-      var data=await window.forensicsResponse(response);if(!response.ok)throw new Error(data.error||'Could not load recovered kills.');
-      document.getElementById('recovered-error').textContent='';
-      var rows=data.cases.map(function(c){return '<tr><td><a href="/admin/killmail-forensics/recovered/'+c.recovered_id+'">'+c.recovered_id+'</a></td><td>'+esc(c.kill_datetime)+'</td><td>'+esc(c.snapshot.victim_ship_type_name||'Type '+c.snapshot.victim_ship_type_id)+'</td><td><code>'+esc(c.recovered_hash)+'</code></td><td>MER '+esc(c.source_month)+' · row '+c.source_row+'</td></tr>';}).join('');
-      document.getElementById('recovered-table').innerHTML='<table class="table"><thead><tr><th>CCP kill ID</th><th>Kill time (UTC)</th><th>Victim ship</th><th>Confirmed hash</th><th>MER reference</th></tr></thead><tbody>'+(rows||'<tr><td colspan="5">No recovered killmails yet.</td></tr>')+'</tbody></table>';
-      document.getElementById('recovered-prev').disabled=page===1;document.getElementById('recovered-next').disabled=data.cases.length<50;
-    }catch(error){document.getElementById('recovered-error').textContent=error.message;}
+  var page=1,filters=new URLSearchParams(),generation=0,sending=false,stop=false,publishingReady=false,selected=new Set();
+  var table=document.getElementById('recovered-table'),errorBox=document.getElementById('recovered-error'),status=document.getElementById('recovered-status');
+  var send=document.getElementById('recovered-send-selected'),stopButton=document.getElementById('recovered-stop');
+  function selection(){
+    table.querySelectorAll('[data-recovered-select]').forEach(function(box){box.checked=selected.has(Number(box.dataset.recoveredSelect));box.disabled=sending||!publishingReady||box.closest('[data-recovered-kill]').querySelector('[data-publication-state]').textContent==='Accepted by zKillboard';});
+    document.getElementById('recovered-selected').textContent=selected.size+' selected';
+    send.disabled=sending||!publishingReady||!selected.size;
+    table.querySelectorAll('[data-recovered-submit]').forEach(function(button){button.disabled=sending||!publishingReady||button.closest('[data-recovered-kill]').querySelector('[data-publication-state]').textContent==='Accepted by zKillboard';});
   }
-  document.getElementById('recovered-prev').onclick=function(){page--;load();};
-  document.getElementById('recovered-next').onclick=function(){page++;load();};load();
+  async function load(){
+    var current=++generation,params=new URLSearchParams(filters);params.set('page',page);params.set('publication',document.getElementById('recovered-publication').value);
+    try{
+      var response=await fetch('/admin/killmail-forensics/recovered/data?'+params.toString(),{credentials:'same-origin',cache:'no-store',headers:{'Accept':'application/json'}});
+      var data=await window.forensicsResponse(response);if(current!==generation)return;
+      errorBox.textContent='';publishingReady=data.publishing_ready;table.innerHTML=data.html;
+      document.getElementById('recovered-setup').hidden=publishingReady;
+      document.getElementById('recovered-prev').disabled=page===1;document.getElementById('recovered-next').disabled=!data.has_next;selection();
+    }catch(error){if(current===generation)errorBox.textContent=error.message;}
+  }
+  async function publish(ids){
+    if(sending)return;sending=true;stop=false;stopButton.hidden=false;selection();
+    try{
+      for(var i=0;i<ids.length&&!stop;i++){
+        status.textContent='Sending '+(i+1)+' of '+ids.length+' to zKillboard…';
+        var response=await fetch('/admin/killmail-forensics/recovered/'+ids[i]+'/submit',{method:'POST',credentials:'same-origin',headers:{'Accept':'application/json','Content-Type':'application/json'},body:'{}'});
+        var result=await window.forensicsResponse(response);status.textContent=result.message;
+        if(!result.accepted){if(result.retry_after)status.textContent+=' Retry in '+result.retry_after+'s.';break;}
+        selected.delete(ids[i]);await load();
+        if(i+1<ids.length&&!stop)await new Promise(function(resolve){setTimeout(resolve,2100);});
+      }
+    }catch(error){status.textContent=error.message;}
+    finally{sending=false;stopButton.hidden=true;await load();selection();}
+  }
+  document.addEventListener('killboard:apply',function(event){filters=new URLSearchParams(event.detail.params);page=1;load();});
+  table.addEventListener('change',function(event){var box=event.target.closest('[data-recovered-select]');if(!box)return;var id=Number(box.dataset.recoveredSelect);if(box.checked)selected.add(id);else selected.delete(id);selection();});
+  table.addEventListener('click',function(event){var button=event.target.closest('[data-recovered-submit]');if(button)publish([Number(button.dataset.recoveredSubmit)]);});
+  document.getElementById('recovered-select-displayed').onclick=function(){if(sending)return;table.querySelectorAll('[data-recovered-select]:not(:disabled)').forEach(function(box){selected.add(Number(box.dataset.recoveredSelect));});selection();};
+  send.onclick=function(){publish(Array.from(selected));};stopButton.onclick=function(){stop=true;status.textContent='Stopping after the current submission.';};
+  document.getElementById('recovered-publication').onchange=function(){page=1;load();};
+  document.getElementById('recovered-prev').onclick=function(){page--;load();};document.getElementById('recovered-next').onclick=function(){page++;load();};load();
 })();
 </script>
 {% endblock %}

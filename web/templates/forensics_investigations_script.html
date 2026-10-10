@@ -37,6 +37,11 @@
     var loc=(c.display||{}).location||{},labels={system:'S',constellation:'C',region:'R'};
     return '<div class="small muted-line mb-2">'+esc(c.kill_datetime.replace('T',' ').replace(/\+00:00$/,'').replace(/Z$/,''))+' UTC</div>'+Object.keys(labels).map(function(key){var e=loc[key];return e?'<div class="killmail-location-row"><span class="killmail-location-icon">'+labels[key]+'</span>'+entity(e,false)+'</div>':'';}).join('');
   }
+  function merValue(c) {
+    var value=c.snapshot.ccp_isk_lost;
+    if(value===null||value===undefined)return '<div class="small muted-line">MER value unavailable</div>';
+    return '<div class="killmail-isk" title="Estimated loss value supplied by the MER">'+esc(Number(value).toLocaleString(undefined,{maximumFractionDigits:0}))+' ISK · MER</div>';
+  }
   function difficulty(c) {
     var f=c.forecast;if(!f||f.typical_trials===null||f.assessment==='blocked'||f.assessment==='exhausted')return 'forensics-difficulty-hard';
     var cost=f.upper_trials;
@@ -77,7 +82,7 @@
       return '<tr data-case="'+c.id+'" class="'+difficulty(c)+'"><td><strong>'+inferred+'</strong>'+picker(c,'ids','ids')+
         '<div class="muted-line small mt-2">MER '+esc(c.source_month)+' · row '+c.source_row+'</div>'+ 
         (h.ids.truncated?'<div class="text-warning small">'+h.ids.total+' IDs possible; showing '+h.ids.candidates.length+'. Add more IDs manually.</div>':'')+'</td>'+
-        '<td class="killmail-location">'+location(c)+'</td>'+
+        '<td class="killmail-location">'+location(c)+merValue(c)+'</td>'+
         '<td class="forensics-side">'+combatant(c,'victim')+picker(c,'victim','victims')+'</td><td class="forensics-side">'+combatant(c,'killer')+picker(c,'attacker','attackers')+'</td>'+
         '<td>'+estimate(c)+'</td><td><strong data-remaining>'+(c.status==='needs_input'?'Not estimated':c.estimated_attempts)+'</strong><div class="small muted-line">'+c.attempted+' stored tests</div><div class="badge text-bg-secondary">'+esc(c.status)+'</div>'+
         (h.warnings.length?'<details class="small text-warning"><summary>Evidence limits</summary>'+h.warnings.map(esc).join('<br>')+'</details>':'')+'</td>'+
@@ -127,6 +132,7 @@
     try {
       while(token===runToken) {
         var data=await api('cases/'+id+'/validate',{});
+        document.dispatchEvent(new CustomEvent('forensics:credits-updated'));
         await load();
         if(token!==runToken) break;
         status.textContent=data.neighbor_refresh_error?'Killmail confirmed. Neighbor queueing failed; see job/server logs.':data.message || (data.recovered?'Killmail confirmed by CCP. See Recovered killmails.':'Hypothesis checked.');

@@ -21,6 +21,9 @@
   <a class="btn btn-outline-info" href="/admin/killmail-forensics/recovered">Recovered killmails</a>
 </div>
 
+{% include "forensics_api_script.html" %}
+{% include "forensics_credits.html" %}
+
 <section class="content-card p-3 mb-4" id="forensics-batch" aria-labelledby="forensics-batch-title">
   <h2 class="h5" id="forensics-batch-title">Analyze all hidden kills</h2>
   <p class="muted-line small">Build estimates in the background for every hidden MER loss. Leave both dates empty for all available exports. These dates define the batch scope; the browsing filters below apply to individual selection. You may close this tab. Saved analyses and tests are kept when resuming.</p>
@@ -96,7 +99,6 @@
 </section>
 
 
-{% include "forensics_api_script.html" %}
 {% include "forensics_investigations_script.html" %}
 {% include "forensics_batch_script.html" %}
 {% include "admin_killmail_forensics_script.html" %}
