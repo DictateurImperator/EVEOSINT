@@ -32,6 +32,10 @@
       </button>
     </form>
 
+    <form method="post" action="/admin/mer/import-economy">
+      <button id="economy-import-button" type="submit" class="btn btn-outline-success">Import economic data</button>
+    </form>
+
     <form method="post" action="/admin/mer/resolve-entity-ids">
       <button type="submit" class="btn btn-outline-warning">
         Resolve entity IDs
@@ -45,6 +49,41 @@
     </form>
   </div>
 </div>
+
+{% if success == "economy_started" %}
+<div class="alert alert-info">Economic import started in the background. Progress updates below automatically.</div>
+{% endif %}
+{% if error in ["economy_busy", "economy_failed"] %}
+<div class="alert alert-warning">{{ "Economic import is already running." if error == "economy_busy" else "Unable to start the economic import. Check the job configuration and log." }}</div>
+{% endif %}
+<section class="content-card p-3 mb-3">
+  <div class="d-flex justify-content-between align-items-center gap-2">
+    <strong>Economic data import</strong>
+    <a href="/admin/mer/economy-log" target="_blank" rel="noopener" class="btn btn-sm btn-outline-secondary">Job log</a>
+  </div>
+  <div class="muted-line small mt-1">Import regional activity, ISK flows and economic indicators from downloaded MER archives. Tables are created on the first run; unchanged archives are skipped.</div>
+  <div id="economy-import-status" class="mt-2" role="status" aria-live="polite">Checking status…</div>
+</section>
+<script>
+(() => {
+  const output = document.getElementById('economy-import-status');
+  const button = document.getElementById('economy-import-button');
+  async function refresh() {
+    try {
+      const response = await fetch('/admin/mer/economy-status', {headers: {'Accept': 'application/json'}});
+      if (!response.ok || !(response.headers.get('content-type') || '').includes('application/json')) throw new Error('Status unavailable');
+      const data = await response.json();
+      button.disabled = data.running;
+      const p = data.progress;
+      if (!p) { output.textContent = 'No economic import started yet.'; return; }
+      const names = {starting: 'Starting', running: 'Running', completed: 'Completed', failed: 'Completed with errors — see job log', interrupted: 'Interrupted — see job log'};
+      output.textContent = (names[p.phase] || p.phase) + (p.total !== undefined ? ` · Archives: ${p.processed || 0} / ${p.total} · Skipped: ${p.skipped || 0} · Facts read: ${Number(p.facts || 0).toLocaleString()} · Errors: ${p.failed || 0}` : '') + (p.month ? ` · Current report: ${p.month.slice(0, 7)}` : '');
+    } catch (error) { output.textContent = 'Status unavailable. Open the job log for details.'; }
+  }
+  refresh();
+  setInterval(refresh, 3000);
+})();
+</script>
 
 {% if success == "scan_done" %}
 <div class="alert alert-success py-2">

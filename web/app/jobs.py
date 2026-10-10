@@ -153,7 +153,7 @@ def _normalize_job(raw_job):
     log_path = raw_job.get("log_path")
     enabled = bool(raw_job.get("enabled", True))
 
-    if job_type not in {"sde", "killmails", "recent_kill_pilots_affiliation", "character_skill_inference", "population_alliances_init", "population_alliances_daily", "sovereignty_esi", "killmail_forensics_setup", "killmail_forensics_analysis", "killmail_archive_refresh"}:
+    if job_type not in {"sde", "killmails", "recent_kill_pilots_affiliation", "character_skill_inference", "population_alliances_init", "population_alliances_daily", "sovereignty_esi", "killmail_forensics_setup", "killmail_forensics_analysis", "killmail_archive_refresh", "mer_economy"}:
         raise JobError(f"job_type_invalid:{key}")
 
     if not isinstance(command, list) or not command:
@@ -275,7 +275,18 @@ def load_jobs_config():
             "enabled": True,
         }))
 
+    if not any(job["key"] == "import_mer_economy" for job in jobs):
+        jobs.append(_normalize_job({
+            "key": "import_mer_economy",
+            "label": "MER · Import economic data",
+            "type": "mer_economy",
+            "command": [sys.executable, str(Path(__file__).resolve().parents[2] / "scripts/import_mer_economy.py")],
+            "log_path": str(Path.home() / "eveosint/data/logs/mer_economy_import.log"),
+            "enabled": True,
+        }))
+
     allowed_keys = {
+        "import_mer_economy",
         "sync_sde",
         "sync_killmails",
         "refresh_killmail_archives",
@@ -615,3 +626,26 @@ def read_killmail_archive_errors(limit=20):
     if current:
         blocks.append("".join(current))
     return "\n".join(blocks) or "No errors recorded in the archive refresh log."
+
+
+def run_mer_economy_import_job():
+    job = get_job("import_mer_economy")
+    if job["type"] != "mer_economy":
+        raise JobError("job_type_mismatch:import_mer_economy")
+    return _start_process(job, job["command"])
+
+
+def read_mer_economy_progress():
+    runtime = _read_runtime_status("import_mer_economy")
+    path = Path.home() / "eveosint/data/mer/economy_progress.json"
+    try:
+        progress = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(progress, dict):
+            progress = None
+    except (OSError, ValueError):
+        progress = None
+    if runtime["running"] and (not progress or progress.get("pid") != runtime["pid"]):
+        progress = {"phase": "starting"}
+    elif progress and not runtime["running"] and progress.get("phase") not in {"completed", "failed"}:
+        progress = dict(progress, phase="interrupted")
+    return {"running": runtime["running"], "progress": progress}

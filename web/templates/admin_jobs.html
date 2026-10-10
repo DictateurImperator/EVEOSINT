@@ -90,6 +90,9 @@
           <form method="post" action="/admin/jobs/killmail-forensics-setup/run" class="mb-3">
             <button class="btn btn-primary" type="submit" {% if job.running or not job.enabled %}disabled{% endif %}>Create Forensics tables</button>
           </form>
+        {% elif job.type == "mer_economy" %}
+          <p class="muted-line small">Import economic data from downloaded MER archives. Unchanged archives are skipped.</p>
+          <a class="btn btn-outline-primary mb-3" href="/admin/mer">Open Admin MER</a>
         {% elif job.type == "killmail_archive_refresh" %}
           <p class="muted-line small">Check previously imported days against EVE Ref archive updates. Import missing killmails and match the affected MER months. Leave dates empty to check all imported history. Runs only when started manually.</p>
           <form method="post" action="/admin/jobs/killmail-archives/refresh" class="mb-3">

@@ -127,3 +127,9 @@ regional/WH scopes, signed daily versus monthly flows, historical aliases,
 encoded chart series, ignored annotations, preserved unknown data, no kill-file
 reads, deduplication, newer-report precedence, transactional rollback, calendar
 comparisons and daily volatility.
+
+## Admin MER
+
+Use **Import economic data** in Admin MER to start the detached, manual job. It reads already downloaded ZIPs; use **Download missing ZIPs** first when needed. The page polls the progress every three seconds and provides a job log. Regional and global tables are created automatically. Successful archive rows show **imported** in the Economic data column after refreshing the catalog.
+
+The job also appears in Admin Jobs. No scheduled import is installed. Progress is written atomically to `data/mer/economy_progress.json`; logs append to `data/logs/mer_economy_import.log`. `--dry-run` does not write progress or connect to PostgreSQL.

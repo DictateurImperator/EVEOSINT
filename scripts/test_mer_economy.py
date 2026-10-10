@@ -77,6 +77,7 @@ class ParserTests(unittest.TestCase):
         self.assertEqual(facts[1][6], -20)
         daily, _ = economy.normalized_row("isk_flows", {"history_date": "2026-08-01", "entry_name": "Insurance", "entry_id": "-1.0", "entry_sink_value": "-2", "entry_faucet_value": "10"}, MONTH, {})
         self.assertEqual(daily[0][2], "day")
+        self.assertEqual(daily[0][5]["entry_id"], "-1")
 
     def test_moon_units_and_old_metenox_spelling(self):
         row = {"region_name": "Derelik", "source": "metanox_mining", "quantity": "10"}
@@ -155,6 +156,24 @@ class PostgreSQLTests(unittest.TestCase):
             result = cur.fetchone()[0]
         self.conn.rollback()
         return result
+
+    def test_manual_cli_persists_progress_and_retry_status(self):
+        import psycopg2
+        progress_path = Path(self.tmp.name) / "progress.json"
+        def connection(_config):
+            return psycopg2.connect(dbname="postgres", user="codex", host=os.environ["EVEOSINT_FORENSICS_TEST_SOCKET"], port=55444)
+        argv = ["--archive", str(self.path), "--progress-file", str(progress_path)]
+        archive(self.path, {"MoneySupply.csv": [["date", "total"], ["2026-08-01", "10"]]})
+        with patch.object(economy, "connect", side_effect=connection), patch.object(economy, "load_regions", return_value={}):
+            self.assertEqual(economy.main(argv), 0)
+            progress = json.loads(progress_path.read_text())
+            self.assertEqual((progress["phase"], progress["processed"], progress["facts"]), ("completed", 1, 1))
+            self.assertEqual(economy.main(argv), 0)
+            self.assertEqual(json.loads(progress_path.read_text())["skipped"], 1)
+            archive(self.path, {"MoneySupply.csv": [["date", "total"], ["2026-08-01", "broken"]]})
+            self.assertEqual(economy.main(argv), 1)
+            progress = json.loads(progress_path.read_text())
+            self.assertEqual((progress["phase"], progress["processed"], progress["failed"]), ("failed", 1, 1))
 
     def test_import_deduplication_latest_report_and_skip(self):
         members = {"MoneySupply.csv": [["date", "total"], ["2026-07-01", "10"]],

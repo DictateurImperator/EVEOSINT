@@ -13,6 +13,7 @@ import hashlib
 import io
 import json
 import logging
+import os
 import re
 import struct
 import sys
@@ -53,7 +54,7 @@ DIMENSIONS = {
     "locationmetagroup": "space_group", "securityband": "security_band",
     "primaryindex": "primary_index", "indexname": "primary_index", "subindex": "sub_index",
     "source": "source", "moonclass": "moon_class", "keytext": "entry_name",
-    "entryname": "entry_name", "category": "category", "groupid": "group_id",
+    "entryname": "entry_name", "entryid": "entry_id", "category": "category", "groupid": "group_id",
     "groupname": "group_name", "itemcategory": "item_category", "importorexport": "direction",
 }
 # metric, unit. Different monthly/regional moon fields have different units.
@@ -130,6 +131,11 @@ def dimensions(row):
         result["primary_index"] = "Consumer Price Index"
     if result.get("source") == "metanox_mining":
         result["source"] = "metenox_mining"
+    if result.get("entry_id"):
+        identifier = number(result["entry_id"])
+        if identifier is None or identifier != identifier.to_integral_value():
+            raise ValueError("Invalid flow category ID")
+        result["entry_id"] = str(int(identifier))
     return result
 
 
@@ -359,6 +365,13 @@ def month_arg(value):
     return result
 
 
+def write_progress(path, progress):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(path.name + f".{os.getpid()}.tmp")
+    temporary.write_text(json.dumps(progress), encoding="utf-8")
+    temporary.replace(path)
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--archive-dir", type=Path, default=Path.home() / "eveosint/data/mer/archive")
@@ -370,6 +383,7 @@ def main(argv=None):
     parser.add_argument("--dry-run", action="store_true", help="Parse archives without connecting to PostgreSQL")
     parser.add_argument("--schema-only", action="store_true")
     parser.add_argument("--force", action="store_true")
+    parser.add_argument("--progress-file", type=Path, default=Path.home() / "eveosint/data/mer/economy_progress.json")
     args = parser.parse_args(argv)
     if args.month and (not args.archive or len(args.archive) != 1):
         parser.error("--month requires exactly one --archive")
@@ -390,6 +404,7 @@ def main(argv=None):
     conn = None
     totals = Counter()
     failed = 0
+    progress = {"pid": os.getpid(), "phase": "running", "total": len(archives), "processed": 0, "failed": 0, "skipped": 0, "facts": 0, "month": None}
     try:
         regions = {}
         if not args.dry_run:
@@ -406,6 +421,9 @@ def main(argv=None):
             regions = load_regions(conn)
             conn.commit()
         for month, path in archives:
+            progress["month"] = month.isoformat()
+            if conn is not None:
+                write_progress(args.progress_file, progress)
             try:
                 LOG.info("ARCHIVE_START month=%s file=%s dry_run=%s", month, path.name, args.dry_run)
                 if conn is None:
@@ -415,11 +433,20 @@ def main(argv=None):
                 else:
                     stats = import_archive(conn, path, month, regions, args.force)
                 totals.update(stats)
+                progress["skipped"] += stats.get("skipped", 0)
+                progress["facts"] = totals.get("facts", 0)
                 LOG.info("ARCHIVE_DONE month=%s %s", month, json.dumps(dict(stats), sort_keys=True))
             except Exception:
                 failed += 1
                 LOG.exception("ARCHIVE_FAILED month=%s", month)
+            progress["processed"] += 1
+            progress["failed"] = failed
+            if conn is not None:
+                write_progress(args.progress_file, progress)
         LOG.info("DONE archives=%s failed=%s totals=%s", len(archives), failed, json.dumps(dict(totals)))
+        progress.update(phase="failed" if failed else "completed", month=None)
+        if conn is not None:
+            write_progress(args.progress_file, progress)
         return 1 if failed else 0
     finally:
         if conn is not None:

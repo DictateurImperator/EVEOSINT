@@ -1,13 +1,34 @@
 from datetime import datetime
 
 from fastapi import APIRouter, BackgroundTasks, Request
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import (
+    HTMLResponse,
+    JSONResponse,
+    PlainTextResponse,
+    RedirectResponse,
+)
 
 from .audit import audit_log
 from .auth import require_login, require_permission_or_redirect
+from .jobs import (
+    JobError,
+    read_job_log,
+    read_mer_economy_progress,
+    run_mer_economy_import_job,
+)
 from .layout import app_context
 from .main_objects import templates
-from .mer import analyze_mer_archives, download_mer_archives, enrich_mer_entity_ids, get_mer_catalog_summary, import_mer_kill_dumps, list_mer_catalog, match_mer_killmails, reset_mer_downloads, scan_all_mer
+from .mer import (
+    analyze_mer_archives,
+    download_mer_archives,
+    enrich_mer_entity_ids,
+    get_mer_catalog_summary,
+    import_mer_kill_dumps,
+    list_mer_catalog,
+    match_mer_killmails,
+    reset_mer_downloads,
+    scan_all_mer,
+)
 
 router = APIRouter()
 
@@ -372,3 +393,40 @@ def admin_mer_match_killmails(
         url="/admin/mer?kill_match_started=1",
         status_code=302,
     )
+
+
+@router.post("/admin/mer/import-economy")
+def admin_mer_import_economy(request: Request):
+    user = require_login(request)
+    redirect = require_permission_or_redirect(user, "admin.mer.view")
+    if redirect:
+        return redirect
+    try:
+        run_mer_economy_import_job()
+    except JobError as exc:
+        error = "economy_busy" if str(exc).startswith("job_already_running:") else "economy_failed"
+        return RedirectResponse(url=f"/admin/mer?error={error}", status_code=302)
+    audit_log(request, "admin_mer_import_economy", user_id=user["id"], username=user["username"],
+              target_type="mer", target_id="economy", details="Manual import from local archives")
+    return RedirectResponse(url="/admin/mer?success=economy_started", status_code=302)
+
+
+@router.get("/admin/mer/economy-status")
+def admin_mer_economy_status(request: Request):
+    user = require_login(request)
+    redirect = require_permission_or_redirect(user, "admin.mer.view")
+    if redirect:
+        return redirect
+    return JSONResponse(read_mer_economy_progress(), headers={"Cache-Control": "no-store"})
+
+
+@router.get("/admin/mer/economy-log", response_class=PlainTextResponse)
+def admin_mer_economy_log(request: Request):
+    user = require_login(request)
+    redirect = require_permission_or_redirect(user, "admin.mer.view")
+    if redirect:
+        return redirect
+    try:
+        return PlainTextResponse(read_job_log("import_mer_economy", lines=250))
+    except JobError:
+        return PlainTextResponse("No economic import log is available yet.")
