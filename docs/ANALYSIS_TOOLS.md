@@ -2,7 +2,7 @@
 
 The top-bar **Tools** entry opens `/tools`. Its cards and contextual menu reuse
 `entities.view` and `superintel.view`; no database menu migration is required.
-Super Evolution, Ship Analysis and the global maps use this navigation context. Existing URLs
+Super Evolution, Ship Analysis and the 2D map use this navigation context. The standard universe map remains in EntitiesINTEL; monthly SuperINTEL analysis remains in SuperINTEL. Existing URLs
 and entity-page tools remain available.
 
 ## Comparing entities

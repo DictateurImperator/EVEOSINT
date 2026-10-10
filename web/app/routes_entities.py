@@ -195,8 +195,8 @@ def profiles_hub(request: Request):
 
 
 def _map_response(request: Request, user, payload):
-    global_map = payload.get("scope") in {"universe", "eve_2d"}
-    tool_key = "tools.map" if payload.get("scope") == "universe" else {
+    global_map = payload.get("scope") == "eve_2d"
+    tool_key = {
         "influence": "tools.influence", "heat": "tools.heat", "economy": "tools.economy",
     }.get(request.query_params.get("mode"), "tools.map_2d")
     context = app_context(

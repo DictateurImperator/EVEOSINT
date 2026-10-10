@@ -12,7 +12,7 @@ class ToolsTests(unittest.TestCase):
     def test_navigation_filters_tools_by_existing_permissions(self):
         self.assertEqual(menus.visible_tools({'permissions':set()}),[])
         intel=menus.visible_tools({'permissions':{'superintel.view'}})
-        self.assertEqual({t['menu_key'] for t in intel},{'tools.super_evolution','tools.monthly_analysis'})
+        self.assertEqual({t['menu_key'] for t in intel},{'tools.super_evolution'})
         entities=menus.visible_tools({'permissions':{'entities.view'}})
         self.assertIn('tools.economics',{t['menu_key'] for t in entities})
         self.assertIn('tools.ship_analysis',{t['menu_key'] for t in entities})
