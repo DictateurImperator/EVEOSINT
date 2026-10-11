@@ -1,0 +1,81 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="mb-3"><a href="/admin/debug">← Admin Debug</a></div>
+<h1 class="h3">First loss · Return and trajectories</h1>
+<p class="muted-line">Did the character return after their first known loss? Which loss profiles are associated with return, and what changed afterwards?</p>
+<section class="content-card p-3 mb-3">
+  <p class="small muted-line">All identified characters with a loss are included, including first losses against NPCs. Return means subsequent activity in recorded killmails, including NPC losses; login retention is unavailable. PvP return includes participation as attacker or victim against players. The first 30 minutes belong to the initial episode. Missing archives and insufficient follow-up stay unknown.</p>
+  {% if can_run %}
+  <form id="fl-form" class="d-flex flex-wrap gap-3 align-items-end">
+    <label>Profile clusters<input id="fl-clusters" class="form-control" type="number" min="2" max="30" value="8"></label>
+    <button class="btn btn-primary" id="fl-start" type="submit">Analyze all / resume</button>
+    <button class="btn btn-outline-danger" id="fl-stop" type="button">Stop</button>
+    <button class="btn btn-outline-secondary" id="fl-rebuild" type="button">Rebuild study</button>
+  </form>
+  <div class="small muted-line mt-2">Runs only when started manually. Rebuild replaces research results and restarts the complete history; killmail sources are unchanged.</div>
+  {% endif %}
+  <div id="fl-status" class="my-3" role="status">Loading status…</div>
+  <a class="btn btn-sm btn-outline-light" href="/admin/debug/first-loss/log" target="_blank">Job log</a>
+  <details class="small mt-3"><summary>Research dependency</summary><p class="mt-2">The job needs NumPy in its Python interpreter. If the log reports a missing dependency, install <code>scripts/first_loss_study/requirements.txt</code> there, then resume.</p></details>
+</section>
+<section class="content-card p-3" id="fl-results" hidden>
+  <div class="d-flex flex-wrap gap-3 align-items-end mb-3">
+    <label>Follow-up<select id="fl-horizon" class="form-select"><option value="7">7 days</option><option value="30" selected>30 days</option><option value="90">90 days</option></select></label>
+    <label>Loss cohort<select id="fl-year" class="form-select"><option value="all">All years</option></select></label>
+  </div>
+  <div id="fl-overview" class="mb-3"></div>
+  <h2 class="h5">Return after the first loss</h2>
+  <div class="table-responsive"><table class="table table-sm"><thead><tr><th>Cohort</th><th>Characters</th><th>Complete follow-up</th><th>Returned</th><th>No observed return</th><th>Return rate · 95% interval</th><th>Returned to PvP</th><th>Returned without observed PvP</th></tr></thead><tbody id="fl-cohorts"></tbody></table></div>
+  <h2 class="h5 mt-4">What happened to those who returned?</h2>
+  <p class="small muted-line">Zone and ship compare the first subsequent event to the initial loss, separately for PvP and non-PvP returns within the selected follow-up. Ship role is inferred from its class and does not prove the pilot's activity. Attacking again is not proof of revenge against the original attacker.</p>
+  <div id="fl-evolution"></div>
+  <h2 class="h5 mt-4">Factors associated with return</h2>
+  <p class="small muted-line">Exploratory differences in percentage points, comparing other profiles within the same year, with at least 20 characters on each side per supported year. Year adjustment does not establish causality or control every confounder. Rates and factors exclude incomplete follow-up.</p>
+  <div class="table-responsive"><table class="table table-sm"><thead><tr><th>Factor</th><th>Profile</th><th>Supported characters</th><th>Return rate</th><th>Year-adjusted difference</th><th>Supported years</th></tr></thead><tbody id="fl-factors"></tbody></table></div>
+  <h2 class="h5 mt-4">Loss-profile clusters</h2>
+  <p class="small muted-line">Clusters use the initial loss, prior activity and prior group context, without return outcomes. Numerical features are normalized within each year. Cluster identifiers apply to this run only. Cluster results cover all years.</p>
+  <div class="table-responsive"><table class="table table-sm"><thead><tr><th>Cluster</th><th>Most frequent initial profiles</th><th>Characters</th><th>Complete follow-up</th><th>Return rate</th><th>Returned to PvP</th><th>Returned without observed PvP</th></tr></thead><tbody id="fl-clusters-table"></tbody></table></div>
+</section>
+<script>
+(() => {
+ const el=id=>document.getElementById('fl-'+id);let report=null,running=false,loadedRun=null;
+ const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+ const count=n=>Number(n||0).toLocaleString('en-US'),pct=x=>x==null?'—':(100*x).toFixed(1)+'%';
+ async function json(url,options={}){const response=await fetch(url,{...options,headers:{Accept:'application/json'}});const data=await response.json();if(!response.ok)throw Error(data.error||'Request failed.');return data;}
+ function render(){
+   if(!report||!report.summary){el('results').hidden=true;return;}
+   el('results').hidden=false;const s=report.summary,horizon=el('horizon').value,year=el('year').value;
+   const b=year==='all'?s.overall:s.years[year],h=b.horizons[horizon];
+   el('overview').textContent=count(b.n)+' loss-bearing characters · '+count(b.n-h.eligible)+' with incomplete '+horizon+'-day follow-up ('+count(h.incomplete_returned)+' already observed returning, excluded from rates) · data through '+report.cutoff.slice(0,10)+' (exclusive).';
+   const rows=year==='all'?[['All years',s.overall],...Object.entries(s.years).sort()]:[[year,b]];
+   el('cohorts').innerHTML=rows.map(([y,b])=>{const h=b.horizons[horizon],ci=h.return_interval;return '<tr><td>'+esc(y)+'</td><td>'+count(b.n)+'</td><td>'+count(h.eligible)+'</td><td>'+count(h.returned)+'</td><td>'+count(h.eligible-h.returned)+'</td><td>'+pct(h.return_rate)+(ci?' ('+pct(ci[0])+'–'+pct(ci[1])+')':'')+'</td><td>'+count(h.pvp)+'</td><td>'+count(h.returned_without_pvp)+'</td></tr>';}).join('');
+   const comparison=(v,key)=>{const known=v[key+'_known'],same=v['same_'+key];return count(same)+' / '+count(known-same)+' / '+count(v.returned-known);};
+   const paths=[['pvp','Returned to PvP'],['without_pvp','Returned without observed PvP']];
+   el('evolution').innerHTML='<div class="table-responsive"><table class="table table-sm"><thead><tr><th>Return path</th><th>Characters</th>'+['Zone','System','Region','Ship','Ship role'].map(label=>'<th>'+label+'<br><small>Same / different / unknown</small></th>').join('')+'<th>Further loss</th><th>Attacker activity</th></tr></thead><tbody>'+paths.map(([key,label])=>{const v=h.evolution[key];return '<tr><td>'+label+'</td><td>'+count(v.returned)+'</td>'+['zone','system','region','ship','ship_role'].map(k=>'<td>'+comparison(v,k)+'</td>').join('')+'<td>'+(horizon==='7'?'—':count(v.repeat_losses))+'</td><td>'+(horizon==='7'?'—':count(v.attacks))+'</td></tr>';}).join('')+'</tbody></table></div>';
+   for(const [key,label] of paths){
+     const v=h.evolution[key];const p=document.createElement('p');p.className='small muted-line';
+     const top=counts=>Object.entries(counts).sort((a,b)=>b[1]-a[1]).slice(0,5).map(([name,n])=>name+' ('+count(n)+')').join('; ')||'no known transitions';
+     p.textContent=label+' · Zone: '+top(v.zone_transitions)+' · Ship role: '+top(v.ship_role_transitions);el('evolution').append(p);
+   }
+   const factors=Object.entries(s.factors[horizon]||{}).flatMap(([name,values])=>values.map(v=>({...v,factor:name}))).sort((a,b)=>Math.abs(b.year_adjusted_difference_pp)-Math.abs(a.year_adjusted_difference_pp));
+   el('factors').innerHTML=factors.map(v=>'<tr><td>'+esc(v.factor)+'</td><td>'+esc(v.value)+'</td><td>'+count(v.n)+'</td><td>'+pct(v.rate)+'</td><td style="color:'+(v.year_adjusted_difference_pp>=0?'#4ade80':'#f87171')+'">'+(v.year_adjusted_difference_pp>0?'+':'')+v.year_adjusted_difference_pp.toFixed(1)+' pp</td><td>'+count(v.supported_years)+'</td></tr>').join('')||'<tr><td colspan="6">Not enough comparable profiles yet.</td></tr>';
+   el('clusters-table').innerHTML=Object.entries(s.clusters).map(([id,b])=>{const h=b.horizons[horizon];const profile=Object.entries(b.profile_counts).map(([key,values])=>{const top=Object.entries(values).sort((a,b)=>b[1]-a[1])[0];return key+': '+top[0]+' ('+pct(top[1]/b.n)+')';}).join(' · ');return '<tr><td>'+esc(id)+'</td><td>'+esc(profile)+'</td><td>'+count(b.n)+'</td><td>'+count(h.eligible)+'</td><td>'+pct(h.return_rate)+'</td><td>'+count(h.pvp)+'</td><td>'+count(h.returned_without_pvp)+'</td></tr>';}).join('');
+   // Global factors and clusters stay explicitly global when inspecting one cohort.
+   el('factors').closest('table').caption?.remove();
+   if(year!=='all'){const caption=document.createElement('caption');caption.textContent='Factors compare all supported years; the cohort selector applies to return and trajectory tables.';el('factors').closest('table').prepend(caption);}
+ }
+ async function refresh(){try{
+   const data=await json('/admin/debug/first-loss/status');running=data.running;const p=data.progress||{};
+   el('status').textContent=(running?'Running · ':'')+(p.phase||'Not started')+(p.month?' · '+p.month:'')+(p.total_months?' · Months '+(p.processed_months||0)+' / '+p.total_months:'')+(p.players?' · Characters '+count(p.players):'')+(p.error?' · '+p.error:'');
+   if(el('start')){el('start').disabled=running;el('rebuild').disabled=running;el('stop').disabled=!running;}
+   if(data.report&&data.report.status==='completed'&&loadedRun!==data.report.id){report=data.report;loadedRun=report.id;el('year').innerHTML='<option value="all">All years</option>'+Object.keys(report.summary.years).sort().map(y=>'<option>'+esc(y)+'</option>').join('');render();}
+   else if(!data.report||data.report.status!=='completed'){report=null;loadedRun=null;render();}
+ }catch(e){el('status').textContent=e.message;}}
+ async function start(rebuild){try{const body=new FormData();body.set('clusters',el('clusters').value);body.set('rebuild',String(rebuild));await json('/admin/debug/first-loss/start',{method:'POST',body});await refresh();}catch(e){el('status').textContent=e.message;}}
+ if(el('form'))el('form').onsubmit=e=>{e.preventDefault();start(false);};
+ if(el('rebuild'))el('rebuild').onclick=()=>start(true);
+ if(el('stop'))el('stop').onclick=async()=>{try{await json('/admin/debug/first-loss/stop',{method:'POST'});el('status').textContent='Stop requested. Current SQL is cancelled; completed months are kept.';}catch(e){el('status').textContent=e.message;}};
+ el('horizon').onchange=render;el('year').onchange=render;refresh();setInterval(refresh,5000);
+})();
+</script>
+{% endblock %}

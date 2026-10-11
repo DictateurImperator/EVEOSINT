@@ -1,0 +1,2 @@
+# Install in the interpreter used by the manual research job.
+numpy>=1.26,<3

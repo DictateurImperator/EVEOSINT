@@ -153,7 +153,7 @@ def _normalize_job(raw_job):
     log_path = raw_job.get("log_path")
     enabled = bool(raw_job.get("enabled", True))
 
-    if job_type not in {"sde", "killmails", "recent_kill_pilots_affiliation", "character_skill_inference", "population_alliances_init", "population_alliances_daily", "sovereignty_esi", "killmail_forensics_setup", "killmail_forensics_analysis", "killmail_archive_refresh", "mer_economy"}:
+    if job_type not in {"sde", "killmails", "recent_kill_pilots_affiliation", "character_skill_inference", "population_alliances_init", "population_alliances_daily", "sovereignty_esi", "killmail_forensics_setup", "killmail_forensics_analysis", "killmail_archive_refresh", "mer_economy", "first_loss_study"}:
         raise JobError(f"job_type_invalid:{key}")
 
     if not isinstance(command, list) or not command:
@@ -285,7 +285,16 @@ def load_jobs_config():
             "enabled": True,
         }))
 
+    if not any(job["key"] == "analyze_first_losses" for job in jobs):
+        jobs.append(_normalize_job({
+            "key": "analyze_first_losses", "label": "Research · First-loss return and trajectories",
+            "type": "first_loss_study",
+            "command": [sys.executable, str(Path(__file__).resolve().parents[2] / "scripts/analyze_first_losses.py")],
+            "log_path": str(Path.home() / "eveosint/data/logs/first_loss_study.log"), "enabled": True,
+        }))
+
     allowed_keys = {
+        "analyze_first_losses",
         "import_mer_economy",
         "sync_sde",
         "sync_killmails",
@@ -647,5 +656,50 @@ def read_mer_economy_progress():
     if runtime["running"] and (not progress or progress.get("pid") != runtime["pid"]):
         progress = {"phase": "starting"}
     elif progress and not runtime["running"] and progress.get("phase") not in {"completed", "failed"}:
+        progress = dict(progress, phase="interrupted")
+    return {"running": runtime["running"], "progress": progress}
+
+
+def run_first_loss_study(clusters=8, rebuild=False):
+    job = get_job("analyze_first_losses")
+    if job["type"] != "first_loss_study":
+        raise JobError("job_type_mismatch:analyze_first_losses")
+    if not 2 <= int(clusters) <= 30:
+        raise JobError("Choose between 2 and 30 clusters.")
+    command = job["command"] + ["--clusters", str(int(clusters))]
+    if rebuild:
+        command += ["--rebuild"]
+    return _start_process(job, command)
+
+
+def stop_first_loss_study():
+    job = get_job("analyze_first_losses")
+    running, pid = _cleanup_stale_pid(job["key"])
+    if not running:
+        return True, "already_stopped"
+    try:
+        arguments = Path(f"/proc/{pid}/cmdline").read_bytes().split(b"\0")
+        if os.fsencode(job["command"][1]) not in arguments:
+            raise JobError("job_process_mismatch:analyze_first_losses")
+        os.kill(pid, signal.SIGTERM)
+    except ProcessLookupError:
+        return True, "already_stopped"
+    except OSError as exc:
+        raise JobError("job_stop_failed:analyze_first_losses") from exc
+    return True, "stop_requested"
+
+
+def first_loss_progress():
+    runtime = _read_runtime_status("analyze_first_losses")
+    path = Path.home() / "eveosint/data/research/first_loss_progress.json"
+    try:
+        progress = json.loads(path.read_text())
+        if not isinstance(progress, dict):
+            progress = None
+    except (OSError, ValueError):
+        progress = None
+    if runtime["running"] and (not progress or progress.get("pid") != runtime["pid"]):
+        progress = {"phase": "starting"}
+    elif progress and not runtime["running"] and progress.get("phase") not in {"completed", "failed", "paused", "schema_ready"}:
         progress = dict(progress, phase="interrupted")
     return {"running": runtime["running"], "progress": progress}
