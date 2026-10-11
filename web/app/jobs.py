@@ -660,13 +660,20 @@ def read_mer_economy_progress():
     return {"running": runtime["running"], "progress": progress}
 
 
-def run_first_loss_study(clusters=8, rebuild=False):
+def run_first_loss_study(clusters="auto", rebuild=False):
     job = get_job("analyze_first_losses")
     if job["type"] != "first_loss_study":
         raise JobError("job_type_mismatch:analyze_first_losses")
-    if not 2 <= int(clusters) <= 30:
-        raise JobError("Choose between 2 and 30 clusters.")
-    command = job["command"] + ["--clusters", str(int(clusters))]
+    value = str(clusters).strip().lower()
+    if value != "auto":
+        try:
+            count = int(value)
+        except (TypeError, ValueError):
+            raise JobError("Choose Auto or between 2 and 30 clusters.") from None
+        if not 2 <= count <= 30:
+            raise JobError("Choose Auto or between 2 and 30 clusters.")
+        value = str(count)
+    command = job["command"] + ["--clusters", value]
     if rebuild:
         command += ["--rebuild"]
     return _start_process(job, command)

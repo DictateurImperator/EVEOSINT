@@ -108,15 +108,44 @@ year, with standardized values bounded to ±5. Categorical features use one-hot
 encoding. PCA is calculated from streaming sums and cross-products of **all**
 characters, then retains 90% of variance up to 16 components.
 
-Three complete streaming clustering passes and a final assignment pass include
-every character. A reservoir of up to 2,048 profiles initializes centers only;
-it is not the population used to train or evaluate. Eight clusters are the
-default, adjustable from 2 to 30. Clusters show their most frequent initial
-profiles and their observed outcomes. IDs are local to one run.
+**Auto** is the default: a single job compares 2–30 groups, selects a count and
+fits the final model on every character. A manual count from 2 to 30 remains
+available. Model selection uses a uniform reservoir of up to 12,288 profiles,
+split into at most 8,192 fitting, 2,048 selection and 2,048 confirmation profiles.
+Smaller populations use proportionally smaller subsets and fewer candidate
+counts when necessary. The comparison does not repeat source extraction.
+
+Each count has three deterministic k-means++ starts, each fitted for at most
+25 iterations. The selection subset supplies mean Euclidean silhouette,
+its deviation between starts, and mean pairwise adjusted Rand index (ARI).
+Auto prefers candidates with ARI ≥ 0.80 and chooses the smallest count within
+0.01 of the best mean silhouette in that set. If none are sufficiently stable,
+the same rule applies to all valid candidates with an explicit notice. These
+thresholds are research heuristics, not proof of natural player categories.
+Silhouette measures profile separation; ARI compares assignments independently
+of label numbering ([silhouette documentation](https://scikit-learn.org/stable/auto_examples/cluster/plot_kmeans_silhouette_analysis.html),
+[ARI documentation](https://scikit-learn.org/stable/modules/generated/sklearn.metrics.adjusted_rand_score.html)).
+
+The confirmation subset is excluded from pilot fitting and count selection.
+Its pilot scores are preserved. Weak separation, unstable starts, tiny fitting
+groups, a count at the search boundary and failure to find evaluable groups are
+reported. Too few profiles or no variation yields one group without inventing
+a silhouette score. A manual count that cannot be evaluated fails explicitly.
+
+The selected count then gets three complete streaming passes for all three
+starts together, followed by a full-population assignment pass. The final start
+has the best silhouette on the selection subset. Final silhouette scores are
+descriptive because these profiles also participate in full-population fitting;
+they are not an independent validation of the final model. Population-wide ARI
+and group sizes are computed from every character. Unstable final assignments
+or unused groups remain visible. Clusters show their most frequent initial
+profiles and observed return outcomes, evaluated afterwards. No return outcome
+is used to choose the count or centers. IDs are local to one fitted model.
 
 Model metadata preserves feature names, cohort scales, PCA axes, centers,
-random seed, population size and NumPy version. Labels describe initial loss
-profiles rather than future trajectories; outcomes are evaluated afterwards.
+random seeds, selected count, all candidate diagnostics, population size and
+NumPy version. Admin Debug shows comparison progress and the candidate table
+while the job runs, then the selected grouping and return/trajectory results.
 
 ## Manual operation and dependencies
 
@@ -135,13 +164,19 @@ changed. Psycopg2 is already an application dependency.
 **Analyze all / resume** starts the worker; **Stop** sends SIGTERM, cancels a
 pending SQL query and leaves committed checkpoints. **Rebuild study** deletes
 previous research runs and derived rows, then rereads history. It does not alter
-source tables. Completed studies require an explicit rebuild to refresh data.
+source tables. Changing Auto/manual or the requested count reuses extracted
+features and outcomes, then refits the model in the same study. Repeating an
+already completed model with the same settings/version reuses its results.
+Existing studies made before Auto can reuse their prepared data. Rebuild is
+needed to incorporate changed source history, not to compare group counts.
 
 CLI equivalents:
 
 ```sh
-python scripts/analyze_first_losses.py --clusters 8
-python scripts/analyze_first_losses.py --rebuild --clusters 8
+python scripts/analyze_first_losses.py                  # Auto
+python scripts/analyze_first_losses.py --clusters auto  # Explicit Auto
+python scripts/analyze_first_losses.py --clusters 8     # Refit prepared data
+python scripts/analyze_first_losses.py --rebuild         # Reread sources, then Auto
 python scripts/analyze_first_losses.py --schema-only
 ```
 
@@ -155,7 +190,8 @@ reprocesses an unfinished month safely. Cancelled monthly SQL is rolled back;
 counts cannot be added twice on resume. An interrupted model pass restarts
 model training, then replaces partial assignments.
 
-Cutoff, missing days, cluster count and episode window are frozen for a run.
+Cutoff, missing days and episode window are frozen for a study. The grouping
+mode and count can change without extracting its source history again.
 Registered import counters and archive-recovery metadata are fingerprinted on
 resume, between source passes, and before publication. A detected historical
 backfill requires rebuilding instead of mixing old loss selection and new
@@ -167,22 +203,32 @@ uses bounded batches rather than loading all killmails into memory. PostgreSQL
 can spill monthly sorts/aggregates to disk. Full-history passes and per-character
 research storage are substantial; this is a manual background study, not a
 request-time calculation. No claim about production run duration is made.
+The Auto comparison adds bounded numerical work. One 2,048-by-2,048 distance
+matrix holds about 32 MiB, with additional arrays during calculations. It does
+not perform 29 full-history database fits. The three selected starts share the
+same full-population streaming passes; their distance calculations add CPU work.
 
 ## Validation
 
 Offline tests cover labels, missing history, historical Pochven, leakage,
 year adjustment, non-PvP transitions, JSON conversion of PostgreSQL aggregates,
-manual controls, permissions and stale progress. Browser checks exercise the
-tables, cohort/horizon selection and start/stop actions.
+manual controls, permissions and stale progress. Diagnostic tests check metric
+formulas, recovery of three separated synthetic profiles, deterministic Auto
+selection, unstable candidates, degenerate data and interruption. Browser checks
+exercise default Auto, the live candidate table, notices, manual selection and
+replacement of results after refitting the same study ID.
 
 The PostgreSQL integration test uses a disposable database named
 `first_loss_test*`; its guard refuses other names. It exercises all 601 fixture
 characters, real SQL extraction, PCA, assignment to clusters, the real worker,
-SIGTERM during slow SQL, and successful resumption. Fixture counts are test
-data, not scientific results from the live population.
+SIGTERM during slow SQL, successful resumption and default Auto. Refitting and
+reuse of completed results are tested with all monthly source tables temporarily
+renamed in the disposable database: they must succeed without rereading sources.
+Changing grouping must preserve overall return counts and other factor results.
+Fixture counts are test data, not scientific results from the live population.
 
 ```sh
-python -m unittest scripts.test_first_loss_study scripts.test_first_loss_admin -v
+python -m unittest scripts.test_first_loss_clustering scripts.test_first_loss_study scripts.test_first_loss_admin -v
 python -m scripts.test_first_loss_admin_browser
 # Optional integration, only against a disposable database:
 FIRST_LOSS_TEST_DSN='host=/tmp/lab port=55444 dbname=first_loss_test user=codex' \

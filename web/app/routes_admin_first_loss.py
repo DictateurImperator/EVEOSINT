@@ -83,7 +83,7 @@ def status(request: Request):
 
 
 @router.post("/admin/debug/first-loss/start")
-def start(request: Request, clusters: int = Form(8), rebuild: bool = Form(False)):
+def start(request: Request, clusters: str = Form("auto"), rebuild: bool = Form(False)):
     user = allowed(request, "admin.jobs.run")
     if user is None:
         return JSONResponse({"error": "Access denied."}, status_code=403)

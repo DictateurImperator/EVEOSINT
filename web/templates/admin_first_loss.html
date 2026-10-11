@@ -7,16 +7,24 @@
   <p class="small muted-line">All identified characters with a loss are included, including first losses against NPCs. Return means subsequent activity in recorded killmails, including NPC losses; login retention is unavailable. PvP return includes participation as attacker or victim against players. The first 30 minutes belong to the initial episode. Missing archives and insufficient follow-up stay unknown.</p>
   {% if can_run %}
   <form id="fl-form" class="d-flex flex-wrap gap-3 align-items-end">
-    <label>Profile clusters<input id="fl-clusters" class="form-control" type="number" min="2" max="30" value="8"></label>
+    <label>Profile grouping<select id="fl-clusters" class="form-select"><option value="auto" selected>Auto · compare 2–30 groups</option>{% for count in range(2,31) %}<option value="{{ count }}">{{ count }} groups · manual</option>{% endfor %}</select></label>
     <button class="btn btn-primary" id="fl-start" type="submit">Analyze all / resume</button>
     <button class="btn btn-outline-danger" id="fl-stop" type="button">Stop</button>
     <button class="btn btn-outline-secondary" id="fl-rebuild" type="button">Rebuild study</button>
   </form>
-  <div class="small muted-line mt-2">Runs only when started manually. Rebuild replaces research results and restarts the complete history; killmail sources are unchanged.</div>
+  <div class="small muted-line mt-2">Auto compares group counts in one run, then fits the selected model on every character. Runs only when started manually. Analyze / resume reuses prepared data when changing grouping. Rebuild replaces the study and rereads the complete history.</div>
   {% endif %}
   <div id="fl-status" class="my-3" role="status">Loading status…</div>
   <a class="btn btn-sm btn-outline-light" href="/admin/debug/first-loss/log" target="_blank">Job log</a>
   <details class="small mt-3"><summary>Research dependency</summary><p class="mt-2">The job needs NumPy in its Python interpreter. If the log reports a missing dependency, install <code>scripts/first_loss_study/requirements.txt</code> there, then resume.</p></details>
+</section>
+<section class="content-card p-3 mb-3" id="fl-selection" hidden>
+  <h2 class="h5">Profile grouping · Model comparison</h2>
+  <p class="small muted-line">Auto tests 2–30 groups with three starts. Among candidates with stability ARI ≥ 0.80, it chooses the smallest count within 0.01 of the best mean silhouette. If none reach that stability, it uses the same rule over valid candidates and flags the choice. Scores describe the grouping of initial losses; return outcomes are excluded from selection.</p>
+  <div id="fl-selection-info" class="mb-2"></div>
+  <div id="fl-selection-warnings" class="small mb-3"></div>
+  <div class="table-responsive"><table class="table table-sm"><thead><tr><th>Groups</th><th>Mean silhouette · ± start deviation</th><th>Pilot stability · ARI</th><th>Smallest fitting group</th><th>Selection</th></tr></thead><tbody id="fl-selection-table"></tbody></table></div>
+  <p class="small muted-line mb-0">Diagnostic subsets are drawn randomly from the whole population and have bounded size. The chosen count is then fitted using all characters. A weak score or unstable grouping does not establish distinct natural player types.</p>
 </section>
 <section class="content-card p-3" id="fl-results" hidden>
   <div class="d-flex flex-wrap gap-3 align-items-end mb-3">
@@ -41,7 +49,19 @@
  const el=id=>document.getElementById('fl-'+id);let report=null,running=false,loadedRun=null;
  const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
  const count=n=>Number(n||0).toLocaleString('en-US'),pct=x=>x==null?'—':(100*x).toFixed(1)+'%';
+ const score=x=>x==null?'—':Number(x).toFixed(3);
  async function json(url,options={}){const response=await fetch(url,{...options,headers:{Accept:'application/json'}});const data=await response.json();if(!response.ok)throw Error(data.error||'Request failed.');return data;}
+ function renderSelection(s){
+   el('selection').hidden=!s;if(!s)return;
+   let info=(s.mode==='auto'?'Automatic comparison':'Manual count')+(s.selected_k?' · Chosen: '+count(s.selected_k)+' groups':' · Comparing candidates')+' · Fitting subset: '+count(s.fitting_profiles)+' · Selection: '+count(s.selection_profiles)+' · Confirmation: '+count(s.confirmation_profiles);
+   if(s.population_players)info+=' · Full population: '+count(s.population_players);
+   if(s.population_stability_ari!=null)info+=' · Full-population stability: '+score(s.population_stability_ari);
+   if(s.final_silhouette!=null)info+=' · Final silhouette on diagnostic subset: '+score(s.final_silhouette);
+   if(s.final_confirmation_silhouette!=null)info+=' · Final confirmation subset: '+score(s.final_confirmation_silhouette);
+   el('selection-info').textContent=info;
+   el('selection-warnings').replaceChildren(...(s.warnings||[]).map(text=>{const p=document.createElement('p');p.className='mb-1 text-warning';p.textContent=text;return p;}));
+   el('selection-table').innerHTML=(s.candidates||[]).map(v=>'<tr'+(v.k===s.selected_k?' class="table-success"':'')+'><td>'+count(v.k)+'</td><td>'+score(v.silhouette_mean)+(v.silhouette_std!=null?' ± '+score(v.silhouette_std):'')+'</td><td>'+score(v.stability_ari)+'</td><td>'+pct(v.min_training_fraction)+'</td><td>'+(v.k===s.selected_k?'Chosen':v.valid?'Compared':esc(v.reason||'Unavailable'))+'</td></tr>').join('')||'<tr><td colspan="5">No separate candidate groups available.</td></tr>';
+ }
  function render(){
    if(!report||!report.summary){el('results').hidden=true;return;}
    el('results').hidden=false;const s=report.summary,horizon=el('horizon').value,year=el('year').value;
@@ -66,12 +86,14 @@
  }
  async function refresh(){try{
    const data=await json('/admin/debug/first-loss/status');running=data.running;const p=data.progress||{};
-   el('status').textContent=(running?'Running · ':'')+(p.phase||'Not started')+(p.month?' · '+p.month:'')+(p.total_months?' · Months '+(p.processed_months||0)+' / '+p.total_months:'')+(p.players?' · Characters '+count(p.players):'')+(p.error?' · '+p.error:'');
+   el('status').textContent=(running?'Running · ':'')+(p.phase||'Not started')+(p.month?' · '+p.month:'')+(p.total_months?' · Months '+(p.processed_months||0)+' / '+p.total_months:'')+(p.players?' · Characters '+count(p.players):'')+(p.message?' · '+p.message:'')+(p.error?' · '+p.error:'');
+   if(p.phase==='selecting_profiles')el('status').textContent+=' · Group counts '+(p.tested_candidates||0)+' / '+(p.total_candidates||0)+(p.candidate_k?' · Testing '+p.candidate_k+' groups':'');
    if(el('start')){el('start').disabled=running;el('rebuild').disabled=running;el('stop').disabled=!running;}
-   if(data.report&&data.report.status==='completed'&&loadedRun!==data.report.id){report=data.report;loadedRun=report.id;el('year').innerHTML='<option value="all">All years</option>'+Object.keys(report.summary.years).sort().map(y=>'<option>'+esc(y)+'</option>').join('');render();}
-   else if(!data.report||data.report.status!=='completed'){report=null;loadedRun=null;render();}
+   renderSelection(!running&&data.report?.status==='completed'?data.report.summary?.cluster_selection:p.cluster_selection);
+   if(!running&&data.report&&data.report.status==='completed'&&loadedRun!==data.report.id){report=data.report;loadedRun=report.id;el('year').innerHTML='<option value="all">All years</option>'+Object.keys(report.summary.years).sort().map(y=>'<option>'+esc(y)+'</option>').join('');render();}
+   else if(running||!data.report||data.report.status!=='completed'){report=null;loadedRun=null;render();}
  }catch(e){el('status').textContent=e.message;}}
- async function start(rebuild){try{const body=new FormData();body.set('clusters',el('clusters').value);body.set('rebuild',String(rebuild));await json('/admin/debug/first-loss/start',{method:'POST',body});await refresh();}catch(e){el('status').textContent=e.message;}}
+ async function start(rebuild){try{const body=new FormData();body.set('clusters',el('clusters').value);body.set('rebuild',String(rebuild));await json('/admin/debug/first-loss/start',{method:'POST',body});loadedRun=null;await refresh();}catch(e){el('status').textContent=e.message;}}
  if(el('form'))el('form').onsubmit=e=>{e.preventDefault();start(false);};
  if(el('rebuild'))el('rebuild').onclick=()=>start(true);
  if(el('stop'))el('stop').onclick=async()=>{try{await json('/admin/debug/first-loss/stop',{method:'POST'});el('status').textContent='Stop requested. Current SQL is cancelled; completed months are kept.';}catch(e){el('status').textContent=e.message;}};

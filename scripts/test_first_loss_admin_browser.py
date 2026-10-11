@@ -43,6 +43,36 @@ def fixture():
         "cutoff": "2026-10-11T00:00:00+00:00",
         "summary": {
             "players": 100,
+            "cluster_selection": {
+                "mode": "auto",
+                "selected_k": 3,
+                "fitting_profiles": 66,
+                "selection_profiles": 17,
+                "confirmation_profiles": 17,
+                "population_players": 100,
+                "population_stability_ari": 0.91,
+                "final_silhouette": 0.55,
+                "warnings": ["Example diagnostic notice."],
+                "candidates": [
+                    {
+                        "k": 2,
+                        "valid": True,
+                        "silhouette_mean": 0.40,
+                        "silhouette_std": 0.02,
+                        "stability_ari": 0.9,
+                        "min_training_fraction": 0.25,
+                    },
+                    {
+                        "k": 3,
+                        "valid": True,
+                        "silhouette_mean": 0.55,
+                        "silhouette_std": 0.01,
+                        "stability_ari": 0.95,
+                        "min_training_fraction": 0.2,
+                    },
+                    {"k": 4, "valid": False, "reason": "<Unavailable>"},
+                ],
+            },
             "overall": b,
             "years": {"2012": b},
             "clusters": {"0": b},
@@ -107,6 +137,19 @@ def main():
         page.route("**/*", handle)
         page.goto("http://research.test/admin/debug/first-loss")
         expect(page.locator("#fl-cohorts")).to_contain_text("30.0%")
+        expect(page.locator("#fl-clusters")).to_have_value("auto")
+        expect(page.locator("#fl-selection-info")).to_contain_text("Chosen: 3 groups")
+        expect(page.locator("#fl-selection-info")).to_contain_text(
+            "Full-population stability: 0.910"
+        )
+        expect(page.locator("#fl-selection-table")).to_contain_text("0.550 ± 0.010")
+        expect(page.locator("#fl-selection-table .table-success")).to_contain_text(
+            "Chosen"
+        )
+        expect(page.locator("#fl-selection-warnings")).to_contain_text(
+            "Example diagnostic notice."
+        )
+        expect(page.locator("#fl-selection-table")).to_contain_text("<Unavailable>")
         launch.assert_not_called()
         expect(page.locator("#fl-evolution")).to_contain_text(
             "Returned without observed PvP"
@@ -131,10 +174,39 @@ def main():
         page.click("#fl-start")
         expect(page.locator("#fl-status")).to_contain_text("Months 3 / 5")
         expect(page.locator("#fl-start")).to_be_disabled()
-        launch.assert_called_once_with(8, False)
+        launch.assert_called_once_with("auto", False)
+        expect(page.locator("#fl-results")).to_be_hidden()
+        # Live comparison updates without reload. The server can still return
+        # the previous report while the same study ID is being refitted.
+        state["progress"] = {
+            "phase": "selecting_profiles",
+            "tested_candidates": 2,
+            "total_candidates": 29,
+            "candidate_k": 4,
+            "cluster_selection": {
+                **fixture()["summary"]["cluster_selection"],
+                "selected_k": None,
+            },
+        }
+        expect(page.locator("#fl-status")).to_contain_text(
+            "Group counts 2 / 29", timeout=7000
+        )
+        expect(page.locator("#fl-selection-info")).to_contain_text(
+            "Comparing candidates"
+        )
+        expect(page.locator("#fl-results")).to_be_hidden()
         page.click("#fl-stop")
         expect(page.locator("#fl-status")).to_contain_text("Stop requested")
         stop.assert_called_once()
+        state.update(running=False, progress={"phase": "completed"})
+        # The same run ID must show its new completed results after refitting.
+        expect(page.locator("#fl-results")).to_be_visible(timeout=7000)
+        expect(page.locator("#fl-selection-info")).to_contain_text("Chosen: 3 groups")
+        launch.reset_mock()
+        page.select_option("#fl-clusters", "3")
+        page.click("#fl-start")
+        expect(page.locator("#fl-results")).to_be_visible()
+        launch.assert_called_once_with("3", False)
         assert not errors, errors
         browser.close()
     print("First-loss study browser checks passed.")

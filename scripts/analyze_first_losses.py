@@ -12,6 +12,7 @@ import psycopg2
 from psycopg2.extras import Json, wait_select
 from scripts.first_loss_study import database as data
 from scripts.first_loss_study.core import VERSION
+from scripts.first_loss_study.clustering import MODEL_VERSION, normalize_clusters
 
 LOG = logging.getLogger("first_loss")
 LOCK = 79130421
@@ -27,7 +28,12 @@ def main():
         type=Path,
         default=Path.home() / "eveosint/data/research/first_loss_progress.json",
     )
-    parser.add_argument("--clusters", type=int, default=8)
+    parser.add_argument(
+        "--clusters",
+        type=normalize_clusters,
+        default="auto",
+        help="Auto compares 2..30 groups; or specify a fixed count between 2 and 30.",
+    )
     parser.add_argument("--batch-size", type=int, default=5000)
     parser.add_argument("--episode-minutes", type=int, default=30)
     parser.add_argument(
@@ -37,11 +43,7 @@ def main():
     )
     parser.add_argument("--schema-only", action="store_true")
     args = parser.parse_args()
-    if (
-        not 2 <= args.clusters <= 30
-        or not 100 <= args.batch_size <= 20000
-        or not 0 <= args.episode_minutes <= 120
-    ):
+    if not 100 <= args.batch_size <= 20000 or not 0 <= args.episode_minutes <= 120:
         parser.error("Invalid clusters, batch size or episode window.")
     logging.basicConfig(
         level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s"
@@ -57,7 +59,13 @@ def main():
         tmp = args.progress.with_suffix(".tmp")
         tmp.write_text(json.dumps(state))
         tmp.replace(args.progress)
-        LOG.info("%s %s", phase, json.dumps(kwargs))
+        # Keep live comparison details in the progress file; logging the entire
+        # candidate table on every population batch would grow the job log.
+        LOG.info(
+            "%s %s",
+            phase,
+            json.dumps({k: v for k, v in kwargs.items() if k != "cluster_selection"}),
+        )
 
     def stop(*_):
         nonlocal stopping
@@ -120,10 +128,6 @@ def main():
                 "SELECT id,version,status,cutoff,history_start,config FROM research.first_loss_runs ORDER BY id DESC LIMIT 1"
             )
             old = c.fetchone()
-            if old and old[2] == "completed":
-                raise ValueError(
-                    "Study already completed. Use Rebuild to refresh sources and replace research results."
-                )
             if old:
                 run, version, status, cutoff, history_start, config = old
                 if version != VERSION:
@@ -132,15 +136,34 @@ def main():
                     )
                 partitions = [date.fromisoformat(m) for m in config["months"]]
                 missing = [date.fromisoformat(m) for m in config["missing_days"]]
-                args.clusters = config["clusters"]
                 args.episode_minutes = config["episode_minutes"]
                 data.verify_sources(conn, cutoff, config["source_fingerprint"])
+                if (
+                    status == "completed"
+                    and config.get("model_version", 1) == MODEL_VERSION
+                    and config["clusters"] == args.clusters
+                ):
+                    c.execute(
+                        "SELECT summary->>'players' FROM research.first_loss_runs WHERE id=%s",
+                        (run,),
+                    )
+                    state.update(run_id=run, cutoff=cutoff.isoformat(), month=None)
+                    progress(
+                        "completed",
+                        players=int(c.fetchone()[0]),
+                        message="Study already complete; prepared data and results reused.",
+                    )
+                    return 0
+                # Changing model selection reuses all extraction checkpoints.
+                # Episode window, source coverage and derived features stay frozen.
+                config.update(clusters=args.clusters, model_version=MODEL_VERSION)
             else:
                 partitions, cutoff, history_start, missing = data.months(conn)
                 config = {
                     "months": [m.isoformat() for m in partitions],
                     "missing_days": [m.isoformat() for m in missing],
                     "clusters": args.clusters,
+                    "model_version": MODEL_VERSION,
                     "episode_minutes": args.episode_minutes,
                     "numpy_version": numpy.__version__,
                     "source_fingerprint": data.source_fingerprint(conn, cutoff),
@@ -151,8 +174,8 @@ def main():
                 )
                 run = c.fetchone()[0]
             c.execute(
-                "UPDATE research.first_loss_runs SET status='running',error=NULL,updated_at=now() WHERE id=%s",
-                (run,),
+                "UPDATE research.first_loss_runs SET status='running',error=NULL,config=%s,updated_at=now() WHERE id=%s",
+                (Json(config), run),
             )
         conn.commit()
         state["run_id"] = run
@@ -233,7 +256,13 @@ def main():
                 (Json(model), Json(summary), run),
             )
         conn.commit()
-        progress("completed", players=summary["players"], month=None)
+        progress(
+            "completed",
+            players=summary["players"],
+            month=None,
+            cluster_selection=summary["cluster_selection"],
+            selected_clusters=summary["cluster_selection"]["selected_k"],
+        )
         return 0
     except Exception as exc:
         paused = stopping or isinstance(exc, InterruptedError)

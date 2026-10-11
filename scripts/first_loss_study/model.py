@@ -4,6 +4,17 @@ from collections import defaultdict
 from psycopg2.extras import Json, execute_values
 from .core import NUMERIC, FEATURE_NAMES, encode, wilson
 from .database import stream
+from .clustering import (
+    MODEL_VERSION,
+    RESERVOIR_LIMIT,
+    STABILITY_MINIMUM,
+    normalize_clusters,
+    select_profiles,
+    nearest,
+    silhouette,
+    pairwise_distances,
+    ari_from_counts,
+)
 
 
 def adjusted_association(groups, baseline):
@@ -159,6 +170,7 @@ def add_evolution(bucket, features, outcomes, horizon):
 def train(conn, writer, run, clusters, progress, check_stop, batch_size=10000):
     import numpy as np
 
+    mode = normalize_clusters(clusters)
     numeric = len(NUMERIC) * 2
     dimension = len(FEATURE_NAMES)
     scales = {}
@@ -183,8 +195,14 @@ def train(conn, writer, run, clusters, progress, check_stop, batch_size=10000):
             stats[1] += (x * known).sum(axis=0)
             stats[2] += (x * x * known).sum(axis=0)
         n += len(rows)
-        progress("normalizing", players=n)
-    if n < clusters:
+        progress(
+            "normalizing",
+            players=n,
+            month=None,
+            total_months=None,
+            processed_months=None,
+        )
+    if n == 0 or (mode != "auto" and n < mode):
         raise ValueError("Fewer loss-bearing characters than requested clusters.")
     with conn.cursor() as c:
         c.execute(
@@ -220,7 +238,7 @@ def train(conn, writer, run, clusters, progress, check_stop, batch_size=10000):
     total = np.zeros(dimension)
     outer = np.zeros((dimension, dimension))
     rng = np.random.default_rng(20261011)
-    # Random-key reservoir initializes centers only; every player trains and receives a label.
+    # Uniform diagnostic reservoir; every player contributes to PCA and final fitting.
     reservoir = np.empty((0, dimension))
     keys = np.empty(0)
     seen = 0
@@ -232,7 +250,7 @@ def train(conn, writer, run, clusters, progress, check_stop, batch_size=10000):
         seen += len(rows)
         reservoir = np.vstack((reservoir, x))
         keys = np.concatenate((keys, rng.random(len(x))))
-        keep = np.argsort(keys)[: max(2048, clusters)]
+        keep = np.argsort(keys)[:RESERVOIR_LIMIT]
         reservoir = reservoir[keep]
         keys = keys[keep]
         progress("pca", players=seen, total_players=n)
@@ -252,38 +270,75 @@ def train(conn, writer, run, clusters, progress, check_stop, batch_size=10000):
     )
     axes = vectors[:, :components]
     pool = (reservoir - mean) @ axes
-    chosen = [int(rng.integers(len(pool)))]
-    dist = np.full(len(pool), np.inf)
-    while len(chosen) < clusters:
-        dist = np.minimum(dist, ((pool - pool[chosen[-1]]) ** 2).sum(axis=1))
-        dist[chosen] = 0
-        if dist.sum() > 0:
-            chosen.append(int(rng.choice(len(pool), p=dist / dist.sum())))
-        else:
-            chosen.append(next(i for i in range(len(pool)) if i not in chosen))
-    centers = pool[chosen].copy()
-    counts = np.ones(clusters)
-
-    def labels(z):
-        return np.argmin(
-            ((z[:, None, :] - centers[None, :, :]) ** 2).sum(axis=2), axis=1
-        )
+    solutions, selection, diagnostic, confirmation = select_profiles(
+        pool, mode, progress, check_stop
+    )
+    selection["population_players"] = n
+    clusters = selection["selected_k"]
+    counts = [np.ones(clusters) for _ in solutions]
 
     for epoch in range(3):
         seen = 0
         for rows in stream(conn, run, batch_size):
             check_stop()
             z = (matrix(rows) - mean) @ axes
-            assigned = labels(z)
-            for k in range(clusters):
-                block = z[assigned == k]
-                if len(block):
-                    centers[k] = (counts[k] * centers[k] + block.sum(axis=0)) / (
-                        counts[k] + len(block)
-                    )
-                    counts[k] += len(block)
+            for replica, centers in enumerate(solutions):
+                assigned, _ = nearest(z, centers)
+                sizes = np.bincount(assigned, minlength=clusters)
+                sums = np.zeros_like(centers)
+                np.add.at(sums, assigned, z)
+                used = sizes > 0
+                weight = counts[replica]
+                centers[used] = (weight[used, None] * centers[used] + sums[used]) / (
+                    weight[used] + sizes[used]
+                )[:, None]
+                weight += sizes
             seen += len(rows)
-            progress("clustering", epoch=epoch + 1, players=seen, total_players=n)
+            progress(
+                "clustering",
+                epoch=epoch + 1,
+                players=seen,
+                total_players=n,
+                selected_clusters=clusters,
+                cluster_selection=selection,
+            )
+    # Choose the final start using profile separation only, never return outcomes.
+    check_stop()
+    diagnostic_distances = pairwise_distances(diagnostic)
+    final_scores = [
+        (
+            silhouette(diagnostic_distances, nearest(diagnostic, centers)[0])
+            if len(diagnostic)
+            else None
+        )
+        for centers in solutions
+    ]
+    best_start = max(
+        range(len(solutions)),
+        key=lambda i: final_scores[i] if final_scores[i] is not None else -2,
+    )
+    centers = solutions[best_start]
+    selection["final_silhouette_scores"] = final_scores
+    selection["final_silhouette"] = final_scores[best_start]
+    selection["chosen_seed"] = selection["seeds"][best_start]
+    if (
+        selection["final_silhouette"] is not None
+        and selection["final_silhouette"] < 0.2
+    ):
+        selection["warnings"].append(
+            "Full-population fitting still has weak separation on the diagnostic subset."
+        )
+    confirmation_distances = pairwise_distances(confirmation)
+    selection["final_confirmation_silhouette"] = (
+        silhouette(confirmation_distances, nearest(confirmation, centers)[0])
+        if len(confirmation)
+        else None
+    )
+    pairs = [
+        (a, b) for a in range(len(solutions)) for b in range(a + 1, len(solutions))
+    ]
+    contingency = [np.zeros((clusters, clusters), dtype=np.int64) for _ in pairs]
+    population_sizes = np.zeros(clusters, dtype=np.int64)
     summaries = {}
     by_year = {}
     by_cluster = {}
@@ -320,7 +375,14 @@ def train(conn, writer, run, clusters, progress, check_stop, batch_size=10000):
     for rows in stream(conn, run, batch_size):
         check_stop()
         z = (matrix(rows) - mean) @ axes
-        assigned = labels(z)
+        assignments = [nearest(z, center)[0] for center in solutions]
+        assigned = assignments[best_start]
+        for counts, (a, b) in zip(contingency, pairs):
+            counts += np.bincount(
+                assignments[a] * clusters + assignments[b],
+                minlength=clusters * clusters,
+            ).reshape(clusters, clusters)
+        population_sizes += np.bincount(assigned, minlength=clusters)
         inertia += float(((z - centers[assigned]) ** 2).sum())
         updates = []
         for row, cluster, point in zip(rows, assigned, z):
@@ -392,6 +454,25 @@ def train(conn, writer, run, clusters, progress, check_stop, batch_size=10000):
         seen += len(rows)
         progress("assigning", players=seen, total_players=n)
 
+    selection["population_stability_ari"] = (
+        float(np.mean([ari_from_counts(counts) for counts in contingency]))
+        if contingency
+        else None
+    )
+    selection["population_cluster_sizes"] = population_sizes.tolist()
+    selection["effective_k"] = int((population_sizes > 0).sum())
+    if (
+        selection["population_stability_ari"] is not None
+        and selection["population_stability_ari"] < STABILITY_MINIMUM
+    ):
+        selection["warnings"].append(
+            "Grouping varies between starts on the complete population (ARI below 0.80)."
+        )
+    if selection["effective_k"] != clusters:
+        selection["warnings"].append(
+            f"Final assignments occupy {selection['effective_k']} of {clusters} requested groups."
+        )
+
     def finish(store):
         for b in store.values():
             for h in b["horizons"].values():
@@ -406,6 +487,7 @@ def train(conn, writer, run, clusters, progress, check_stop, batch_size=10000):
         "overall": finish(summaries)["all"],
         "years": finish(by_year),
         "clusters": finish(by_cluster),
+        "cluster_selection": selection,
         "factors": {
             h: {
                 name: adjusted_association(groups, stat["baseline"])
@@ -420,6 +502,7 @@ def train(conn, writer, run, clusters, progress, check_stop, batch_size=10000):
         "cluster_mean_squared_distance": inertia / n,
     }
     model = {
+        "version": MODEL_VERSION,
         "feature_names": FEATURE_NAMES,
         "cohort_scaling": {
             str(y): {"mean": m.tolist(), "std": s.tolist()}
@@ -428,7 +511,8 @@ def train(conn, writer, run, clusters, progress, check_stop, batch_size=10000):
         "pca_mean": mean.tolist(),
         "pca_axes": axes.tolist(),
         "centers": centers.tolist(),
-        "seed": 20261011,
+        "seed": selection["chosen_seed"],
+        "cluster_selection": selection,
         "training_players": n,
         "epochs": 3,
         "outcomes_used_for_training": False,

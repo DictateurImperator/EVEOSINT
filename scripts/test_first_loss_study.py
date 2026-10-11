@@ -331,6 +331,12 @@ class DatabaseTests(unittest.TestCase):
         self.assertEqual(model["training_players"], 601)
         self.assertFalse(model["outcomes_used_for_training"])
         self.assertEqual(report["players"], 601)
+        self.assertEqual(model["version"], 2)
+        self.assertEqual(report["cluster_selection"]["selected_k"], 3)
+        self.assertEqual(report["cluster_selection"]["mode"], "manual")
+        self.assertEqual(
+            sum(report["cluster_selection"]["population_cluster_sizes"]), 601
+        )
         self.assertEqual(sum(v["n"] for v in report["years"].values()), 601)
         h = report["overall"]["horizons"]["90"]
         self.assertEqual(h["evolution"]["without_pvp"]["returned"], 200)
@@ -390,8 +396,6 @@ class DatabaseTests(unittest.TestCase):
                 str(directory / "db.json"),
                 "--progress",
                 str(directory / "progress.json"),
-                "--clusters",
-                "3",
                 "--batch-size",
                 "100",
             ]
@@ -442,11 +446,87 @@ class DatabaseTests(unittest.TestCase):
             state = json.loads((directory / "progress.json").read_text())
             self.assertEqual(state["phase"], "completed")
             self.assertEqual(state["players"], 601)
+            self.assertEqual(state["cluster_selection"]["mode"], "auto")
+            self.assertTrue(2 <= state["selected_clusters"] <= 30)
+            self.assertEqual(
+                sum(state["cluster_selection"]["population_cluster_sizes"]), 601
+            )
             with self.conn.cursor() as c:
                 c.execute(
-                    "SELECT summary->>'players',status FROM research.first_loss_runs ORDER BY id DESC LIMIT 1"
+                    "SELECT id,summary,status FROM research.first_loss_runs ORDER BY id DESC LIMIT 1"
                 )
-                self.assertEqual(c.fetchone(), ("601", "completed"))
+                completed_id, auto_report, status = c.fetchone()
+                self.assertEqual((auto_report["players"], status), (601, "completed"))
+                c.execute("SELECT count(*) FROM research.first_loss_months")
+                checkpoints = c.fetchone()[0]
+            self.conn.commit()
+            # A matching completed model is a no-op; changing Auto/manual reuses
+            # prepared rows. Remove access to every raw monthly source table to
+            # prove that neither action extracts killmails again.
+            from psycopg2 import sql
+
+            with self.conn.cursor() as c:
+                c.execute(
+                    "SELECT tablename FROM pg_tables WHERE schemaname='rawkm' AND tablename ~ '^(killmails|killmail_attackers|killmail_items)_[0-9]{4}_' ORDER BY tablename"
+                )
+                sources = [row[0] for row in c.fetchall()]
+                self.assertTrue(sources)
+                for source in sources:
+                    c.execute(
+                        sql.SQL("ALTER TABLE rawkm.{} RENAME TO {}").format(
+                            sql.Identifier(source),
+                            sql.Identifier("test_hidden_" + source),
+                        )
+                    )
+            self.conn.commit()
+            try:
+                reused = subprocess.run(
+                    command, capture_output=True, text=True, timeout=20
+                )
+                self.assertEqual(reused.returncode, 0, reused.stderr)
+                state = json.loads((directory / "progress.json").read_text())
+                self.assertIn("already complete", state["message"])
+                refitted = subprocess.run(
+                    command + ["--clusters", "2"],
+                    capture_output=True,
+                    text=True,
+                    timeout=20,
+                )
+                self.assertEqual(refitted.returncode, 0, refitted.stderr)
+                with self.conn.cursor() as c:
+                    c.execute(
+                        "SELECT id,config,summary,status FROM research.first_loss_runs ORDER BY id DESC LIMIT 1"
+                    )
+                    same_id, config, manual_report, status = c.fetchone()
+                    self.assertEqual(same_id, completed_id)
+                    self.assertEqual(status, "completed")
+                    self.assertEqual(config["clusters"], 2)
+                    self.assertEqual(config["model_version"], 2)
+                    self.assertEqual(
+                        manual_report["cluster_selection"]["selected_k"], 2
+                    )
+                    self.assertEqual(manual_report["overall"], auto_report["overall"])
+                    self.assertEqual(manual_report["years"], auto_report["years"])
+                    for horizon, factors in auto_report["factors"].items():
+                        for name, values in factors.items():
+                            if name != "cluster":
+                                self.assertEqual(
+                                    manual_report["factors"][horizon][name], values
+                                )
+                    c.execute("SELECT count(*) FROM research.first_loss_months")
+                    self.assertEqual(c.fetchone()[0], checkpoints)
+                self.conn.commit()
+            finally:
+                self.conn.rollback()
+                with self.conn.cursor() as c:
+                    for source in sources:
+                        c.execute(
+                            sql.SQL("ALTER TABLE rawkm.{} RENAME TO {}").format(
+                                sql.Identifier("test_hidden_" + source),
+                                sql.Identifier(source),
+                            )
+                        )
+                self.conn.commit()
 
 
 if __name__ == "__main__":

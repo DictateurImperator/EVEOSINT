@@ -23,13 +23,17 @@ class AdminTests(unittest.TestCase):
             job = jobs.get_job("analyze_first_losses")
             self.assertEqual(job["type"], "first_loss_study")
             launch.assert_not_called()
+            jobs.run_first_loss_study()
+            launch.assert_called_once_with(job, job["command"] + ["--clusters", "auto"])
+            launch.reset_mock()
             jobs.run_first_loss_study(5, True)
             launch.assert_called_once_with(
                 job, job["command"] + ["--clusters", "5", "--rebuild"]
             )
             launch.reset_mock()
-            with self.assertRaises(jobs.JobError):
-                jobs.run_first_loss_study(999)
+            for value in (999, "invalid", "auto; echo unsafe", "1", "2.5"):
+                with self.assertRaises(jobs.JobError):
+                    jobs.run_first_loss_study(value)
             launch.assert_not_called()
 
     def test_only_the_registered_process_can_be_stopped(self):
@@ -106,7 +110,13 @@ class AdminTests(unittest.TestCase):
                 ).json(),
                 {"started": True},
             )
-            launch.assert_called_once_with(5, True)
+            launch.assert_called_once_with("5", True)
+            launch.reset_mock()
+            self.assertEqual(
+                client.post("/admin/debug/first-loss/start").json(),
+                {"started": True},
+            )
+            launch.assert_called_once_with("auto", False)
             launch.side_effect = jobs.JobError("already running")
             self.assertEqual(
                 client.post("/admin/debug/first-loss/start").status_code, 409
