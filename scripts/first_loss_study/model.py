@@ -4,6 +4,7 @@ from collections import defaultdict
 from psycopg2.extras import Json, execute_values
 from .core import NUMERIC, FEATURE_NAMES, encode, wilson
 from .database import stream
+from .pca import decompose
 from .clustering import (
     MODEL_VERSION,
     RESERVOIR_LIMIT,
@@ -47,6 +48,36 @@ def adjusted_association(groups, baseline):
     return sorted(
         effects, key=lambda x: abs(x["year_adjusted_difference_pp"]), reverse=True
     )
+
+
+def yearly_associations(groups, baseline):
+    """Compare each profile against the others in the same loss year only."""
+    results = {}
+    for year, (all_yes, all_n) in baseline.items():
+        values = []
+        for label, years in groups.items():
+            yes, n = years.get(year, (0, 0))
+            other_n, other_yes = all_n - n, all_yes - yes
+            if n < 20 or other_n < 20:
+                continue
+            values.append(
+                {
+                    "value": label,
+                    "n": n,
+                    "returned": yes,
+                    "rate": yes / n,
+                    "interval": wilson(yes, n),
+                    "other_n": other_n,
+                    "other_returned": other_yes,
+                    "other_rate": other_yes / other_n,
+                    "other_interval": wilson(other_yes, other_n),
+                    "difference_pp": 100 * (yes / n - other_yes / other_n),
+                }
+            )
+        results[str(year)] = sorted(
+            values, key=lambda v: abs(v["difference_pp"]), reverse=True
+        )
+    return results
 
 
 def factor_values(f):
@@ -235,8 +266,7 @@ def train(conn, writer, run, clusters, progress, check_stop, batch_size=10000):
             x[mask] = block
         return x
 
-    total = np.zeros(dimension)
-    outer = np.zeros((dimension, dimension))
+    cohort_moments = {}
     rng = np.random.default_rng(20261011)
     # Uniform diagnostic reservoir; every player contributes to PCA and final fitting.
     reservoir = np.empty((0, dimension))
@@ -245,8 +275,15 @@ def train(conn, writer, run, clusters, progress, check_stop, batch_size=10000):
     for rows in stream(conn, run, batch_size):
         check_stop()
         x = matrix(rows)
-        total += x.sum(axis=0)
-        outer += x.T @ x
+        years = np.array([r["cohort"] for r in rows])
+        for year in np.unique(years):
+            block = x[years == year]
+            stats = cohort_moments.setdefault(
+                int(year), [0, np.zeros(dimension), np.zeros((dimension, dimension))]
+            )
+            stats[0] += len(block)
+            stats[1] += block.sum(axis=0)
+            stats[2] += block.T @ block
         seen += len(rows)
         reservoir = np.vstack((reservoir, x))
         keys = np.concatenate((keys, rng.random(len(x))))
@@ -254,19 +291,30 @@ def train(conn, writer, run, clusters, progress, check_stop, batch_size=10000):
         reservoir = reservoir[keep]
         keys = keys[keep]
         progress("pca", players=seen, total_players=n)
-    mean = total / n
-    cov = outer / n - np.outer(mean, mean)
-    values, vectors = np.linalg.eigh(cov)
-    order = np.argsort(values)[::-1]
-    values = np.maximum(values[order], 0)
-    vectors = vectors[:, order]
-    components = min(
-        16,
-        dimension,
-        max(
-            2,
-            int(np.searchsorted(np.cumsum(values) / max(values.sum(), 1e-12), 0.9)) + 1,
-        ),
+    total = sum((stats[1] for stats in cohort_moments.values()), np.zeros(dimension))
+    outer = sum(
+        (stats[2] for stats in cohort_moments.values()),
+        np.zeros((dimension, dimension)),
+    )
+    mean, _, vectors, global_pca = decompose(n, total, outer, FEATURE_NAMES)
+    yearly_pca = {}
+    yearly_axes = {}
+    for year, (count, total, cross) in sorted(cohort_moments.items()):
+        local_mean, _, local_axes, description = decompose(
+            count, total, cross, FEATURE_NAMES
+        )
+        yearly_pca[str(year)] = description
+        yearly_axes[str(year)] = {
+            "mean": local_mean.tolist(),
+            "axes": local_axes.tolist(),
+        }
+    components = global_pca["components_retained"]
+    progress(
+        "pca_ready",
+        players=n,
+        pca_components=components,
+        projection_dimensions=dimension,
+        pca_variance_retained=global_pca["retained_variance_ratio"],
     )
     axes = vectors[:, :components]
     pool = (reservoir - mean) @ axes
@@ -374,7 +422,8 @@ def train(conn, writer, run, clusters, progress, check_stop, batch_size=10000):
 
     for rows in stream(conn, run, batch_size):
         check_stop()
-        z = (matrix(rows) - mean) @ axes
+        coordinates = (matrix(rows) - mean) @ vectors
+        z = coordinates[:, :components]
         assignments = [nearest(z, center)[0] for center in solutions]
         assigned = assignments[best_start]
         for counts, (a, b) in zip(contingency, pairs):
@@ -385,12 +434,12 @@ def train(conn, writer, run, clusters, progress, check_stop, batch_size=10000):
         population_sizes += np.bincount(assigned, minlength=clusters)
         inertia += float(((z - centers[assigned]) ** 2).sum())
         updates = []
-        for row, cluster, point in zip(rows, assigned, z):
+        for row, cluster, point in zip(rows, assigned, coordinates):
             cid = row["character_id"]
             f = row["features"]
             o = row["outcomes"]
             year = str(row["cohort"])
-            updates.append((cid, int(cluster), Json([float(v) for v in point[:2]])))
+            updates.append((cid, int(cluster), Json([float(v) for v in point])))
             for store, key in [
                 (summaries, "all"),
                 (by_year, year),
@@ -444,8 +493,8 @@ def train(conn, writer, run, clusters, progress, check_stop, batch_size=10000):
         with writer.cursor() as c:
             execute_values(
                 c,
-                """UPDATE research.first_loss_players p SET cluster=v.cluster,projection=v.xy::jsonb
-              FROM (VALUES %s) v(cid,cluster,xy) WHERE p.run_id=%s AND p.character_id=v.cid"""
+                """UPDATE research.first_loss_players p SET cluster=v.cluster,projection=v.coordinates::jsonb
+              FROM (VALUES %s) v(cid,cluster,coordinates) WHERE p.run_id=%s AND p.character_id=v.cid"""
                 % ("%s", int(run)),
                 updates,
                 page_size=1000,
@@ -488,6 +537,13 @@ def train(conn, writer, run, clusters, progress, check_stop, batch_size=10000):
         "years": finish(by_year),
         "clusters": finish(by_cluster),
         "cluster_selection": selection,
+        "pca": {
+            "global": global_pca,
+            "years": yearly_pca,
+            "coordinate_dimensions": dimension,
+            "coordinate_basis": "Global PCA axes shared by all cohorts. Yearly PCA axes are independently fitted diagnostics.",
+        },
+        "factors_by_year": {},
         "factors": {
             h: {
                 name: adjusted_association(groups, stat["baseline"])
@@ -496,11 +552,15 @@ def train(conn, writer, run, clusters, progress, check_stop, batch_size=10000):
             for h, stat in factors.items()
         },
         "interpretation": "Observed killmail return, not login retention. Associations adjusted for year only, not causal effects.",
-        "pca_variance_retained": float(
-            values[:components].sum() / max(values.sum(), 1e-12)
-        ),
+        "pca_variance_retained": global_pca["retained_variance_ratio"],
         "cluster_mean_squared_distance": inertia / n,
     }
+    for horizon, stat in factors.items():
+        annual = {year: {} for year in stat["baseline"]}
+        for name, groups in stat["groups"].items():
+            for year, effects in yearly_associations(groups, stat["baseline"]).items():
+                annual[year][name] = effects
+        report["factors_by_year"][horizon] = annual
     model = {
         "version": MODEL_VERSION,
         "feature_names": FEATURE_NAMES,
@@ -510,6 +570,10 @@ def train(conn, writer, run, clusters, progress, check_stop, batch_size=10000):
         },
         "pca_mean": mean.tolist(),
         "pca_axes": axes.tolist(),
+        "pca_full_axes": vectors.tolist(),
+        "pca_by_year": yearly_axes,
+        "pca_diagnostics": report["pca"],
+        "projection_dimensions": dimension,
         "centers": centers.tolist(),
         "seed": selection["chosen_seed"],
         "cluster_selection": selection,

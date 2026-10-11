@@ -37,19 +37,83 @@ def fixture():
         "horizons": {str(horizon): h for horizon in (7, 30, 90)},
         "profile_counts": {"space": {"HS": 80, "LS": 20}, "ship_role": {"mining": 100}},
     }
+
+    def double_counts(value):
+        if isinstance(value, dict):
+            return {key: double_counts(item) for key, item in value.items()}
+        if isinstance(value, list):
+            return [double_counts(item) for item in value]
+        return value * 2 if isinstance(value, int) else value
+
+    overall = double_counts(b)
+
+    def pca(players, ratios, feature):
+        cumulative = 0
+        spectrum = []
+        for component, ratio in enumerate(ratios, 1):
+            cumulative += ratio
+            spectrum.append(
+                {
+                    "component": component,
+                    "variance_ratio": ratio,
+                    "cumulative_ratio": cumulative,
+                    "retained": component <= 3,
+                    "top_features": [
+                        {
+                            "name": feature,
+                            "coefficient": 0.8,
+                            "squared_coefficient": 0.64,
+                        }
+                    ],
+                }
+            )
+        return dict(
+            players=players,
+            dimensions=4,
+            components_retained=3,
+            retained_variance_ratio=sum(ratios[:3]),
+            spectrum=spectrum,
+        )
+
+    annual = {}
+    for year, rate, other_rate in [("2012", 0.2, 0.4), ("2026", 0.4, 0.2)]:
+        annual[year] = {
+            "ship_role": [
+                dict(
+                    value="mining",
+                    n=50,
+                    returned=int(50 * rate),
+                    rate=rate,
+                    interval=[rate - 0.05, rate + 0.05],
+                    other_n=50,
+                    other_rate=other_rate,
+                    other_interval=[other_rate - 0.05, other_rate + 0.05],
+                    difference_pp=100 * (rate - other_rate),
+                )
+            ]
+        }
     return {
         "id": 1,
         "status": "completed",
         "cutoff": "2026-10-11T00:00:00+00:00",
         "summary": {
-            "players": 100,
+            "players": 200,
+            "pca": {
+                "coordinate_dimensions": 4,
+                "global": pca(200, [0.4, 0.3, 0.2, 0.1], "corp_members"),
+                "years": {
+                    "2012": pca(100, [0.6, 0.2, 0.1, 0.1], "ship_role=mining"),
+                    "2026": pca(100, [0.5, 0.25, 0.2, 0.05], "age_days"),
+                },
+            },
+            "factors_by_year": {str(horizon): annual for horizon in (7, 30, 90)},
             "cluster_selection": {
                 "mode": "auto",
                 "selected_k": 3,
                 "fitting_profiles": 66,
                 "selection_profiles": 17,
                 "confirmation_profiles": 17,
-                "population_players": 100,
+                "population_players": 200,
                 "population_stability_ari": 0.91,
                 "final_silhouette": 0.55,
                 "warnings": ["Example diagnostic notice."],
@@ -73,15 +137,15 @@ def fixture():
                     {"k": 4, "valid": False, "reason": "<Unavailable>"},
                 ],
             },
-            "overall": b,
-            "years": {"2012": b},
-            "clusters": {"0": b},
+            "overall": overall,
+            "years": {"2012": b, "2026": b},
+            "clusters": {"0": overall},
             "factors": {
                 "30": {
                     "ship_role": [
                         {
                             "value": "mining",
-                            "n": 100,
+                            "n": 200,
                             "rate": 0.3,
                             "year_adjusted_difference_pp": -10.0,
                             "supported_years": 1,
@@ -154,12 +218,29 @@ def main():
         expect(page.locator("#fl-evolution")).to_contain_text(
             "Returned without observed PvP"
         )
-        expect(page.locator("#fl-evolution")).to_contain_text("HS → LS (10)")
+        expect(page.locator("#fl-evolution")).to_contain_text("HS → LS (20)")
+        expect(page.locator("#fl-pca-info")).to_contain_text("3 axes retain 90.0%")
+        expect(page.locator("#fl-pca-info")).to_contain_text("4 global coordinates")
+        page.locator("summary").filter(has_text="Variance by axis").click()
+        expect(page.locator("#fl-pca-table tr")).to_have_count(4)
+        expect(page.locator("#fl-pca-table tr").nth(1)).to_contain_text("70.0%")
+        expect(page.locator("#fl-pca-table tr").nth(2)).to_contain_text("90.0%")
+        expect(page.locator("#fl-trend-factor")).to_have_value("ship_role")
+        expect(page.locator("#fl-trend-profile")).to_have_value("mining")
+        expect(page.locator("#fl-trend-table tr").nth(0)).to_contain_text("-20.0 pp")
+        expect(page.locator("#fl-trend-table tr").nth(1)).to_contain_text("+20.0 pp")
+        expect(page.locator("#fl-trend-chart circle")).to_have_count(2)
+        # No connecting line across unobserved years between 2012 and 2026.
+        expect(page.locator("#fl-trend-chart line")).to_have_count(1)
         expect(page.locator("#fl-clusters-table")).to_contain_text("mining (100.0%)")
         page.select_option("#fl-year", "2012")
-        expect(page.locator("#fl-factors").locator("..")).to_contain_text(
-            "all supported years"
-        )
+        expect(page.locator("#fl-factor-scope")).to_contain_text("within 2012 only")
+        expect(page.locator("#fl-factors")).to_contain_text("-20.0 pp")
+        expect(page.locator("#fl-pca-info")).to_contain_text("Diagnostic PCA · 2012")
+        expect(page.locator("#fl-pca-table")).to_contain_text("ship_role=mining")
+        page.select_option("#fl-year", "2026")
+        expect(page.locator("#fl-factors")).to_contain_text("+20.0 pp")
+        expect(page.locator("#fl-pca-table")).to_contain_text("age_days")
         page.select_option("#fl-horizon", "90")
         expect(page.locator("#fl-cohorts")).to_contain_text("30.0%")
         state.update(
@@ -207,6 +288,19 @@ def main():
         page.click("#fl-start")
         expect(page.locator("#fl-results")).to_be_visible()
         launch.assert_called_once_with("3", False)
+        # Older reports remain readable without silently substituting the
+        # pooled association for a requested yearly comparison.
+        legacy = fixture()
+        legacy["id"] = 2
+        legacy["summary"].pop("pca")
+        legacy["summary"].pop("factors_by_year")
+        routes.report.return_value = legacy
+        page.reload()
+        expect(page.locator("#fl-pca-info")).to_contain_text("unavailable")
+        page.select_option("#fl-year", "2012")
+        expect(page.locator("#fl-factors")).to_contain_text(
+            "yearly comparisons unavailable"
+        )
         assert not errors, errors
         browser.close()
     print("First-loss study browser checks passed.")

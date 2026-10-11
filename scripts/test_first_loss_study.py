@@ -331,7 +331,15 @@ class DatabaseTests(unittest.TestCase):
         self.assertEqual(model["training_players"], 601)
         self.assertFalse(model["outcomes_used_for_training"])
         self.assertEqual(report["players"], 601)
-        self.assertEqual(model["version"], 2)
+        self.assertEqual(model["version"], 3)
+        self.assertEqual(model["projection_dimensions"], len(core.FEATURE_NAMES))
+        self.assertGreaterEqual(
+            report["pca"]["global"]["retained_variance_ratio"], 0.9 - 1e-12
+        )
+        self.assertEqual(
+            sum(v["players"] for v in report["pca"]["years"].values()), 601
+        )
+        self.assertEqual(set(report["pca"]["years"]), {"2012", "2026"})
         self.assertEqual(report["cluster_selection"]["selected_k"], 3)
         self.assertEqual(report["cluster_selection"]["mode"], "manual")
         self.assertEqual(
@@ -350,6 +358,35 @@ class DatabaseTests(unittest.TestCase):
                 (self.run_id,),
             )
             self.assertEqual(c.fetchone()[0], 601)
+            c.execute(
+                "SELECT min(jsonb_array_length(projection)),max(jsonb_array_length(projection)) FROM research.first_loss_players WHERE run_id=%s",
+                (self.run_id,),
+            )
+            self.assertEqual(
+                c.fetchone(), (len(core.FEATURE_NAMES), len(core.FEATURE_NAMES))
+            )
+            c.execute(
+                "SELECT features,projection,cohort FROM research.first_loss_players WHERE run_id=%s AND character_id=3",
+                (self.run_id,),
+            )
+            features, projection, year = c.fetchone()
+        import numpy as np
+
+        encoded = np.array(core.encode(features))
+        scaling = model["cohort_scaling"][str(year)]
+        numeric = len(core.NUMERIC) * 2
+        encoded[0:numeric:2] = np.clip(
+            (encoded[0:numeric:2] - scaling["mean"]) / scaling["std"], -5, 5
+        ) * (1 - encoded[1:numeric:2])
+        restored = np.array(projection) @ np.array(model["pca_full_axes"]).T + np.array(
+            model["pca_mean"]
+        )
+        np.testing.assert_allclose(
+            projection,
+            (encoded - np.array(model["pca_mean"])) @ np.array(model["pca_full_axes"]),
+            atol=1e-12,
+        )
+        np.testing.assert_allclose(restored, encoded, atol=1e-8)
         # Cancelled, uncommitted work must not double-count when a month resumes.
         month = months[1]
         with self.conn.cursor() as c:
@@ -486,6 +523,34 @@ class DatabaseTests(unittest.TestCase):
                 self.assertEqual(reused.returncode, 0, reused.stderr)
                 state = json.loads((directory / "progress.json").read_text())
                 self.assertIn("already complete", state["message"])
+                # Upgrade a completed version-2 report and its 2D coordinates,
+                # still with every raw source unavailable.
+                with self.conn.cursor() as c:
+                    c.execute(
+                        "UPDATE research.first_loss_runs SET config=jsonb_set(config,'{model_version}','2'::jsonb),summary=summary-'pca'-'factors_by_year' WHERE id=%s",
+                        (completed_id,),
+                    )
+                    c.execute(
+                        "UPDATE research.first_loss_players SET projection=jsonb_build_array(projection->0,projection->1) WHERE run_id=%s",
+                        (completed_id,),
+                    )
+                self.conn.commit()
+                upgraded = subprocess.run(
+                    command, capture_output=True, text=True, timeout=20
+                )
+                self.assertEqual(upgraded.returncode, 0, upgraded.stderr)
+                with self.conn.cursor() as c:
+                    c.execute(
+                        "SELECT config->>'model_version',summary ? 'pca',summary ? 'factors_by_year' FROM research.first_loss_runs WHERE id=%s",
+                        (completed_id,),
+                    )
+                    self.assertEqual(c.fetchone(), ("3", True, True))
+                    c.execute(
+                        "SELECT min(jsonb_array_length(projection)) FROM research.first_loss_players WHERE run_id=%s",
+                        (completed_id,),
+                    )
+                    self.assertEqual(c.fetchone()[0], len(core.FEATURE_NAMES))
+                self.conn.commit()
                 refitted = subprocess.run(
                     command + ["--clusters", "2"],
                     capture_output=True,
@@ -501,7 +566,18 @@ class DatabaseTests(unittest.TestCase):
                     self.assertEqual(same_id, completed_id)
                     self.assertEqual(status, "completed")
                     self.assertEqual(config["clusters"], 2)
-                    self.assertEqual(config["model_version"], 2)
+                    self.assertEqual(config["model_version"], 3)
+                    self.assertEqual(manual_report["pca"], auto_report["pca"])
+                    for horizon, years in auto_report["factors_by_year"].items():
+                        for year, factors in years.items():
+                            for name, values in factors.items():
+                                if name != "cluster":
+                                    self.assertEqual(
+                                        manual_report["factors_by_year"][horizon][year][
+                                            name
+                                        ],
+                                        values,
+                                    )
                     self.assertEqual(
                         manual_report["cluster_selection"]["selected_k"], 2
                     )

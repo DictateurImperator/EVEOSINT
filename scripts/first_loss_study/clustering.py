@@ -5,7 +5,7 @@ is split into fitting, selection and confirmation subsets. The chosen K is
 subsequently fitted and evaluated across the complete research population.
 """
 
-MODEL_VERSION = 2
+MODEL_VERSION = 3
 SEEDS = (20261011, 20261029, 20261117)
 RESERVOIR_LIMIT = 12288
 SILHOUETTE_TOLERANCE = 0.01

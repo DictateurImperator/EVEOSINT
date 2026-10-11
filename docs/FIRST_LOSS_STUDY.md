@@ -100,13 +100,44 @@ effects, a validated prediction model or tests of statistical significance.
 No p-values or claims of discovery from many simultaneous comparisons are made.
 Year adjustment alone does not control age, corp dependence or battle effects.
 
+Selecting a loss year now shows associations **within that year**, rather than
+repeating the global pooled comparison. The same minimum of 20 complete cases
+on both sides applies. Each row preserves the profile count, return rate and
+Wilson interval, comparison count, rate and interval, and their difference in
+percentage points. A factor/profile selector compares that profile across all
+years in a table and chart. Missing or unsupported years remain unavailable;
+chart segments do not bridge missing calendar years. No significance test or
+claim of an established change in effect is made from these descriptive series.
+Changes can also reflect population mix, coverage and other confounders.
+
 ## Full-population PCA and clustering
 
 Continuous features use `log1p` except proportions; missingness has explicit
 indicator columns. Numeric features are centered and scaled within first-loss
 year, with standardized values bounded to ±5. Categorical features use one-hot
 encoding. PCA is calculated from streaming sums and cross-products of **all**
-characters, then retains 90% of variance up to 16 components.
+characters. Clustering retains enough components for at least 90% of profile
+variance, without a 16-component cap. Degenerate data has no explained-variance
+ratio and is marked accordingly.
+
+Every character's `projection` archives **all** global PCA coordinates, in PC
+order, including directions with negligible variance. Coordinates are not
+truncated or zeroed according to the clustering retention threshold. The current encoding has
+52 dimensions. The model stores the full basis and mean, retained clustering
+basis, eigenvalues and preprocessing scales. Archiving all coordinates makes
+other axis views possible without repeating source extraction. Variance per
+axis, cumulative variance, retained axes and the largest input coefficients are
+shown in Admin Debug. Squared coefficients are axis weights, not causal effects
+or percentages of return explained. PCA variance describes profile dispersion
+([PCA documentation](https://scikit-learn.org/stable/modules/generated/sklearn.decomposition.PCA.html)).
+
+Separate yearly covariance matrices are accumulated in the same streaming PCA
+pass. Their spectra and input coefficients describe changes in profile structure.
+The yearly means and full bases are preserved in the model. These diagnostic
+PCAs have independent axes: PC1 in two years need not represent the same
+direction. Archived player coordinates and clustering always use the shared
+global basis. Year-specific return associations, computed separately from PCA,
+are the relevant descriptive comparison for changes associated with return.
 
 **Auto** is the default: a single job compares 2–30 groups, selects a count and
 fits the final model on every character. A manual count from 2 to 30 remains
@@ -167,8 +198,9 @@ previous research runs and derived rows, then rereads history. It does not alter
 source tables. Changing Auto/manual or the requested count reuses extracted
 features and outcomes, then refits the model in the same study. Repeating an
 already completed model with the same settings/version reuses its results.
-Existing studies made before Auto can reuse their prepared data. Rebuild is
-needed to incorporate changed source history, not to compare group counts.
+Existing studies made before Auto or full PCA coordinates can reuse their
+prepared data. Rebuild is needed to incorporate changed source history, not to
+compare group counts.
 
 CLI equivalents:
 
@@ -192,6 +224,11 @@ model training, then replaces partial assignments.
 
 Cutoff, missing days and episode window are frozen for a study. The grouping
 mode and count can change without extracting its source history again.
+Model version 3 refits completed version-2 studies from their prepared features
+and replaces 2D projections with complete vectors. For a running worker, deploy
+the change, then Stop and Analyze / resume to load the new code consistently.
+The finished monthly stages remain checkpointed; Rebuild is unnecessary for
+this upgrade.
 Registered import counters and archive-recovery metadata are fingerprinted on
 resume, between source passes, and before publication. A detected historical
 backfill requires rebuilding instead of mixing old loss selection and new
@@ -207,6 +244,17 @@ The Auto comparison adds bounded numerical work. One 2,048-by-2,048 distance
 matrix holds about 32 MiB, with additional arrays during calculations. It does
 not perform 29 full-history database fits. The three selected starts share the
 same full-population streaming passes; their distance calculations add CPU work.
+Full projection vectors require more per-character storage than the old two
+coordinates. Yearly moments are bounded by the feature dimension and number
+of cohorts; they do not create a separate database table per year or add raw
+source passes. Model and summary metadata store aggregate diagnostics only.
+
+For later analyses, preserve `first_loss_players` (all coordinates, original
+derived features, outcomes and cohort) and `first_loss_runs` (model, bases,
+scaling, report and source coverage). A future purge of working group aggregates
+must not delete this reusable dataset. No purge is performed by this change.
+Full coordinates reconstruct the normalized/clipped encoded profile; keeping
+the original derived features also preserves information lost in preprocessing.
 
 ## Validation
 
@@ -217,6 +265,11 @@ formulas, recovery of three separated synthetic profiles, deterministic Auto
 selection, unstable candidates, degenerate data and interruption. Browser checks
 exercise default Auto, the live candidate table, notices, manual selection and
 replacement of results after refitting the same study ID.
+PCA tests check retention beyond two and sixteen axes, variance ratios,
+reconstruction from the full basis, degenerate data and different dominant input
+coefficients across synthetic years. Annual association tests expose opposite
+yearly differences that cancel in the pooled result. Browser tests check the
+annual selector, variance table, sign changes, gaps and legacy reports.
 
 The PostgreSQL integration test uses a disposable database named
 `first_loss_test*`; its guard refuses other names. It exercises all 601 fixture
@@ -225,10 +278,13 @@ SIGTERM during slow SQL, successful resumption and default Auto. Refitting and
 reuse of completed results are tested with all monthly source tables temporarily
 renamed in the disposable database: they must succeed without rereading sources.
 Changing grouping must preserve overall return counts and other factor results.
+The test also upgrades a completed version-2 report while sources are unavailable,
+checks complete coordinate vectors for all 601 characters and reconstructs an
+encoded profile from its archived coordinates.
 Fixture counts are test data, not scientific results from the live population.
 
 ```sh
-python -m unittest scripts.test_first_loss_clustering scripts.test_first_loss_study scripts.test_first_loss_admin -v
+python -m unittest scripts.test_first_loss_pca scripts.test_first_loss_clustering scripts.test_first_loss_study scripts.test_first_loss_admin -v
 python -m scripts.test_first_loss_admin_browser
 # Optional integration, only against a disposable database:
 FIRST_LOSS_TEST_DSN='host=/tmp/lab port=55444 dbname=first_loss_test user=codex' \
