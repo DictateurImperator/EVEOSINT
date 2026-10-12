@@ -1,8 +1,11 @@
 """Experimental first-loss study, kept under Admin Debug."""
 
 import logging
-from fastapi import APIRouter, Request, Form
-from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
+from datetime import datetime, timezone
+from typing import Literal
+from fastapi import APIRouter, Request, Form, Query
+from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, Response
+from .first_loss_pdf import make_report
 from .auth import require_login
 from .audit import audit_log
 from .db import db
@@ -27,25 +30,71 @@ def allowed(request, permission):
     return user
 
 
-def report():
+def report(include_model=False, known_updated_at=None):
+    if known_updated_at is not None and known_updated_at.tzinfo is None:
+        known_updated_at = known_updated_at.replace(tzinfo=timezone.utc)
     with db() as conn, conn.cursor() as c:
         c.execute("SELECT to_regclass('research.first_loss_runs')")
         if not c.fetchone()[0]:
             return None
         c.execute(
-            "SELECT id,status,cutoff,config,summary,error FROM research.first_loss_runs ORDER BY id DESC LIMIT 1"
+            "SELECT id,status,cutoff,config,CASE WHEN updated_at=%s AND status='completed' THEN NULL ELSE summary END,error,updated_at"
+            + (",model" if include_model else "")
+            + " FROM research.first_loss_runs ORDER BY id DESC LIMIT 1",
+            (known_updated_at,),
         )
         r = c.fetchone()
     if not r:
         return None
-    return {
+    result = {
         "id": r[0],
         "status": r[1],
         "cutoff": r[2].isoformat(),
         "config": r[3],
         "summary": r[4] if r[1] == "completed" else None,
         "error": r[5],
+        "update_token": r[6].isoformat(),
+        "unchanged": r[1] == "completed" and known_updated_at == r[6],
     }
+    if include_model:
+        result["model"] = r[7]
+    return result
+
+
+@router.get("/admin/debug/first-loss/report.pdf")
+def download_report(
+    request: Request,
+    horizon: Literal["all", "7", "30", "90"] = "all",
+    year: str = Query("all", pattern=r"^(all|[0-9]{4})$"),
+    scope: Literal["all", "pvp", "npc"] = "all",
+):
+    if allowed(request, "admin.jobs.view") is None:
+        return PlainTextResponse("Access denied.", status_code=403)
+    try:
+        snapshot = report(include_model=True)
+        if not snapshot:
+            return PlainTextResponse("No study report yet.", status_code=404)
+        if snapshot["status"] != "completed" or not snapshot.get("summary"):
+            return PlainTextResponse(
+                "The study must be completed before export.", status_code=409
+            )
+        if year != "all" and year not in snapshot["summary"].get("years", {}):
+            return PlainTextResponse(
+                "Loss cohort not found in this report.", status_code=404
+            )
+        content = make_report(snapshot, horizon, year, scope)
+        filename = f"EVEOSINT_first_loss_run_{int(snapshot['id'])}_{horizon}_{year}_{scope}.pdf"
+        return Response(
+            content,
+            media_type="application/pdf",
+            headers={
+                "Content-Disposition": f'attachment; filename="{filename}"',
+                "Cache-Control": "no-store",
+            },
+        )
+    except Exception:
+        LOG.exception("First-loss PDF export failed")
+        return PlainTextResponse("The report could not be exported.", status_code=503)
 
 
 @router.get("/admin/debug/first-loss", response_class=HTMLResponse)
@@ -67,12 +116,15 @@ def page(request: Request):
 
 
 @router.get("/admin/debug/first-loss/status")
-def status(request: Request):
+def status(request: Request, known_updated_at: datetime | None = None):
     if allowed(request, "admin.jobs.view") is None:
         return JSONResponse({"error": "Access denied."}, status_code=403)
     try:
         return JSONResponse(
-            {**first_loss_progress(), "report": report()},
+            {
+                **first_loss_progress(),
+                "report": report(known_updated_at=known_updated_at),
+            },
             headers={"Cache-Control": "no-store"},
         )
     except Exception:

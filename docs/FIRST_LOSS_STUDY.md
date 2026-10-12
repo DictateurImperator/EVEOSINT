@@ -1,7 +1,8 @@
 # First loss: observable return and subsequent trajectories
 
-The study answers two questions: does a character reappear after their first
-known loss, and what changes when they do? The initial loss and its social
+The primary question is which factors predict observed return after the first
+known loss, in which direction and by how much. The second question is what
+changes when the character returns. The initial loss and its social
 context are compared with subsequent return, PvP participation, further losses,
 attacker activity, and changes of location and ship. Clusters support these
 questions; they are not the final result by themselves.
@@ -80,6 +81,78 @@ No current price is substituted for a missing historical loss value.
 
 ## Return and trajectory results
 
+### Adjusted return factors: model version 4
+
+The primary result is **Which factors are associated with return?**, rather
+than a cluster identifier or a PCA spectrum. A separate supervised logistic
+model controls the other recorded initial-loss variables and first-loss year.
+Models cover 7-, 30- and 90-day observed return for first losses against players,
+against NPCs/objects, and all first losses. The default population is first
+losses against players. NPC-only losses remain included and separately
+evaluable. Return includes subsequent non-PvP killmail activity.
+
+Age bands are <7 days, 7–30, 30–365, 1–5 years, 5+ years and unknown. References
+are <7 days for age, combat for ship role, HS for location, player corporations
+and player opponents, stated in each row. Categorical contrasts average the
+predicted probability difference against the reference, holding other recorded
+predictors and year fixed. Each evaluated year needs at least 20 training
+characters on both sides. Numeric contrasts increase a known transformed value
+by one within-year training standard deviation, bounded at the preprocessing
+limit. Effects use **percentage points**, with positive/negative/uncertain
+labels, distinct from PCA variance and raw category return rates.
+
+A deterministic character-ID hash creates an approximately 80/20 training/test
+split shared across horizons. Every eligible complete character enters one side;
+evaluation is not limited to a small sample. Preprocessing uses training data
+only. Streaming IRLS fits ridge logistic regression (penalty 0.001 on mean
+training loss), with loss-year controls. The first four iterations reuse reads
+from PCA/clustering; additional prepared-data passes run only as needed, up to
+16 iterations. Non-convergence is flagged. The model uses original predictors,
+not clusters, PCA scores or future activity.
+
+Approximate 95% intervals use training-only sandwich covariance and the delta
+method. They assume independent characters: shared battles, corporations and
+accounts can make them too narrow. Shrinkage, model misspecification and
+unsupported combinations limit interpretation. Contrasts can extrapolate, for
+example when changing age while holding corporation tenure fixed. These are
+exploratory adjusted associations, not experimental causal effects or corrected
+significance tests over all comparisons.
+
+Held-out Brier error is compared with loss-year rates learned from training
+characters. AUC uses 1,024 probability bins. Grouped permutation importance
+shuffles a factor, including missing/category columns, across the **entire
+held-out population of each loss year**, with three repeats. It is not limited
+to adjacent ID batches, which could otherwise hide age-related information.
+Every held-out complete case contributes. Correlated factors can share information
+and create unrealistic shuffled combinations. Positive Brier-error increases
+are normalized to shares summing to 100%. These are **predictive importance
+under this model**, not fractions of a player's causal decision. Shares are
+withheld if the model does not converge or beat the year baseline. A small or
+uncertain estimate does not prove absence of an effect.
+
+Year-specific evaluation uses the globally fitted model and the held-out
+characters in that year, not a separate yearly refit. Additive slopes can miss
+era-specific interactions. Random within-era validation does not validate
+future-era performance. The existing within-year descriptive comparisons remain
+available to identify possible changes in associations.
+
+Unix-epoch/pre-2000 inferred birthdays are unknown. Original invalid ages are
+preserved as `age_days_raw`, with `age_quality=invalid_birthday`. The correction
+applies to both newly extracted and previously prepared rows. Refitting stores
+corrected features alongside the projection update, without another rewrite
+pass. Exact missing-feature and invalid-birthday counts are retained.
+
+A completed version-3 study needs **Analyze all / resume**, not Rebuild. With
+unchanged source inventory it reuses loss/features/follow-up checkpoints and
+refits models without repeating raw killmail extraction. The schema is unchanged
+and the existing NumPy dependency suffices. Prepared-data reads use bounded
+primary-key pages, avoiding multi-gigabyte external sorts. Held-out predictor
+vectors are retained in RAM for exact year-wide permutations: approximately
+0.5 GB at 3.7 million characters, without a disk matrix or new database table.
+Existing one-worker,
+BLAS/thread and PostgreSQL memory limits remain in force. Coefficients, covariance,
+training scales, seed and assessment are preserved for reuse.
+
 For each horizon and first-loss year the screen shows complete cases, observed
 returns, no observed return, the return rate and a Wilson 95% interval. Returned
 characters are split into PvP and no observed PvP during that horizon.
@@ -111,6 +184,16 @@ claim of an established change in effect is made from these descriptive series.
 Changes can also reflect population mix, coverage and other confounders.
 
 ## Full-population PCA and clustering
+
+The complete spectrum is visible by default. A correlation circle uses
+variable/component correlations, not raw eigenvector coefficients. A paired
+character plane distinguishes return and no observed return, with full-population
+group means. All 52 axes have an outcome-correlation table for each horizon,
+cohort and initial-loss population. Return is a **supplementary label** and never
+changes the fitted PCA axes. Every complete case enters these statistics; a
+uniform reservoir of at most 2,048 characters supplies display points only.
+PCA variance describes profiles, while supplementary outcome correlations link
+them to observed return. Supervised probability contrasts are separate results.
 
 Continuous features use `log1p` except proportions; missingness has explicit
 indicator columns. Numeric features are centered and scaled within first-loss
@@ -177,6 +260,25 @@ Model metadata preserves feature names, cohort scales, PCA axes, centers,
 random seeds, selected count, all candidate diagnostics, population size and
 NumPy version. Admin Debug shows comparison progress and the candidate table
 while the job runs, then the selected grouping and return/trajectory results.
+
+## English PDF export
+
+**Download PDF · English** exports the completed snapshot: full study or current
+horizon/cohort/initial-loss selection. The cover uses the supplied Imperium logo
+and red CLASSIFIED marking. Contents include method, raw return counts, adjusted
+factor effects, independent assessment, importance, all PCA axes, correlation
+circle, character plane, trajectories, interpretation, conclusions and limitations.
+Earlier reports remain exportable, marked preliminary when adjusted analysis is
+absent. Missing results are never replaced with invented values.
+
+The standard-library exporter needs no new server dependency. It reads the stored
+run snapshot; no raw killmail query, job launch or result write occurs. Permission
+is `admin.jobs.view`. `GET /admin/debug/first-loss/report.pdf` accepts
+`horizon=all|7|30|90`, `year=all|YYYY`, `scope=all|pvp|npc`, with no-store download
+headers. Missing reports/cohorts are 404, incomplete studies 409. Local review
+can call `train(..., persist=False)` using a read-only connection; the resulting
+report states that updated coordinates were not written to production. Status
+polling sends only metadata when the completed revision is already loaded.
 
 ## Manual operation and dependencies
 
@@ -284,7 +386,7 @@ encoded profile from its archived coordinates.
 Fixture counts are test data, not scientific results from the live population.
 
 ```sh
-python -m unittest scripts.test_first_loss_pca scripts.test_first_loss_clustering scripts.test_first_loss_study scripts.test_first_loss_admin -v
+python -m unittest scripts.test_first_loss_pca scripts.test_first_loss_clustering scripts.test_first_loss_study scripts.test_first_loss_return_model scripts.test_first_loss_admin scripts.test_first_loss_pdf -v
 python -m scripts.test_first_loss_admin_browser
 # Optional integration, only against a disposable database:
 FIRST_LOSS_TEST_DSN='host=/tmp/lab port=55444 dbname=first_loss_test user=codex' \

@@ -157,6 +157,107 @@ def fixture():
     }
 
 
+def factor_fixture():
+    report = fixture()
+    report["id"] = 3
+    report["update_token"] = "2026-10-12T21:00:00+00:00"
+    s = report["summary"]
+    s["data_quality"] = dict(invalid_birthdays=10)
+    model = dict(
+        training_n=160,
+        test_n=40,
+        brier=0.12,
+        baseline_brier=0.24,
+        brier_skill=0.5,
+        auc=0.75,
+        warnings=[],
+        effects=[
+            dict(
+                factor="age",
+                profile="1-5 years",
+                reference="<7 days",
+                effect_pp=-18.5,
+                interval_pp=[-22, -15],
+            ),
+            dict(
+                factor="ship_role",
+                profile="mining",
+                reference="combat",
+                effect_pp=-0.5,
+                interval_pp=[-3, 2],
+            ),
+        ],
+        importance=[
+            dict(
+                factor="age",
+                importance_percent=70,
+                delta_brier=0.05,
+                interval=[0.04, 0.06],
+            ),
+            dict(
+                factor="ship_role",
+                importance_percent=30,
+                delta_brier=0.02,
+                interval=[0.01, 0.03],
+            ),
+        ],
+    )
+    s["return_model"] = dict(
+        scopes={
+            name: {
+                str(h): {**model, "years": {year: model for year in ("2012", "2026")}}
+                for h in (7, 30, 90)
+            }
+            for name in ("all", "pvp", "npc")
+        }
+    )
+    s["pca"]["global"]["variables"] = [
+        dict(name="age_days", correlations=[0.8, 0.2, 0.1, 0])
+    ]
+    stat = dict(
+        n=200,
+        returned=60,
+        axes=[
+            dict(component=i, correlation=-0.4, returned_mean=-0.5, no_return_mean=0.5)
+            for i in range(1, 5)
+        ],
+    )
+    s["pca_return"] = dict(
+        scopes={
+            name: {
+                str(h): {year: stat for year in ("all", "2012", "2026")}
+                for h in (7, 30, 90)
+            }
+            for name in ("all", "pvp", "npc")
+        },
+        sample=[
+            dict(
+                character_id=1,
+                year="2012",
+                coordinates=[1, 1, 0, 0],
+                initial_pvp=True,
+                opponent="players",
+                ship_role="mining",
+                outcomes={
+                    str(h): dict(complete=True, returned=True) for h in (7, 30, 90)
+                },
+            ),
+            dict(
+                character_id=2,
+                year="2026",
+                coordinates=[-1, -1, 0, 0],
+                initial_pvp=False,
+                opponent="NPC/object",
+                ship_role="combat",
+                outcomes={
+                    str(h): dict(complete=True, returned=False) for h in (7, 30, 90)
+                },
+            ),
+        ],
+    )
+    return report
+
+
 def main():
     app = FastAPI()
     app.include_router(routes.router)
@@ -188,7 +289,7 @@ def main():
                 return
             response = client.request(
                 route.request.method,
-                parts.path,
+                parts.path + ("?" + parts.query if parts.query else ""),
                 content=route.request.post_data_buffer,
                 headers={"content-type": route.request.headers.get("content-type", "")},
             )
@@ -196,6 +297,7 @@ def main():
                 status=response.status_code,
                 content_type=response.headers.get("content-type", "text/html"),
                 body=response.content,
+                headers=dict(response.headers),
             )
 
         page.route("**/*", handle)
@@ -221,7 +323,7 @@ def main():
         expect(page.locator("#fl-evolution")).to_contain_text("HS → LS (20)")
         expect(page.locator("#fl-pca-info")).to_contain_text("3 axes retain 90.0%")
         expect(page.locator("#fl-pca-info")).to_contain_text("4 global coordinates")
-        page.locator("summary").filter(has_text="Variance by axis").click()
+        expect(page.locator("summary").filter(has_text="All axes")).to_be_visible()
         expect(page.locator("#fl-pca-table tr")).to_have_count(4)
         expect(page.locator("#fl-pca-table tr").nth(1)).to_contain_text("70.0%")
         expect(page.locator("#fl-pca-table tr").nth(2)).to_contain_text("90.0%")
@@ -300,6 +402,52 @@ def main():
         page.select_option("#fl-year", "2012")
         expect(page.locator("#fl-factors")).to_contain_text(
             "yearly comparisons unavailable"
+        )
+        routes.report.return_value = factor_fixture()
+        page.reload()
+        expect(page.locator("#fl-scope")).to_have_value("pvp")
+        expect(page.locator("#fl-model-effects")).to_contain_text("-18.5 pp")
+        expect(page.locator("#fl-model-effects")).to_contain_text(
+            "Negative association"
+        )
+        expect(page.locator("#fl-model-effects")).to_contain_text("Uncertain")
+        expect(page.locator("#fl-model-importance")).to_contain_text("70.0%")
+        expect(page.locator("#fl-correlation-circle circle")).to_have_count(2)
+        expect(page.locator("#fl-character-plane circle")).to_have_count(3)
+        expect(page.locator("#fl-axis-return tr")).to_have_count(4)
+        page.select_option("#fl-axis-x", "2")
+        expect(page.locator("#fl-axis-y")).to_have_value("3")
+        page.select_option("#fl-year", "2026")
+        page.select_option("#fl-horizon", "90")
+        page.select_option("#fl-scope", "npc")
+        page.select_option("#fl-pdf-scope", "view")
+        expect(page.locator("#fl-pdf")).to_have_attribute(
+            "href", "/admin/debug/first-loss/report.pdf?horizon=90&year=2026&scope=npc"
+        )
+        with page.expect_download() as download:
+            page.click("#fl-pdf")
+        assert download.value.suggested_filename.endswith("_90_2026_npc.pdf")
+        # A lightweight unchanged response keeps the already loaded report.
+        routes.report.return_value = {
+            **factor_fixture(),
+            "summary": None,
+            "unchanged": True,
+        }
+        expect(page.locator("#fl-model-effects")).to_contain_text(
+            "-18.5 pp", timeout=7000
+        )
+        page.wait_for_timeout(5200)
+        expect(page.locator("#fl-selection")).to_be_visible()
+        expect(page.locator("#fl-model-effects")).to_contain_text("-18.5 pp")
+        # Same ID with a new completed revision must replace cached results.
+        changed = factor_fixture()
+        changed["update_token"] = "2026-10-12T22:00:00+00:00"
+        changed["summary"]["return_model"]["scopes"]["pvp"]["30"]["effects"][0][
+            "effect_pp"
+        ] = -12
+        routes.report.return_value = changed
+        expect(page.locator("#fl-model-effects")).to_contain_text(
+            "-12.0 pp", timeout=7000
         )
         assert not errors, errors
         browser.close()

@@ -6,6 +6,7 @@ import hashlib, json
 from psycopg2 import sql
 from psycopg2.extras import Json, RealDictCursor, execute_values
 from .core import VERSION, ship_role, space, outcome
+from .quality import clean_features
 
 SCHEMA = Path(__file__).with_name("schema.sql")
 
@@ -391,6 +392,7 @@ def build_features(
             ),
         }
     )
+    f, _ = clean_features(f, loss)
     return f, o
 
 
@@ -408,15 +410,26 @@ def store_features(conn, run, rows):
 
 
 def stream(conn, run, batch_size=10000):
-    with conn.cursor(name="first_loss_stream", cursor_factory=RealDictCursor) as c:
-        c.itersize = batch_size
-        c.execute(
-            "SELECT character_id,cohort,features,outcomes FROM research.first_loss_players WHERE run_id=%s AND features IS NOT NULL ORDER BY character_id",
-            (run,),
-        )
-        while True:
-            rows = c.fetchmany(batch_size)
+    # A cursor over the entire ordered table can choose a multi-GB external
+    # sort. Bounded keyset pages use the (run_id, character_id) primary key.
+    after = -1
+    while True:
+        with conn.cursor(cursor_factory=RealDictCursor) as c:
+            c.execute(
+                "SELECT character_id,loss_time,cohort,features,outcomes FROM research.first_loss_players "
+                "WHERE run_id=%s AND character_id>%s AND features IS NOT NULL ORDER BY character_id LIMIT %s",
+                (run, after, batch_size),
+            )
+            rows = c.fetchall()
             if not rows:
                 break
-            yield [dict(r) for r in rows]
+            prepared = []
+            for row in rows:
+                row = dict(row)
+                row["features"], row["features_corrected"] = clean_features(
+                    row["features"], row["loss_time"]
+                )
+                prepared.append(row)
+            after = prepared[-1]["character_id"]
+        yield prepared
     conn.rollback()

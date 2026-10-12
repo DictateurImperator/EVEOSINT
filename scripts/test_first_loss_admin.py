@@ -1,6 +1,7 @@
 """Offline permissions, manual job controls and passive progress checks."""
 
 import json, os, sys, unittest
+from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import patch
 from fastapi import FastAPI
@@ -16,6 +17,70 @@ routes = f.load("routes_admin_first_loss")
 
 
 class AdminTests(unittest.TestCase):
+    def test_completed_status_can_omit_an_already_loaded_summary(self):
+        from contextlib import contextmanager
+
+        updated = datetime(2026, 10, 12, 20, tzinfo=timezone.utc)
+
+        class Cursor:
+            def __init__(self):
+                self.calls = []
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                pass
+
+            def execute(self, sql, params=None):
+                self.calls.append((sql, params))
+
+            def fetchone(self):
+                if len(self.calls) == 1:
+                    return ("research.first_loss_runs",)
+                known = self.calls[-1][1][0]
+                result = (
+                    1,
+                    "completed",
+                    updated,
+                    {},
+                    None if known == updated else {"players": 100},
+                    None,
+                    updated,
+                )
+                return (
+                    result + ({"version": 4},)
+                    if ",model" in self.calls[-1][0]
+                    else result
+                )
+
+        cursor = Cursor()
+
+        class Connection:
+            def cursor(self):
+                return cursor
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                pass
+
+        @contextmanager
+        def database():
+            yield Connection()
+
+        with patch.object(routes, "db", database):
+            report = routes.report(known_updated_at=updated)
+            self.assertTrue(report["unchanged"])
+            self.assertIsNone(report["summary"])
+            self.assertEqual(cursor.calls[-1][1], (updated,))
+            cursor.calls = []
+            full = routes.report(include_model=True)
+            self.assertFalse(full["unchanged"])
+            self.assertEqual(full["summary"]["players"], 100)
+            self.assertEqual(full["model"]["version"], 4)
+
     def test_job_is_manual_and_validates_parameters(self):
         with patch.object(
             jobs, "_read_config_file", return_value={"jobs": []}

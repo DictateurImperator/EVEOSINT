@@ -30,8 +30,21 @@
   <div class="d-flex flex-wrap gap-3 align-items-end mb-3">
     <label>Follow-up<select id="fl-horizon" class="form-select"><option value="7">7 days</option><option value="30" selected>30 days</option><option value="90">90 days</option></select></label>
     <label>Loss cohort<select id="fl-year" class="form-select"><option value="all">All years</option></select></label>
+    <label>Initial loss · model and PCA return comparison<select id="fl-scope" class="form-select"><option value="pvp" selected>Against players</option><option value="npc">Against NPCs / objects</option><option value="all">All losses</option></select></label>
+    <label>PDF contents<select id="fl-pdf-scope" class="form-select"><option value="all">Full study</option><option value="view">Current selection</option></select></label>
+    <a id="fl-pdf" class="btn btn-outline-light" href="/admin/debug/first-loss/report.pdf">Download PDF · English</a>
   </div>
   <div id="fl-overview" class="mb-3"></div>
+  <div id="fl-quality" class="small text-warning mb-3"></div>
+  <h2 class="h5">Which factors are associated with return?</h2>
+  <p class="small muted-line">Adjusted probability differences compare an age or ship category with the stated reference while keeping the other initial-loss variables and loss year fixed. Positive values mean more observed return; negative values mean less. Intervals crossing zero are marked uncertain. These are estimated associations with recorded activity.</p>
+  <div id="fl-model-info" class="mb-2"></div>
+  <div id="fl-model-warnings" class="small text-warning mb-2"></div>
+  <div class="table-responsive"><table class="table table-sm"><thead><tr><th>Factor</th><th>Profile / change</th><th>Reference</th><th>Adjusted return difference</th><th>Approx. 95% interval</th><th>Evidence</th></tr></thead><tbody id="fl-model-effects"></tbody></table></div>
+  <h3 class="h6 mt-3">How much does each factor help predict return?</h3>
+  <p class="small muted-line">Importance measures how much prediction deteriorates when a factor is shuffled within the loss year. Shares sum to 100% of positive predictive importance, provided the model converged and beats the year-only baseline. Importance includes missing data indicators: age includes birth-date availability. Correlated factors can share information; a small importance is not proof of no association.</p>
+  <div class="table-responsive"><table class="table table-sm"><thead><tr><th>Factor</th><th>Predictive importance</th><th>Increase in test Brier score</th><th>Approx. 95% interval</th><th>Evidence</th></tr></thead><tbody id="fl-model-importance"></tbody></table></div>
+  <p class="small muted-line">The descriptive tables below cover all initial losses. The initial-loss selector above applies to the adjusted model and PCA return comparison.</p>
   <h2 class="h5">Return after the first loss</h2>
   <div class="table-responsive"><table class="table table-sm"><thead><tr><th>Cohort</th><th>Characters</th><th>Complete follow-up</th><th>Returned</th><th>No observed return</th><th>Return rate · 95% interval</th><th>Returned to PvP</th><th>Returned without observed PvP</th></tr></thead><tbody id="fl-cohorts"></tbody></table></div>
   <h2 class="h5 mt-4">What happened to those who returned?</h2>
@@ -52,9 +65,15 @@
   <h2 class="h5 mt-4">PCA dimensions and explained variance</h2>
   <p class="small muted-line">All PCA coordinates are saved for every character in one shared global basis. Clustering uses enough axes to retain at least 90% of profile variance, with no 16-axis cap. The cohort selector shows an independently fitted yearly PCA for diagnostics; PC1 in one yearly PCA is not the same direction as PC1 in another. Explained variance describes differences between initial profiles, not the percentage of return explained.</p>
   <div id="fl-pca-info" class="mb-2"></div>
-  <details><summary>Variance by axis and largest input weights</summary>
+  <details open><summary>All axes · variance and largest input weights</summary>
     <div class="table-responsive"><table class="table table-sm"><thead><tr><th>Axis</th><th>Variance</th><th>Cumulative variance</th><th>Retained for 90%</th><th>Largest input weights</th></tr></thead><tbody id="fl-pca-table"></tbody></table></div>
   </details>
+  <h3 class="h6 mt-3">PCA · variables and observed return</h3>
+  <p class="small muted-line">The correlation circle shows which variables characterize each global axis. The character plot distinguishes return and no observed return; large markers are full-population group means. Display points use a uniform sample; statistics use every complete case. Axis variance describes profiles. The axis-return correlation measures its association with return.</p>
+  <div class="d-flex flex-wrap gap-3 mb-2"><label>Horizontal axis<select id="fl-axis-x" class="form-select"></select></label><label>Vertical axis<select id="fl-axis-y" class="form-select"></select></label></div>
+  <div id="fl-pca-return-info" class="small muted-line mb-2"></div>
+  <div class="d-flex flex-wrap"><svg id="fl-correlation-circle" viewBox="0 0 500 430" role="img" aria-label="PCA variable correlation circle" style="width:50%;min-width:320px"></svg><svg id="fl-character-plane" viewBox="0 0 500 430" role="img" aria-label="PCA characters distinguished by observed return" style="width:50%;min-width:320px"></svg></div>
+  <div class="table-responsive"><table class="table table-sm"><thead><tr><th>Global axis</th><th>Profile variance</th><th>Correlation with return</th><th>Returned · mean coordinate</th><th>No observed return · mean coordinate</th></tr></thead><tbody id="fl-axis-return"></tbody></table></div>
   <h2 class="h5 mt-4">Loss-profile clusters</h2>
   <p class="small muted-line">Clusters use the initial loss, prior activity and prior group context, without return outcomes. Numerical features are normalized within each year. Cluster identifiers apply to this run only. Cluster results cover all years.</p>
   <div class="table-responsive"><table class="table table-sm"><thead><tr><th>Cluster</th><th>Most frequent initial profiles</th><th>Characters</th><th>Complete follow-up</th><th>Return rate</th><th>Returned to PvP</th><th>Returned without observed PvP</th></tr></thead><tbody id="fl-clusters-table"></tbody></table></div>
@@ -65,6 +84,8 @@
  const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
  const count=n=>Number(n||0).toLocaleString('en-US'),pct=x=>x==null?'—':(100*x).toFixed(1)+'%';
  const score=x=>x==null?'—':Number(x).toFixed(3);
+ const labels={age:'Age',age_days:'Age',ship_role:'Ship role / class',space:'Loss location',opponent:'Initial opponent',corp_kind:'Corporation type',corp_tenure_days:'Corporation tenure',corp_members:'Corporation population',alliance_members:'Alliance population',prior_attacks:'Earlier attacker activity',prior_attack_days:'Earlier active days',players_attacking:'Player attacker count',npc_attackers:'NPC attacker count',fitted_items:'Fitted item rows',cargo_items:'Cargo item rows',implants:'Implant rows',corp_attacks_30:'Corporation attacker activity',alliance_attacks_30:'Alliance attacker activity',corp_industry_loss_fraction:'Corporation industrial-loss fraction',alliance_industry_loss_fraction:'Alliance industrial-loss fraction'};
+ const factorLabel=name=>labels[name]||name.replaceAll('_',' ');
  const delta=x=>x==null?'—':(x>0?'+':'')+Number(x).toFixed(1)+' pp';
  const interval=(rate,ci)=>pct(rate)+(ci?' ('+pct(ci[0])+'–'+pct(ci[1])+')':'');
  async function json(url,options={}){const response=await fetch(url,{...options,headers:{Accept:'application/json'}});const data=await response.json();if(!response.ok)throw Error(data.error||'Request failed.');return data;}
@@ -85,6 +106,42 @@
    el('pca-info').textContent=(year==='all'?'Global PCA · used for clustering':'Diagnostic PCA · '+year)+' · '+count(pca.players)+' characters · '+(pca.retained_variance_ratio==null?'No measurable profile variance':count(pca.components_retained)+' axes retain '+pct(pca.retained_variance_ratio)+' of profile variance')+' · '+count(s.pca.coordinate_dimensions)+' global coordinates saved per character.';
    el('pca-table').innerHTML=(pca.spectrum||[]).map(v=>'<tr><td>PC'+count(v.component)+'</td><td>'+pct(v.variance_ratio)+'</td><td>'+pct(v.cumulative_ratio)+'</td><td>'+(v.retained?'Yes':'')+'</td><td>'+(v.top_features||[]).map(f=>'<span title="'+esc('Coefficient '+score(f.coefficient)+'; squared coefficient '+pct(f.squared_coefficient))+ '">'+esc(f.name)+' ('+score(f.coefficient)+')</span>').join(' · ')+'</td></tr>').join('');
  }
+ function renderModel(){
+   const s=report.summary,h=el('horizon').value,year=el('year').value,scope=el('scope').value;
+   const all=s.return_model?.scopes?.[scope]?.[h],m=year==='all'?all:all?.years?.[year];
+   el('quality').textContent=s.data_quality?'Birthday placeholders excluded from age calculations: '+count(s.data_quality.invalid_birthdays)+'. Missing population snapshots limit conclusions about group size.':'Historical birthday placeholders were not filtered in this report. Resume with the updated study before interpreting age or PCA profiles.';
+   el('model-effects').innerHTML='';el('model-importance').innerHTML='';el('model-warnings').textContent='';
+   if(!m||m.unavailable){el('model-info').textContent=m?.unavailable||'Adjusted return analysis is unavailable in this stored report. Analyze all / resume prepares it from the existing data.';return;}
+   el('model-info').textContent='Initial loss: '+el('scope').selectedOptions[0].text+' · '+count(m.training_n)+' training characters · '+count(m.test_n)+' complete held-out characters'+(year==='all'?'':' in '+year)+' · AUC '+score(m.auc)+' · Brier '+score(m.brier)+' · Year baseline '+score(m.baseline_brier)+' · Improvement '+pct(m.brier_skill);
+   el('model-warnings').textContent=(m.warnings||[]).join(' ');
+   const evidence=ci=>ci&&ci[0]>0?'Positive association':ci&&ci[1]<0?'Negative association':'Uncertain';
+   const color=ci=>ci&&ci[0]>0?'#4ade80':ci&&ci[1]<0?'#f87171':'#94a3b8';
+   el('model-effects').innerHTML=(m.effects||[]).map(v=>'<tr><td>'+esc(factorLabel(v.factor))+'</td><td>'+esc(v.profile)+'</td><td>'+esc(v.reference)+'</td><td style="color:'+color(v.interval_pp)+'">'+delta(v.effect_pp)+'</td><td>'+delta(v.interval_pp?.[0])+' to '+delta(v.interval_pp?.[1])+'</td><td>'+evidence(v.interval_pp)+'</td></tr>').join('');
+   el('model-importance').innerHTML=(m.importance||[]).map(v=>'<tr><td>'+esc(factorLabel(v.factor))+'</td><td>'+(v.importance_percent==null?'Not established':v.importance_percent.toFixed(1)+'%')+'</td><td>'+Number(v.delta_brier).toFixed(6)+'</td><td>'+v.interval.map(x=>Number(x).toFixed(6)).join(' to ')+'</td><td>'+(v.interval[0]>0?'Predictive contribution':'Uncertain')+'</td></tr>').join('');
+ }
+ function renderReturnPca(){
+   const s=report.summary,g=s.pca?.global,year=el('year').value,h=el('horizon').value,scope=el('scope').value;
+   const axes=g?.spectrum||[],oldX=el('axis-x').value||'1',oldY=el('axis-y').value||'2';
+   for(const [id,old] of [['axis-x',oldX],['axis-y',oldY]]){el(id).innerHTML=axes.map(v=>'<option value="'+v.component+'">PC'+v.component+' · '+pct(v.variance_ratio)+'</option>').join('');el(id).value=axes.some(v=>String(v.component)===old)?old:String(axes[0]?.component||1);}
+   const a=Number(el('axis-x').value)-1;let b=Number(el('axis-y').value)-1;
+   if(a===b&&axes.length>1){b=(a+1)%axes.length;el('axis-y').value=String(b+1);}
+   const stat=s.pca_return?.scopes?.[scope]?.[h]?.[year];
+   el('pca-return-info').textContent=stat?'Shared global PCA · '+count(stat.n)+' complete characters · '+count(stat.returned)+' returned · return is a supplementary label.':'PCA return comparisons require resuming with the updated study.';
+   el('axis-return').innerHTML=(stat?.axes||[]).map(v=>'<tr><td>PC'+v.component+'</td><td>'+pct(axes[v.component-1]?.variance_ratio)+'</td><td>'+score(v.correlation)+'</td><td>'+score(v.returned_mean)+'</td><td>'+score(v.no_return_mean)+'</td></tr>').join('');
+   let circle='<circle cx="240" cy="205" r="150" fill="none" stroke="#64748b"/><path d="M90 205H390 M240 55V355" stroke="#475569"/>';
+   const variables=(g?.variables||[]).filter(v=>!v.name.endsWith('_missing')&&v.correlations[a]!=null&&v.correlations[b]!=null).sort((x,y)=>(y.correlations[a]**2+y.correlations[b]**2)-(x.correlations[a]**2+x.correlations[b]**2)).slice(0,12);
+   for(const v of variables){const x=240+150*v.correlations[a],y=205-150*v.correlations[b];circle+='<line x1="240" y1="205" x2="'+x+'" y2="'+y+'" stroke="#38bdf8" stroke-width="2"/><circle cx="'+x+'" cy="'+y+'" r="3" fill="#38bdf8"/><text x="'+x+'" y="'+(y-5)+'" font-size="9" fill="#cbd5e1"><title>'+esc(v.name+' · r='+score(v.correlations[a])+', '+score(v.correlations[b]))+'</title>'+esc(factorLabel(v.name))+'</text>';}
+   circle+='<text x="240" y="400" text-anchor="middle" fill="#94a3b8">PC'+(a+1)+' · '+pct(axes[a]?.variance_ratio)+' / PC'+(b+1)+' · '+pct(axes[b]?.variance_ratio)+'</text>';el('correlation-circle').innerHTML=circle;
+   const sample=(s.pca_return?.sample||[]).filter(v=>(year==='all'||v.year===year)&&(scope==='all'||scope==='pvp'&&v.initial_pvp===true||scope==='npc'&&v.opponent==='NPC/object')&&v.outcomes[h]?.complete&&v.coordinates[a]!=null&&v.coordinates[b]!=null);
+   let scaleX=Math.max(1,...sample.map(v=>Math.abs(v.coordinates[a]))),scaleY=Math.max(1,...sample.map(v=>Math.abs(v.coordinates[b])));
+   for(const v of [stat?.axes[a],stat?.axes[b]])if(v){if(v===stat.axes[a])scaleX=Math.max(scaleX,Math.abs(v.returned_mean||0),Math.abs(v.no_return_mean||0));else scaleY=Math.max(scaleY,Math.abs(v.returned_mean||0),Math.abs(v.no_return_mean||0));}
+   const x=v=>250+200*v/scaleX,y=v=>205-150*v/scaleY;
+   let plane='<path d="M50 205H450 M250 55V355" stroke="#475569"/>';
+   for(const v of sample)plane+='<circle cx="'+x(v.coordinates[a])+'" cy="'+y(v.coordinates[b])+'" r="2" fill="'+(v.outcomes[h].returned?'#4ade80':'#f87171')+'" opacity="0.4"><title>'+esc('Character '+v.character_id+' · '+v.year+' · '+v.ship_role+' · '+(v.outcomes[h].returned?'Returned':'No observed return'))+'</title></circle>';
+   for(const [key,color] of [['returned_mean','#4ade80'],['no_return_mean','#f87171']]){const vx=stat?.axes[a]?.[key],vy=stat?.axes[b]?.[key];if(vx!=null&&vy!=null)plane+='<circle cx="'+x(vx)+'" cy="'+y(vy)+'" r="7" fill="'+color+'" stroke="white" stroke-width="2"><title>Full-population '+key.replaceAll('_',' ')+'</title></circle>';}
+   plane+='<text x="40" y="385" font-size="12" fill="#4ade80">Returned</text><text x="200" y="385" font-size="12" fill="#f87171">No observed return</text><text x="250" y="415" font-size="12" text-anchor="middle" fill="#94a3b8">PC'+(a+1)+' / PC'+(b+1)+' · '+count(sample.length)+' display points</text>';el('character-plane').innerHTML=plane;
+ }
+ function pdfLink(){const view=el('pdf-scope').value==='view';el('pdf').href='/admin/debug/first-loss/report.pdf'+(view?'?horizon='+el('horizon').value+'&year='+el('year').value+'&scope='+el('scope').value:'');}
  function renderTrend(){
    if(!report?.summary)return;const s=report.summary,horizon=el('horizon').value,years=Object.keys(s.years).sort(),annual=s.factors_by_year?.[horizon]||{};
    const names=[...new Set(Object.values(annual).flatMap(v=>Object.keys(v)))].sort();
@@ -130,23 +187,27 @@
    el('factor-scope').textContent=year==='all'?'Pooled comparison across supported years, adjusted within each year.':'Comparisons within '+year+' only, for the selected follow-up.';
    el('factors').innerHTML=factors.map(v=>'<tr><td>'+esc(v.factor)+'</td><td>'+esc(v.value)+'</td><td>'+count(v.n)+'</td><td>'+interval(v.rate,v.interval)+'</td><td style="color:'+(v[effect]>=0?'#4ade80':'#f87171')+'">'+delta(v[effect])+'</td><td>'+(year==='all'?count(v.supported_years):count(v.other_n)+' characters · '+pct(v.other_rate)+' returned')+'</td></tr>').join('')||'<tr><td colspan="6">Not enough comparable profiles, or yearly comparisons unavailable in this report.</td></tr>';
    el('clusters-table').innerHTML=Object.entries(s.clusters).map(([id,b])=>{const h=b.horizons[horizon];const profile=Object.entries(b.profile_counts).map(([key,values])=>{const top=Object.entries(values).sort((a,b)=>b[1]-a[1])[0];return key+': '+top[0]+' ('+pct(top[1]/b.n)+')';}).join(' · ');return '<tr><td>'+esc(id)+'</td><td>'+esc(profile)+'</td><td>'+count(b.n)+'</td><td>'+count(h.eligible)+'</td><td>'+pct(h.return_rate)+'</td><td>'+count(h.pvp)+'</td><td>'+count(h.returned_without_pvp)+'</td></tr>';}).join('');
-   renderPca();renderTrend();
+   renderModel();renderPca();renderReturnPca();renderTrend();pdfLink();
  }
  async function refresh(){try{
-   const data=await json('/admin/debug/first-loss/status');running=data.running;const p=data.progress||{};
+   const data=await json('/admin/debug/first-loss/status'+(report?.update_token?'?known_updated_at='+encodeURIComponent(report.update_token):''));running=data.running;const p=data.progress||{};
    el('status').textContent=(running?'Running · ':'')+(p.phase||'Not started')+(p.month?' · '+p.month:'')+(p.total_months?' · Months '+(p.processed_months||0)+' / '+p.total_months:'')+(p.players?' · Characters '+count(p.players):'')+(p.message?' · '+p.message:'')+(p.error?' · '+p.error:'');
    if(p.phase==='selecting_profiles')el('status').textContent+=' · Group counts '+(p.tested_candidates||0)+' / '+(p.total_candidates||0)+(p.candidate_k?' · Testing '+p.candidate_k+' groups':'');
    if(p.pca_components)el('status').textContent+=' · PCA '+p.pca_components+' axes retain '+pct(p.pca_variance_retained)+' · '+count(p.projection_dimensions)+' coordinates';
+   if(p.phase==='return_model')el('status').textContent+=' · Return model iteration '+count(p.iteration);
+   if(p.phase==='return_importance')el('status').textContent+=' · Return models '+count(p.processed_models)+' / '+count(p.total_models);
    if(el('start')){el('start').disabled=running;el('rebuild').disabled=running;el('stop').disabled=!running;}
-   renderSelection(!running&&data.report?.status==='completed'?data.report.summary?.cluster_selection:p.cluster_selection);
-   if(!running&&data.report&&data.report.status==='completed'&&loadedRun!==data.report.id){report=data.report;loadedRun=report.id;el('year').innerHTML='<option value="all">All years</option>'+Object.keys(report.summary.years).sort().map(y=>'<option>'+esc(y)+'</option>').join('');render();}
+   renderSelection(!running&&data.report?.status==='completed'?(data.report.unchanged?report?.summary?.cluster_selection:data.report.summary?.cluster_selection):p.cluster_selection);
+   const key=data.report?data.report.id+':'+(data.report.update_token||''):null;
+   if(!running&&data.report&&data.report.status==='completed'&&!data.report.unchanged&&loadedRun!==key){report=data.report;loadedRun=key;el('year').innerHTML='<option value="all">All years</option>'+Object.keys(report.summary.years).sort().map(y=>'<option>'+esc(y)+'</option>').join('');render();}
    else if(running||!data.report||data.report.status!=='completed'){report=null;loadedRun=null;render();}
  }catch(e){el('status').textContent=e.message;}}
- async function start(rebuild){try{const body=new FormData();body.set('clusters',el('clusters').value);body.set('rebuild',String(rebuild));await json('/admin/debug/first-loss/start',{method:'POST',body});loadedRun=null;await refresh();}catch(e){el('status').textContent=e.message;}}
+ async function start(rebuild){try{const body=new FormData();body.set('clusters',el('clusters').value);body.set('rebuild',String(rebuild));await json('/admin/debug/first-loss/start',{method:'POST',body});loadedRun=null;report=null;await refresh();}catch(e){el('status').textContent=e.message;}}
  if(el('form'))el('form').onsubmit=e=>{e.preventDefault();start(false);};
  if(el('rebuild'))el('rebuild').onclick=()=>start(true);
  if(el('stop'))el('stop').onclick=async()=>{try{await json('/admin/debug/first-loss/stop',{method:'POST'});el('status').textContent='Stop requested. Current SQL is cancelled; completed months are kept.';}catch(e){el('status').textContent=e.message;}};
  el('horizon').onchange=render;el('year').onchange=render;refresh();setInterval(refresh,5000);
+ el('scope').onchange=render;el('pdf-scope').onchange=pdfLink;el('axis-x').onchange=renderReturnPca;el('axis-y').onchange=renderReturnPca;
  el('trend-factor').onchange=renderTrend;el('trend-profile').onchange=renderTrend;
 })();
 </script>

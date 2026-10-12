@@ -331,7 +331,13 @@ class DatabaseTests(unittest.TestCase):
         self.assertEqual(model["training_players"], 601)
         self.assertFalse(model["outcomes_used_for_training"])
         self.assertEqual(report["players"], 601)
-        self.assertEqual(model["version"], 3)
+        self.assertEqual(model["version"], 4)
+        prediction = report["return_model"]["scopes"]["all"]["90"]
+        self.assertEqual(prediction["training_n"] + prediction["test_n"], 601)
+        self.assertGreater(prediction["brier_skill"], 0)
+        self.assertTrue(report["return_model"]["converged"])
+        self.assertEqual(len(report["pca"]["global"]["variables"]), 52)
+        self.assertEqual(report["pca_return"]["scopes"]["all"]["90"]["all"]["n"], 601)
         self.assertEqual(model["projection_dimensions"], len(core.FEATURE_NAMES))
         self.assertGreaterEqual(
             report["pca"]["global"]["retained_variance_ratio"], 0.9 - 1e-12
@@ -534,6 +540,10 @@ class DatabaseTests(unittest.TestCase):
                         "UPDATE research.first_loss_players SET projection=jsonb_build_array(projection->0,projection->1) WHERE run_id=%s",
                         (completed_id,),
                     )
+                    c.execute(
+                        "UPDATE research.first_loss_players SET features=(features-'age_quality'-'age_days_raw') || jsonb_build_object('age_days',extract(epoch from (loss_time-'1970-01-01'::timestamptz))/86400) WHERE run_id=%s AND character_id=3",
+                        (completed_id,),
+                    )
                 self.conn.commit()
                 upgraded = subprocess.run(
                     command, capture_output=True, text=True, timeout=20
@@ -544,12 +554,27 @@ class DatabaseTests(unittest.TestCase):
                         "SELECT config->>'model_version',summary ? 'pca',summary ? 'factors_by_year' FROM research.first_loss_runs WHERE id=%s",
                         (completed_id,),
                     )
-                    self.assertEqual(c.fetchone(), ("3", True, True))
+                    self.assertEqual(c.fetchone(), ("4", True, True))
                     c.execute(
                         "SELECT min(jsonb_array_length(projection)) FROM research.first_loss_players WHERE run_id=%s",
                         (completed_id,),
                     )
                     self.assertEqual(c.fetchone()[0], len(core.FEATURE_NAMES))
+                    c.execute(
+                        "SELECT summary FROM research.first_loss_runs WHERE id=%s",
+                        (completed_id,),
+                    )
+                    auto_report = c.fetchone()[0]
+                    self.assertEqual(
+                        auto_report["data_quality"]["invalid_birthdays"], 1
+                    )
+                    c.execute(
+                        "SELECT features FROM research.first_loss_players WHERE run_id=%s AND character_id=3",
+                        (completed_id,),
+                    )
+                    cleaned = c.fetchone()[0]
+                    self.assertIsNone(cleaned["age_days"])
+                    self.assertGreater(cleaned["age_days_raw"], 10000)
                 self.conn.commit()
                 refitted = subprocess.run(
                     command + ["--clusters", "2"],
@@ -566,7 +591,7 @@ class DatabaseTests(unittest.TestCase):
                     self.assertEqual(same_id, completed_id)
                     self.assertEqual(status, "completed")
                     self.assertEqual(config["clusters"], 2)
-                    self.assertEqual(config["model_version"], 3)
+                    self.assertEqual(config["model_version"], 4)
                     self.assertEqual(manual_report["pca"], auto_report["pca"])
                     for horizon, years in auto_report["factors_by_year"].items():
                         for year, factors in years.items():

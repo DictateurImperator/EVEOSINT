@@ -1,10 +1,11 @@
-"""Streaming PCA and full-population clustering; outcomes used only in the report."""
+"""Outcome-free profile PCA/clustering and independently evaluated return models."""
 
 from collections import defaultdict
 from psycopg2.extras import Json, execute_values
 from .core import NUMERIC, FEATURE_NAMES, encode, wilson
 from .database import stream
-from .pca import decompose
+from .pca import decompose, OutcomeProjection
+from .return_model import ReturnStudy
 from .clustering import (
     MODEL_VERSION,
     RESERVOIR_LIMIT,
@@ -198,17 +199,30 @@ def add_evolution(bucket, features, outcomes, horizon):
             counts[label] = counts.get(label, 0) + 1
 
 
-def train(conn, writer, run, clusters, progress, check_stop, batch_size=10000):
+def train(
+    conn, writer, run, clusters, progress, check_stop, batch_size=10000, *, persist=True
+):
     import numpy as np
 
     mode = normalize_clusters(clusters)
     numeric = len(NUMERIC) * 2
     dimension = len(FEATURE_NAMES)
     scales = {}
+    return_study = ReturnStudy()
+    quality = {
+        "invalid_birthdays": 0,
+        "missing_features": {name: 0 for name in NUMERIC},
+    }
     n = 0
     for rows in stream(conn, run, batch_size):
         check_stop()
         matrix = np.array([encode(r["features"]) for r in rows])
+        return_study.normalize(rows)
+        quality["invalid_birthdays"] += sum(
+            r["features"].get("age_quality") == "invalid_birthday" for r in rows
+        )
+        for i, name in enumerate(NUMERIC):
+            quality["missing_features"][name] += int(matrix[:, i * 2 + 1].sum())
         years = np.array([r["cohort"] for r in rows])
         for year in np.unique(years):
             block = matrix[years == year]
@@ -244,6 +258,7 @@ def train(conn, writer, run, clusters, progress, check_stop, batch_size=10000):
                 "Some loss-bearing characters have no features; study is incomplete."
             )
     conn.rollback()
+    return_study.prepare()
     for year, (count, total, squares) in list(scales.items()):
         mean = np.divide(total, count, out=np.zeros_like(total), where=count > 0)
         variance = np.maximum(
@@ -275,6 +290,7 @@ def train(conn, writer, run, clusters, progress, check_stop, batch_size=10000):
     for rows in stream(conn, run, batch_size):
         check_stop()
         x = matrix(rows)
+        return_study.fit_batch(rows)
         years = np.array([r["cohort"] for r in rows])
         for year in np.unique(years):
             block = x[years == year]
@@ -291,6 +307,7 @@ def train(conn, writer, run, clusters, progress, check_stop, batch_size=10000):
         reservoir = reservoir[keep]
         keys = keys[keep]
         progress("pca", players=seen, total_players=n)
+    return_study.step()
     total = sum((stats[1] for stats in cohort_moments.values()), np.zeros(dimension))
     outer = sum(
         (stats[2] for stats in cohort_moments.values()),
@@ -330,6 +347,7 @@ def train(conn, writer, run, clusters, progress, check_stop, batch_size=10000):
         for rows in stream(conn, run, batch_size):
             check_stop()
             z = (matrix(rows) - mean) @ axes
+            return_study.fit_batch(rows)
             for replica, centers in enumerate(solutions):
                 assigned, _ = nearest(z, centers)
                 sizes = np.bincount(assigned, minlength=clusters)
@@ -350,6 +368,23 @@ def train(conn, writer, run, clusters, progress, check_stop, batch_size=10000):
                 selected_clusters=clusters,
                 cluster_selection=selection,
             )
+        return_study.step()
+    # Initial IRLS passes reuse PCA/clustering reads. Additional passes read
+    # prepared rows only, until convergence or the bounded iteration limit.
+    while not return_study.converged and return_study.iterations < 16:
+        seen = 0
+        for rows in stream(conn, run, batch_size):
+            check_stop()
+            return_study.fit_batch(rows)
+            seen += len(rows)
+            progress(
+                "return_model",
+                players=seen,
+                total_players=n,
+                iteration=return_study.iterations + 1,
+                message="Fitting adjusted return factors on training characters; held-out outcomes remain excluded.",
+            )
+        return_study.step()
     # Choose the final start using profile separation only, never return outcomes.
     check_stop()
     diagnostic_distances = pairwise_distances(diagnostic)
@@ -388,6 +423,7 @@ def train(conn, writer, run, clusters, progress, check_stop, batch_size=10000):
     contingency = [np.zeros((clusters, clusters), dtype=np.int64) for _ in pairs]
     population_sizes = np.zeros(clusters, dtype=np.int64)
     summaries = {}
+    outcome_projection = OutcomeProjection(dimension)
     by_year = {}
     by_cluster = {}
     factors = {}
@@ -423,6 +459,8 @@ def train(conn, writer, run, clusters, progress, check_stop, batch_size=10000):
     for rows in stream(conn, run, batch_size):
         check_stop()
         coordinates = (matrix(rows) - mean) @ vectors
+        return_study.score_batch(rows)
+        outcome_projection.add(rows, coordinates)
         z = coordinates[:, :components]
         assignments = [nearest(z, center)[0] for center in solutions]
         assigned = assignments[best_start]
@@ -439,7 +477,15 @@ def train(conn, writer, run, clusters, progress, check_stop, batch_size=10000):
             f = row["features"]
             o = row["outcomes"]
             year = str(row["cohort"])
-            updates.append((cid, int(cluster), Json([float(v) for v in point])))
+            if persist:
+                updates.append(
+                    (
+                        cid,
+                        int(cluster),
+                        Json([float(v) for v in point]),
+                        Json(f) if row.get("features_corrected") else None,
+                    )
+                )
             for store, key in [
                 (summaries, "all"),
                 (by_year, year),
@@ -490,16 +536,18 @@ def train(conn, writer, run, clusters, progress, check_stop, batch_size=10000):
                     count = group[value][year]
                     count[0] += int(obs["returned"])
                     count[1] += 1
-        with writer.cursor() as c:
-            execute_values(
-                c,
-                """UPDATE research.first_loss_players p SET cluster=v.cluster,projection=v.coordinates::jsonb
-              FROM (VALUES %s) v(cid,cluster,coordinates) WHERE p.run_id=%s AND p.character_id=v.cid"""
-                % ("%s", int(run)),
-                updates,
-                page_size=1000,
-            )
-        writer.commit()
+        if persist:
+            with writer.cursor() as c:
+                execute_values(
+                    c,
+                    """UPDATE research.first_loss_players p SET cluster=v.cluster,projection=v.coordinates::jsonb,
+                      features=COALESCE(v.features::jsonb,p.features)
+                  FROM (VALUES %s) v(cid,cluster,coordinates,features) WHERE p.run_id=%s AND p.character_id=v.cid"""
+                    % ("%s", int(run)),
+                    updates,
+                    page_size=1000,
+                )
+            writer.commit()
         seen += len(rows)
         progress("assigning", players=seen, total_players=n)
 
@@ -533,6 +581,7 @@ def train(conn, writer, run, clusters, progress, check_stop, batch_size=10000):
 
     report = {
         "players": n,
+        "data_quality": quality,
         "overall": finish(summaries)["all"],
         "years": finish(by_year),
         "clusters": finish(by_cluster),
@@ -541,8 +590,10 @@ def train(conn, writer, run, clusters, progress, check_stop, batch_size=10000):
             "global": global_pca,
             "years": yearly_pca,
             "coordinate_dimensions": dimension,
+            "coordinates_persisted": persist,
             "coordinate_basis": "Global PCA axes shared by all cohorts. Yearly PCA axes are independently fitted diagnostics.",
         },
+        "pca_return": outcome_projection.finish(),
         "factors_by_year": {},
         "factors": {
             h: {
@@ -580,5 +631,9 @@ def train(conn, writer, run, clusters, progress, check_stop, batch_size=10000):
         "training_players": n,
         "epochs": 3,
         "outcomes_used_for_training": False,
+        "outcomes_used_for_profile_training": False,
     }
+    model["return_model"], report["return_model"] = return_study.summarize(
+        progress, check_stop
+    )
     return model, report
