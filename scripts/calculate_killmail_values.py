@@ -18,9 +18,14 @@ from psycopg2 import sql
 from psycopg2.errors import QueryCanceled
 from psycopg2.extras import execute_values, register_default_jsonb
 
+if __package__:
+    from .killmail_recipe_history import RecipeHistory
+else:
+    from killmail_recipe_history import RecipeHistory
+
 START = date(2003, 1, 1)
 LOCK = 79130423
-FORMULA_VERSION = "zkill-like-v3-cache"
+FORMULA_VERSION = "zkill-like-v4-recipes"
 SCHEMA = Path(__file__).with_name("killmail_values_schema.sql")
 LOG = logging.getLogger("killmail_values")
 ONE_CENT = Decimal("0.01")
@@ -130,7 +135,10 @@ def normalize_blueprints(rows):
     return recipes
 
 
-def load_blueprints(conn):
+def load_blueprints(conn, recipe_version="current", history=None):
+    if recipe_version != "current":
+        history = history or RecipeHistory()
+        return normalize_blueprints(history.blueprint_rows(recipe_version))
     with conn.cursor() as cur:
         cur.execute("SELECT data FROM public.sde_blueprints")
         return normalize_blueprints(data for (data,) in cur)
@@ -359,6 +367,19 @@ def load_config(path):
     )
 
 
+def valuation_timestamp(value):
+    """An explicit source-era date or aware timestamp, normalized to UTC."""
+    try:
+        if len(value) == 10:
+            return datetime.combine(date.fromisoformat(value), datetime.min.time(), tzinfo=UTC)
+        result = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        if result.tzinfo is None:
+            raise ValueError("Include a timezone, for example 2022-08-01T12:00:00Z")
+        return result.astimezone(UTC)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(str(exc)) from exc
+
+
 def relation_name(prefix, month):
     return f"{prefix}_{month.year}_{month.month:02d}"
 
@@ -438,6 +459,8 @@ def needed_prices(conn, month):
              FROM {}.{} k JOIN {}.{} i
                ON i.killmail_id=k.killmail_id AND i.killmail_time=k.killmail_time
              {} AND i.item_type_id IS NOT NULL
+               AND COALESCE(i.singleton,0)<>2 AND COALESCE(i.flag,0)<>179
+               AND NOT (i.item_type_id=33329 AND COALESCE(i.flag,0)=89)
            ) q ORDER BY price_day,kill_day,item_type_id"""
     ).format(
         sql.Identifier("rawkm"), sql.Identifier(km), predicate,
@@ -549,15 +572,39 @@ def main():
     parser.add_argument("--progress", type=Path, default=Path.home() / "eveosint/data/market/killmail_values_progress.json")
     parser.add_argument("--min-free-gb", type=float, default=20.0)
     parser.add_argument("--schema-only", action="store_true")
+    parser.add_argument("--recipe-version", default="current",
+                        help="current database SDE, or an exact archived CCP SDE version")
+    parser.add_argument("--list-recipe-versions", action="store_true",
+                        help="List bundled recipe snapshots and exit without connecting to the database")
+    parser.add_argument("--cache-rules-at", type=valuation_timestamp,
+                        help="Cache source era: YYYY-MM-DD or an ISO timestamp with timezone; not the loss date")
     args = parser.parse_args()
     if not 0 <= args.min_free_gb <= 500:
         parser.error("Invalid disk reserve")
+    history = None
+    if args.list_recipe_versions or args.recipe_version != "current":
+        try:
+            history = RecipeHistory()
+            if args.list_recipe_versions:
+                print(json.dumps(history.manifest, indent=2))
+                return 0
+            args.recipe_version = history.resolve(args.recipe_version)
+            # Fail before schema changes or writes if the snapshot is corrupt.
+            history.recipes(args.recipe_version)
+        except (OSError, ValueError) as exc:
+            parser.error(str(exc))
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     stopped = threading.Event()
     conn = price_conn = None
     owns_lock = False
     state = {"pid": os.getpid(), "formula_version": FORMULA_VERSION, "months_processed": 0,
-             "killmails_valued": 0, "fallback_price_pairs": 0}
+             "killmails_valued": 0, "fallback_price_pairs": 0,
+             "recipe_version": args.recipe_version,
+             "cache_rules_at": args.cache_rules_at.isoformat() if args.cache_rules_at else "current"}
+    if history is not None:
+        snapshot = history.versions[args.recipe_version]
+        state.update(recipe_snapshot_date=snapshot["snapshot_date"],
+                     recipe_source=snapshot["source"], recipe_sha256=snapshot["recipes_sha256"])
 
     def progress(phase, **values):
         state.update(phase=phase, updated_at=datetime.now(UTC).isoformat(), **values)
@@ -604,7 +651,11 @@ def main():
             )
         progress("loading_pricing_rules")
         metadata = load_metadata(conn)
-        pricing = Pricing(metadata, load_blueprints(conn), load_history_counts(conn))
+        pricing = Pricing(metadata, load_blueprints(conn, args.recipe_version, history),
+                          load_history_counts(conn), rules_at=args.cache_rules_at)
+        state["recipe_count"] = len(pricing.recipes)
+        LOG.info("VALUATION_RULES formula=%s recipes=%s recipe_count=%s cache_rules_at=%s",
+                 FORMULA_VERSION, args.recipe_version, len(pricing.recipes), state["cache_rules_at"])
         conn.commit()
         state.update(from_month=months[0].isoformat(), through_month=months[-1].isoformat(), months_total=len(months))
         with conn.cursor() as cur:

@@ -10,6 +10,7 @@
   <p class="small muted-line mt-3">The job selects every killmail whose stored value is empty. Existing values are never touched. Completed months are committed separately; stopping keeps them.</p>
   <div class="mb-2"><strong>Current month: <span id="values-month">—</span></strong></div>
   <div id="values-range" class="small muted-line mb-2"></div>
+  <div id="values-rules" class="small muted-line mb-2"></div>
   <progress id="values-bar" class="w-100 mb-2" value="0" max="100" aria-label="Months processed"></progress>
   <div id="values-status" role="status">Loading status…</div>
   <div id="values-summary" class="my-3"></div>
@@ -26,6 +27,7 @@
    const badge=document.querySelector('[data-values-job-header] .badge');if(badge){badge.textContent=d.running?'running':!enabled?'disabled':p.phase||'idle';badge.className='badge '+(d.running?'text-bg-warning':p.phase==='failed'?'text-bg-danger':!enabled?'text-bg-secondary':'text-bg-success');}
    el('month').textContent=p.current_month||'—';
    el('range').textContent=p.from_month&&p.through_month?'Affected months: '+p.from_month.slice(0,7)+' → '+p.through_month.slice(0,7):'';
+   el('rules').textContent=p.recipe_version?'Manufacturing recipes: '+(p.recipe_version==='current'?'current database SDE':p.recipe_version)+(p.recipe_snapshot_date?' · Snapshot '+p.recipe_snapshot_date:'')+' · Cache rules: '+(p.cache_rules_at||'current'):'';
    el('bar').value=p.months_total?Math.min(100,100*(p.months_processed||0)/p.months_total):0;
    el('status').textContent=(d.running?'Running · ':'')+(p.phase||'Not started')+' · Months '+number(p.months_processed)+' / '+number(p.months_total)+' · Killmails written '+number(p.killmails_valued)+' · Current partition '+number(p.month_killmails)+' kills · Missing before pass '+number(p.month_missing)+(p.current_price_day?' · Reading prices '+p.current_price_day:'')+' · Price fallbacks '+number(p.fallback_price_pairs)+(p.database_bytes_added!==undefined?' · Database change '+size(p.database_bytes_added):'')+(p.error?' · '+p.error:'')+(p.message?' · '+p.message:'');
    el('summary').textContent='Existing values are left untouched. New or re-imported killmails remain empty until this job fills them.';

@@ -205,6 +205,7 @@ class DatabaseTests(unittest.TestCase):
                 (day, day, 2, Decimal("3"), False)]
         needed = values.needed_prices(self.conn, date(2026, 1, 1))
         self.assertIn((day, 2), needed[date(2026, 1, 1)])
+        self.assertFalse({4, 5, 33329} & {t for pairs in needed.values() for _day, t in pairs})
         updated, _ = values.update_month(self.conn, date(2026, 1, 1), rows)
         self.assertEqual(updated, 3)
         with self.conn.cursor() as cur:
@@ -226,6 +227,40 @@ class DatabaseTests(unittest.TestCase):
             sync_killmails.insert_item_recursive(cur, 100, "2026-01-02", nested, index)
             cur.execute("SELECT singleton FROM rawkm.killmail_items_2026_01 WHERE item_type_id=10 ORDER BY item_index")
             self.assertEqual(cur.fetchall(), [(0,), (2,)])
+
+    def test_historical_hel_values_are_written_to_the_killmail_at_the_cent(self):
+        from scripts.test_killmail_recipe_history import historical_fixture, fixture_pricing
+
+        fixture = historical_fixture()
+        for case in fixture["cases"]:
+            with self.subTest(killmail_id=case["killmail_id"]):
+                stamp = values.datetime.fromisoformat(case["killmail_time"].replace("Z", "+00:00"))
+                month = stamp.date().replace(day=1)
+                with self.conn.cursor() as cur:
+                    for prefix in ("killmails", "killmail_items"):
+                        cur.execute(values.sql.SQL(
+                            "CREATE TABLE rawkm.{} PARTITION OF rawkm.{} FOR VALUES FROM ({}) TO ({})"
+                        ).format(values.sql.Identifier(values.relation_name(prefix, month)),
+                                 values.sql.Identifier(prefix), values.sql.Literal(month),
+                                 values.sql.Literal(values.next_month(month))))
+                    cur.execute("INSERT INTO rawkm.killmails VALUES (%s,%s,%s,NULL)",
+                                (case["killmail_id"], stamp, case["ship_type_id"]))
+                    for index, item in enumerate(case["items"]):
+                        cur.execute("INSERT INTO rawkm.killmail_items VALUES (%s,%s,%s,%s,%s,%s,%s,%s)",
+                                    (case["killmail_id"], stamp, index, item["item_type_id"],
+                                     item.get("flag"), item.get("quantity_destroyed", 0),
+                                     item.get("quantity_dropped", 0), item.get("singleton", 0)))
+                engine = fixture_pricing(case, fixture["recipe_version"], fixture["cache_rules_at"])
+                needed = values.needed_prices(self.conn, month)
+                price_rows = [row for day, pairs in needed.items()
+                              for row in values.boundary_prices(day, pairs, engine)]
+                updated, _fallbacks = values.update_month(self.conn, month, price_rows)
+                self.assertEqual(updated, 1)
+                with self.conn.cursor() as cur:
+                    cur.execute("SELECT estimated_value_cents FROM rawkm.killmails WHERE killmail_id=%s",
+                                (case["killmail_id"],))
+                    self.assertEqual(cur.fetchone()[0], values.cents(Decimal(case["expected"])))
+                    cur.execute("DROP TABLE valuation_stage,valuation_prices")
 
 
 if __name__ == "__main__":
