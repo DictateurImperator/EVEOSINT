@@ -412,6 +412,19 @@ def insert_item_recursive(
     item_index,
     parent_flag=None,
 ):
+    singleton = item.get("singleton")
+    if kmid < 21112472 and parent_flag is not None and singleton != 2:
+        # Old killmails cannot distinguish blueprint copies inside containers.
+        # zKill applies this rule to nested cargo, not all blueprints in a hold.
+        cur.execute(
+            """SELECT position('Blueprint' in COALESCE(data->'name'->>'en',data->>'name','')) > 0
+               FROM public.sde_types WHERE sde_key=%s""",
+            (str(item.get("item_type_id")),),
+        )
+        blueprint = cur.fetchone()
+        if blueprint and blueprint[0]:
+            singleton = 2
+
     cur.execute(f"""
     INSERT INTO {t('killmail_items')} (
         killmail_id,
@@ -436,7 +449,7 @@ def insert_item_recursive(
         item.get("flag", parent_flag),
         item.get("quantity_destroyed"),
         item.get("quantity_dropped"),
-        item.get("singleton"),
+        singleton,
     ))
 
     next_index = item_index + 1

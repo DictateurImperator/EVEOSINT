@@ -1,7 +1,7 @@
 """Unit and admin-control checks for in-place killmail valuation."""
 
 import unittest
-from collections import defaultdict, deque
+import os
 from datetime import date
 from decimal import Decimal
 from unittest.mock import patch
@@ -43,20 +43,21 @@ class PriceFormulaTests(unittest.TestCase):
             3: (4513, None, "Mordunium"),
             42126: (30, 6, "Vanquisher"),
         }
+        engine = values.Pricing(metadata, {}, {})
         self.assertEqual(
-            values.effective_price(1, date(2026, 1, 1), [Decimal("50")], Decimal("50"), metadata)[0],
+            engine.price(1, date(2026, 1, 1), date(2026, 1, 1))[0],
             Decimal("0.01"),
         )
         self.assertEqual(
-            values.effective_price(2, date(2026, 1, 1), [], None, metadata)[0],
+            engine.price(2, date(2026, 1, 1), date(2026, 1, 1))[0],
             Decimal("10000"),
         )
         self.assertEqual(
-            values.effective_price(3, date(2026, 1, 1), [], None, metadata)[0],
+            engine.price(3, date(2026, 1, 1), date(2026, 1, 1))[0],
             Decimal("200"),
         )
         self.assertEqual(
-            values.effective_price(42126, date(2026, 1, 1), [], Decimal("9"), metadata)[0],
+            engine.price(42126, date(2026, 1, 1), date(2026, 1, 1))[0],
             Decimal("650000000000"),
         )
 
@@ -74,22 +75,74 @@ class PriceFormulaTests(unittest.TestCase):
             (date(2026, 1, 3), {"34": Decimal("12")}),
         ]
         cursor = Cursor(rows[1:])
-        histories = defaultdict(lambda: deque(maxlen=34))
-        pending, materialized, last_day, exact = values.advance_prices(
+        engine = values.Pricing({}, {}, {34: 3, 35: 1})
+        pending, materialized, last_day = values.advance_prices(
             cursor,
             rows[0],
             date(2026, 1, 2),
-            histories,
-            {date(2026, 1, 2): [34, 35]},
-            {},
+            engine,
+            {date(2026, 1, 2): [(date(2026, 1, 2), 34), (date(2026, 1, 2), 35)]},
         )
         self.assertEqual(pending[0], date(2026, 1, 3))
         self.assertEqual(last_day, date(2026, 1, 2))
-        self.assertEqual(exact[35], Decimal("10"))
         self.assertEqual(materialized, [
-            (date(2026, 1, 2), 34, 600, False),
-            (date(2026, 1, 2), 35, 1000, False),
+            (date(2026, 1, 2), date(2026, 1, 2), 34, Decimal("6"), False),
+            (date(2026, 1, 2), date(2026, 1, 2), 35, Decimal("10"), False),
         ])
+
+    def test_blueprint_material_efficiency_uses_ceiling_and_output_quantity(self):
+        recipes = values.normalize_blueprints([{
+            "activities": {"manufacturing": {
+                "products": [{"typeID": 1, "quantity": 4}],
+                "materials": [{"typeID": 2, "quantity": 11}],
+            }}
+        }])
+        self.assertEqual(recipes, {1: (4, {2: 10})})
+
+    def test_missing_hull_is_built_using_previous_day_material_prices(self):
+        engine = values.Pricing({}, {1: (1, {2: 3})}, {2: 100})
+        engine.add_day(date(2026, 1, 1), {"2": Decimal("10")})
+        engine.add_day(date(2026, 1, 2), {"2": Decimal("30")})
+        self.assertEqual(engine.price(1, date(2026, 1, 2), date(2026, 1, 2)), (Decimal("30"), False))
+
+    def test_supercapital_uses_build_recipe_instead_of_exact_snapshot(self):
+        engine = values.Pricing({1: (30, 6, "Titan")}, {1: (1, {2: 3})}, {1: 100, 2: 100})
+        engine.add_day(date(2026, 1, 1), {"2": Decimal("10")})
+        engine.add_day(date(2026, 1, 2), {"1": Decimal("1000"), "2": Decimal("30")})
+        self.assertEqual(engine.price(1, date(2026, 1, 2), date(2026, 1, 2)), (Decimal("30"), False))
+
+    def test_structure_module_uses_build_price_even_with_a_market_price(self):
+        engine = values.Pricing({1: (1415, 66, "Structure module")}, {1: (1, {2: 3})}, {1: 100, 2: 100})
+        engine.add_day(date(2026, 1, 1), {"2": Decimal("10")})
+        engine.add_day(date(2026, 1, 2), {"1": Decimal("1000")})
+        self.assertEqual(engine.price(1, date(2026, 1, 2), date(2026, 1, 2))[0], Decimal("30"))
+
+    def test_sparse_history_does_not_reuse_an_observation_outside_calendar_limit(self):
+        engine = values.Pricing({}, {}, {1: 2})
+        engine.add_day(date(2026, 1, 1), {"1": Decimal("6000")})
+        self.assertEqual(engine.price(1, date(2026, 1, 10), date(2026, 1, 10)), (Decimal(".01"), True))
+
+    def test_zero_history_prices_are_skipped(self):
+        engine = values.Pricing({}, {}, {1: 10})
+        engine.add_day(date(2026, 1, 1), {"1": Decimal("10")})
+        engine.add_day(date(2026, 1, 2), {"1": Decimal("0")})
+        self.assertEqual(engine.price(1, date(2026, 1, 2), date(2026, 1, 2))[0], Decimal("10"))
+
+    def test_recursive_construction_keeps_sub_cent_precision(self):
+        engine = values.Pricing({}, {1: (3, {2: 1})}, {2: 10})
+        engine.add_day(date(2026, 1, 1), {"2": Decimal("1")})
+        price, _ = engine.price(1, date(2026, 1, 2), date(2026, 1, 2))
+        self.assertEqual(values.cents(price * 3), 100)
+
+    def test_cyclic_recipes_are_reported_without_recursing_forever(self):
+        engine = values.Pricing({}, {1: (1, {2: 1}), 2: (1, {1: 1})}, {})
+        self.assertEqual(engine.price(1, date(2026, 1, 2), date(2026, 1, 2)), (Decimal(".01"), True))
+
+    def test_date_only_recipe_inputs_and_timestamp_fixed_price_boundaries(self):
+        engine = values.Pricing({}, {}, {})
+        day = date(2023, 12, 1)
+        self.assertEqual(engine.price(3514, day, day)[0], Decimal("250000000000"))
+        self.assertEqual(engine.price(3514, day, day, date_only=True)[0], Decimal("100000000000"))
 
 
 class AdminJobTests(unittest.TestCase):
@@ -102,6 +155,77 @@ class AdminJobTests(unittest.TestCase):
             launch.assert_not_called()
             jobs.run_killmail_values()
             launch.assert_called_once_with(job, job["command"])
+
+
+@unittest.skipUnless(os.environ.get("KILLMAIL_VALUES_TEST_DSN"), "Set an isolated killmail_values_test DSN")
+class DatabaseTests(unittest.TestCase):
+    def setUp(self):
+        self.conn = values.psycopg2.connect(os.environ["KILLMAIL_VALUES_TEST_DSN"])
+        if self.conn.info.dbname != "killmail_values_test":
+            self.conn.close()
+            raise RuntimeError("Use an isolated killmail_values_test database")
+        with self.conn.cursor() as cur:
+            cur.execute("""CREATE SCHEMA rawkm;
+                CREATE TABLE rawkm.killmails(
+                    killmail_id bigint,killmail_time timestamptz,victim_ship_type_id bigint,
+                    estimated_value_cents bigint) PARTITION BY RANGE(killmail_time);
+                CREATE TABLE rawkm.killmails_2026_01 PARTITION OF rawkm.killmails
+                    FOR VALUES FROM ('2026-01-01') TO ('2026-02-01');
+                CREATE TABLE rawkm.killmail_items(
+                    killmail_id bigint,killmail_time timestamptz,item_index integer,item_type_id bigint,
+                    flag integer,quantity_destroyed bigint,quantity_dropped bigint,singleton integer,
+                    PRIMARY KEY(killmail_id,killmail_time,item_index)) PARTITION BY RANGE(killmail_time);
+                CREATE TABLE rawkm.killmail_items_2026_01 PARTITION OF rawkm.killmail_items
+                    FOR VALUES FROM ('2026-01-01') TO ('2026-02-01');
+                CREATE TABLE public.sde_types(sde_key text PRIMARY KEY,data jsonb);""")
+
+    def tearDown(self):
+        self.conn.rollback()
+        self.conn.close()
+
+    def test_sql_preserves_values_and_rounds_only_the_final_total(self):
+        with self.conn.cursor() as cur:
+            cur.execute("""INSERT INTO rawkm.killmails VALUES
+                (1,'2026-01-02 12:00:00+00',1,NULL),
+                (2,'2026-01-02 12:00:00+00',1,777),
+                (3,'2026-01-02 00:30:00+00',2,NULL),
+                (4,'2026-01-02 01:00:00+00',2,NULL);
+                INSERT INTO rawkm.killmail_items_2026_01 VALUES
+                (1,'2026-01-02 12:00:00+00',0,3,5,3,0,0),
+                (1,'2026-01-02 12:00:00+00',1,4,5,5,0,2),
+                (1,'2026-01-02 12:00:00+00',2,5,179,1,0,0),
+                (1,'2026-01-02 12:00:00+00',3,33329,89,1,0,0);""")
+        day = date(2026, 1, 2)
+        rows = [(day, day, 1, Decimal("1000"), False),
+                (day, day, 3, Decimal(1) / 3, False),
+                (day, day, 4, Decimal("999"), False),
+                (day, day, 5, Decimal("999"), False),
+                (day, day, 33329, Decimal("999"), False),
+                (day, date(2026, 1, 1), 2, Decimal("2"), False),
+                (day, day, 2, Decimal("3"), False)]
+        needed = values.needed_prices(self.conn, date(2026, 1, 1))
+        self.assertIn((day, 2), needed[date(2026, 1, 1)])
+        updated, _ = values.update_month(self.conn, date(2026, 1, 1), rows)
+        self.assertEqual(updated, 3)
+        with self.conn.cursor() as cur:
+            cur.execute("SELECT killmail_id,estimated_value_cents FROM rawkm.killmails ORDER BY killmail_id")
+            self.assertEqual(cur.fetchall(), [(1,100107), (2,777), (3,200), (4,200)])
+        self.assertEqual(values.target_months(self.conn), [])
+
+    def test_old_blueprints_are_copies_only_when_nested(self):
+        from scripts import sync_killmails
+
+        with self.conn.cursor() as cur:
+            cur.execute("""INSERT INTO public.sde_types VALUES
+                ('10','{"name":{"en":"Example Blueprint"}}'),
+                ('11','{"name":{"en":"Container"}}');""")
+            original = {"item_type_id":10,"flag":5,"quantity_destroyed":1,"singleton":0}
+            nested = {"item_type_id":11,"flag":5,"quantity_destroyed":1,"singleton":0,
+                      "items":[dict(original)]}
+            index = sync_killmails.insert_item_recursive(cur, 100, "2026-01-02", original, 0)
+            sync_killmails.insert_item_recursive(cur, 100, "2026-01-02", nested, index)
+            cur.execute("SELECT singleton FROM rawkm.killmail_items_2026_01 WHERE item_type_id=10 ORDER BY item_index")
+            self.assertEqual(cur.fetchall(), [(0,), (2,)])
 
 
 if __name__ == "__main__":

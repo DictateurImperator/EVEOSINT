@@ -10,7 +10,7 @@ import signal
 import threading
 from collections import defaultdict, deque
 from datetime import UTC, date, datetime, timedelta
-from decimal import Decimal, ROUND_HALF_UP
+from decimal import Decimal, ROUND_CEILING, ROUND_HALF_UP
 from pathlib import Path
 
 import psycopg2
@@ -20,23 +20,11 @@ from psycopg2.extras import execute_values, register_default_jsonb
 
 START = date(2003, 1, 1)
 LOCK = 79130423
-FORMULA_VERSION = "zkill-like-v1"
+FORMULA_VERSION = "zkill-like-v2"
 SCHEMA = Path(__file__).with_name("killmail_values_schema.sql")
 LOG = logging.getLogger("killmail_values")
 ONE_CENT = Decimal("0.01")
 MAX_BIGINT = 9223372036854775807
-
-# Price::getSpecialPriceTypeIDs(), used by the public daily price endpoint.
-SPECIAL_TYPES = {
-    635, 2233, 2834, 2836, 3514, 3516, 3518, 9860, 11011, 11019,
-    11375, 11936, 11938, 11940, 11942, 12478, 13202, 25560, 26840,
-    26842, 32209, 32788, 32790, 33395, 33397, 33673, 33675, 34556,
-    34557, 34558, 34559, 34560, 35779, 35781, 36902, 42124, 42125,
-    42126, 42241, 42242, 42243, 42245, 42246, 44264, 44265, 45530,
-    45531, 45645, 45647, 45649, 47512, 47514, 48635, 48636, 55511,
-    60764, 60765, 74141, 74316, 77726, 78414, 78576, 85062, 85229,
-    85236, 87381, 88001, 89807, 89808,
-}
 
 FIXED_PRICES = {
     12478: Decimal("0.01"), 34559: Decimal("0.01"),
@@ -86,15 +74,18 @@ def cents(value):
     return int((Decimal(value) * 100).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
 
 
-def fixed_price(type_id, day):
-    if type_id == 88001 and day <= date(2025, 6, 1):
+def fixed_price(type_id, day, date_only=True):
+    def before(cutoff):
+        return day <= cutoff if date_only else day < cutoff
+
+    if type_id == 88001 and before(date(2025, 6, 1)):
         return Decimal("10000000000")
     if type_id == 3514:
-        return Decimal("100000000000") if day <= date(2023, 12, 1) else Decimal("250000000000")
+        return Decimal("100000000000") if before(date(2023, 12, 1)) else Decimal("250000000000")
     if type_id == 42241:
-        return Decimal("350000000000") if day <= date(2019, 7, 1) else Decimal("650000000000")
+        return Decimal("350000000000") if before(date(2019, 7, 1)) else Decimal("650000000000")
     if type_id == 11940:
-        return Decimal("500000000") if day <= date(2020, 1, 25) else Decimal("3400000000000")
+        return Decimal("500000000") if before(date(2020, 1, 25)) else Decimal("3400000000000")
     return FIXED_PRICES.get(type_id)
 
 
@@ -113,22 +104,138 @@ def rolling_price(history, exact=None):
     return value, value <= ONE_CENT
 
 
-def effective_price(type_id, day, history, exact, metadata):
-    group_id, category_id, _name = metadata.get(type_id, (None, None, ""))
-    if category_id == 91:  # SKINs
-        return ONE_CENT, False
-    value = fixed_price(type_id, day)
-    if value is not None:
-        return value, False
-    if group_id == 29:  # Capsules
-        return Decimal("10000"), False
-    if group_id in (4513, 4759):
-        return Decimal("200"), False
-    # The daily endpoint explicitly supplies calculated/special and capital
-    # build prices. Use the exact-day value, as zKill does before market history.
-    if (type_id in SPECIAL_TYPES or group_id in (30, 659)) and exact is not None:
-        return exact, False
-    return rolling_price(history, exact)
+def normalize_blueprints(rows):
+    recipes = {}
+    for data in rows:
+        activities = data.get("activities", {})
+        manufacturing = activities.get("manufacturing") or activities.get("1") or {}
+        products = manufacturing.get("products", [])
+        materials = manufacturing.get("materials", [])
+        if not products or not materials:
+            continue
+        product = products[0]
+        product_id = product.get("productTypeID", product.get("typeID"))
+        if product_id is None:
+            continue
+        requirements = {}
+        for material in materials:
+            type_id = material.get("materialTypeID", material.get("typeID"))
+            quantity = material.get("quantity")
+            if type_id is not None and quantity is not None:
+                requirements[int(type_id)] = max(
+                    1, int((Decimal(int(quantity)) * Decimal("0.9")).to_integral_value(rounding=ROUND_CEILING))
+                )
+        if requirements:
+            recipes[int(product_id)] = (max(1, int(product.get("quantity", 1))), requirements)
+    return recipes
+
+
+def load_blueprints(conn):
+    with conn.cursor() as cur:
+        cur.execute("SELECT data FROM public.sde_blueprints")
+        return normalize_blueprints(data for (data,) in cur)
+
+
+def load_history_counts(conn):
+    # zKill bounds its backwards calendar scan by the number of entries in
+    # that item's complete market history, including dates after an old kill.
+    with conn.cursor() as cur:
+        cur.execute("""SELECT key::bigint,count(*)
+                       FROM market.zkill_daily_prices p
+                       CROSS JOIN LATERAL jsonb_object_keys(p.prices) k(key)
+                       GROUP BY key""")
+        return {type_id: int(count) for type_id, count in cur}
+
+
+class Pricing:
+    """Local equivalent of zKill Price/Build, with no network or writes."""
+
+    def __init__(self, metadata, recipes, counts, lookup=None):
+        self.metadata = metadata
+        self.recipes = recipes
+        self.counts = counts
+        self.histories = defaultdict(lambda: deque(maxlen=100))
+        self.lookup = lookup
+        self.cache = {}
+
+    def add_day(self, day, payload):
+        self.cache.clear()
+        for key, value in (payload or {}).items():
+            if value is not None and Decimal(str(value)) > 0:
+                self.histories[int(key)].append((day, Decimal(str(value))))
+
+    def market(self, type_id, day):
+        # The do/while in zKill inspects at least one calendar date.
+        earliest = day - timedelta(days=max(1, self.counts.get(type_id, 0)) - 1)
+        observations = self.lookup(type_id, day, earliest) if self.lookup else self.histories.get(type_id, ())
+        observations = sorted(
+            ((d, Decimal(str(v))) for d, v in observations if earliest <= d <= day and v > 0),
+            reverse=True,
+        )[:34]
+        exact = next((v for d, v in observations if d == day), None)
+        return [v for _d, v in observations], exact
+
+    def build(self, type_id, day, stack):
+        if " SKIN " in self.metadata.get(type_id, (None, None, ""))[2]:
+            return ONE_CENT, False
+        recipe = self.recipes.get(type_id)
+        if not recipe:
+            return ONE_CENT, True
+        output, requirements = recipe
+        total = Decimal(0)
+        unknown = False
+        for material, quantity in requirements.items():
+            if material == type_id:
+                continue
+            value, missing = self.price(material, day, day - timedelta(days=1), True, stack)
+            total += value * quantity
+            unknown |= missing
+        return total / output, unknown
+
+    def price(self, type_id, kill_day, market_day, date_only=False, stack=()):
+        key = (type_id, kill_day, market_day, date_only)
+        if key in self.cache:
+            return self.cache[key]
+        if type_id in stack or len(stack) >= 32:
+            return ONE_CENT, True
+        result = self._price(type_id, kill_day, market_day, date_only, stack + (type_id,))
+        self.cache[key] = result
+        return result
+
+    def _price(self, type_id, kill_day, market_day, date_only, stack):
+        group, category, _name = self.metadata.get(type_id, (None, None, ""))
+        if category == 91:
+            return ONE_CENT, False
+        fixed = fixed_price(type_id, kill_day, date_only)
+        if fixed is not None:
+            return fixed, False
+        if group == 29:
+            return Decimal("10000"), False
+        if group in (4513, 4759):
+            return Decimal("200"), False
+        if group in (30, 659):
+            built = self.build(type_id, kill_day, stack)
+            if built[0] > 1:
+                return built
+        if type_id == 2233:
+            total = Decimal(0)
+            unknown = False
+            for material, quantity in ((3962, 1), (2867, 8), (2871, 8), (2876, 8), (2872, 8)):
+                value, missing = self.price(material, kill_day, market_day, date_only, stack)
+                total += value * quantity
+                unknown |= missing
+            return total, unknown
+        if category == 66:
+            built = self.build(type_id, kill_day, stack)
+            if built[0] > ONE_CENT:
+                return built
+        history, exact = self.market(type_id, market_day)
+        value, unknown = rolling_price(history)
+        if value <= ONE_CENT:
+            value, unknown = self.build(type_id, market_day, stack)
+        if exact is not None and exact < value:
+            return exact, False
+        return value, unknown
 
 
 def load_config(path):
@@ -191,7 +298,7 @@ def month_counts(conn, month):
 def target_months(conn):
     query = sql.SQL(
         """SELECT date_trunc('month',killmail_time)::date,
-                  max(((killmail_time-interval '1 hour') AT TIME ZONE 'UTC')::date)
+                  max(((killmail_time-interval '3601 seconds') AT TIME ZONE 'UTC')::date)
            FROM rawkm.killmails
            WHERE estimated_value_cents IS NULL
            GROUP BY 1 ORDER BY 1"""
@@ -206,17 +313,19 @@ def needed_prices(conn, month):
     items = relation_name("killmail_items", month)
     predicate = sql.SQL("WHERE k.estimated_value_cents IS NULL")
     query = sql.SQL(
-        """SELECT price_day,item_type_id FROM (
-             SELECT DISTINCT ((k.killmail_time-interval '1 hour') AT TIME ZONE 'UTC')::date price_day,
+        """SELECT price_day,kill_day,item_type_id FROM (
+             SELECT DISTINCT ((k.killmail_time-interval '3601 seconds') AT TIME ZONE 'UTC')::date price_day,
+                    (k.killmail_time AT TIME ZONE 'UTC')::date kill_day,
                     k.victim_ship_type_id item_type_id
              FROM {}.{} k {} AND k.victim_ship_type_id IS NOT NULL
              UNION
-             SELECT DISTINCT ((k.killmail_time-interval '1 hour') AT TIME ZONE 'UTC')::date,
+             SELECT DISTINCT ((k.killmail_time-interval '3601 seconds') AT TIME ZONE 'UTC')::date,
+                    (k.killmail_time AT TIME ZONE 'UTC')::date,
                     i.item_type_id
              FROM {}.{} k JOIN {}.{} i
                ON i.killmail_id=k.killmail_id AND i.killmail_time=k.killmail_time
              {} AND i.item_type_id IS NOT NULL
-           ) q ORDER BY price_day,item_type_id"""
+           ) q ORDER BY price_day,kill_day,item_type_id"""
     ).format(
         sql.Identifier("rawkm"), sql.Identifier(km), predicate,
         sql.Identifier("rawkm"), sql.Identifier(km),
@@ -225,44 +334,35 @@ def needed_prices(conn, month):
     by_day = defaultdict(list)
     with conn.cursor() as cur:
         cur.execute(query)
-        for price_day, type_id in cur:
-            by_day[price_day].append(int(type_id))
+        for price_day, kill_day, type_id in cur:
+            by_day[price_day].append((kill_day, int(type_id)))
     return by_day
 
 
 def advance_prices(
-    price_cursor, pending_row, through, histories, needed, metadata,
+    price_cursor, pending_row, through, pricing, needed,
     stopped=None, on_day=None,
 ):
     rows = []
     last_day = None
-    last_exact = {}
     while pending_row is not None and pending_row[0] <= through:
         if stopped is not None and stopped.is_set():
             raise StopRequested()
         day, payload = pending_row
         if on_day is not None and day.day == 1:
             on_day(day)
-        exact = {int(key): Decimal(str(value)) for key, value in (payload or {}).items()}
-        for type_id, value in exact.items():
-            histories[type_id].append(value)
-        for type_id in needed.get(day, ()):
-            value, fallback = effective_price(
-                type_id, day, histories.get(type_id, ()), exact.get(type_id), metadata
-            )
-            rows.append((day, type_id, cents(value), fallback))
-        last_day, last_exact = day, exact
+        pricing.add_day(day, payload)
+        rows.extend(boundary_prices(day, needed.get(day, ()), pricing))
+        last_day = day
         pending_row = price_cursor.fetchone()
-    return pending_row, rows, last_day, last_exact
+    return pending_row, rows, last_day
 
 
-def boundary_prices(day, type_ids, histories, exact, metadata):
+def boundary_prices(day, pairs, pricing):
     rows = []
-    for type_id in type_ids:
-        value, fallback = effective_price(
-            type_id, day, histories.get(type_id, ()), exact.get(type_id), metadata
-        )
-        rows.append((day, type_id, cents(value), fallback))
+    for kill_day, type_id in pairs:
+        value, fallback = pricing.price(type_id, kill_day, day)
+        rows.append((kill_day, day, type_id, value, fallback))
     return rows
 
 
@@ -273,8 +373,8 @@ def update_month(conn, month, price_rows):
     with conn.cursor() as cur:
         cur.execute(
             """CREATE TEMP TABLE valuation_prices(
-                 price_day date,item_type_id bigint,unit_price_cents bigint,used_fallback boolean,
-                 PRIMARY KEY(price_day,item_type_id)) ON COMMIT DROP"""
+                 kill_day date,price_day date,item_type_id bigint,unit_price_isk numeric,used_fallback boolean,
+                 PRIMARY KEY(kill_day,price_day,item_type_id)) ON COMMIT DROP"""
         )
         if price_rows:
             execute_values(
@@ -284,39 +384,32 @@ def update_month(conn, month, price_rows):
                 page_size=5000,
             )
         cur.execute(
-            """CREATE TEMP TABLE valuation_blueprints(type_id bigint PRIMARY KEY) ON COMMIT DROP;
-               INSERT INTO valuation_blueprints
-               SELECT sde_key::bigint FROM public.sde_types
-               WHERE sde_key ~ '^[0-9]+$'
-                 AND lower(COALESCE(data->'name'->>'en',data->>'name','')) LIKE '%blueprint%'"""
-        )
-        cur.execute(
             sql.SQL(
                 """CREATE TEMP TABLE valuation_stage ON COMMIT DROP AS
                    SELECT k.killmail_id,k.killmail_time,
                      LEAST(%s::numeric,
-                       COALESCE(h.unit_price_cents,1)::numeric+
+                       round(100 * (COALESCE(h.unit_price_isk,0.01)::numeric+
                        COALESCE(sum(
                          (COALESCE(i.quantity_destroyed,0)+COALESCE(i.quantity_dropped,0))::numeric*
                          CASE
                            WHEN i.singleton=2 OR i.flag=179 OR (i.item_type_id=33329 AND i.flag=89)
-                             OR (k.killmail_id<21112472 AND i.flag=5 AND b.type_id IS NOT NULL)
-                           THEN 1
-                           ELSE COALESCE(p.unit_price_cents,1)
+                           THEN 0.01
+                           ELSE COALESCE(p.unit_price_isk,0.01)
                          END
-                       ),0)
+                       ),0)))
                      )::bigint AS value_cents
                    FROM {}.{} k
                    LEFT JOIN {}.{} i ON i.killmail_id=k.killmail_id AND i.killmail_time=k.killmail_time
                    LEFT JOIN valuation_prices h
-                     ON h.price_day=((k.killmail_time-interval '1 hour') AT TIME ZONE 'UTC')::date
+                     ON h.price_day=((k.killmail_time-interval '3601 seconds') AT TIME ZONE 'UTC')::date
+                    AND h.kill_day=(k.killmail_time AT TIME ZONE 'UTC')::date
                     AND h.item_type_id=k.victim_ship_type_id
                    LEFT JOIN valuation_prices p
-                     ON p.price_day=((k.killmail_time-interval '1 hour') AT TIME ZONE 'UTC')::date
+                     ON p.price_day=((k.killmail_time-interval '3601 seconds') AT TIME ZONE 'UTC')::date
+                    AND p.kill_day=(k.killmail_time AT TIME ZONE 'UTC')::date
                     AND p.item_type_id=i.item_type_id
-                   LEFT JOIN valuation_blueprints b ON b.type_id=i.item_type_id
                    WHERE TRUE {}
-                   GROUP BY k.killmail_id,k.killmail_time,h.unit_price_cents"""
+                   GROUP BY k.killmail_id,k.killmail_time,h.unit_price_isk"""
             ).format(
                 sql.Identifier("rawkm"), sql.Identifier(km),
                 sql.Identifier("rawkm"), sql.Identifier(items), condition,
@@ -327,7 +420,8 @@ def update_month(conn, month, price_rows):
             sql.SQL(
                 """UPDATE {}.{} k SET estimated_value_cents=s.value_cents
                    FROM valuation_stage s
-                   WHERE k.killmail_id=s.killmail_id AND k.killmail_time=s.killmail_time"""
+                   WHERE k.killmail_id=s.killmail_id AND k.killmail_time=s.killmail_time
+                     AND k.estimated_value_cents IS NULL"""
             ).format(sql.Identifier("rawkm"), sql.Identifier(km))
         )
         updated = cur.rowcount
@@ -377,7 +471,7 @@ def main():
             if not cur.fetchone()[0]:
                 raise RuntimeError("Another killmail valuation is running")
             owns_lock = True
-            cur.execute("SET lock_timeout='10s'; SET statement_timeout=0")
+            cur.execute("SET lock_timeout='10s'; SET statement_timeout=0; SET TIME ZONE 'UTC'")
             cur.execute(SCHEMA.read_text())
         conn.commit()
         if args.schema_only:
@@ -395,7 +489,10 @@ def main():
                 f"Complete zKill price history is required from {START} through {price_through}; "
                 f"found {first_price or 'none'} through {last_price or 'none'} with {missing_days} missing day(s)."
             )
+        progress("loading_pricing_rules")
         metadata = load_metadata(conn)
+        pricing = Pricing(metadata, load_blueprints(conn), load_history_counts(conn))
+        conn.commit()
         state.update(from_month=months[0].isoformat(), through_month=months[-1].isoformat(), months_total=len(months))
         with conn.cursor() as cur:
             cur.execute("SELECT pg_database_size(current_database())")
@@ -416,9 +513,7 @@ def main():
             (START, price_through),
         )
         pending = price_cursor.fetchone()
-        histories = defaultdict(lambda: deque(maxlen=34))
         last_processed_day = None
-        last_exact = {}
         for index, month in enumerate(months, 1):
             if stopped.is_set():
                 raise StopRequested()
@@ -435,10 +530,10 @@ def main():
             conn.commit()
             rows = []
             if last_processed_day in needed:
-                rows.extend(boundary_prices(last_processed_day, needed[last_processed_day], histories, last_exact, metadata))
+                rows.extend(boundary_prices(last_processed_day, needed[last_processed_day], pricing))
             month_price_end = min(next_month(month) - timedelta(days=1), price_through)
-            pending, new_rows, processed_day, exact = advance_prices(
-                price_cursor, pending, month_price_end, histories, needed, metadata,
+            pending, new_rows, processed_day = advance_prices(
+                price_cursor, pending, month_price_end, pricing, needed,
                 stopped=stopped,
                 on_day=lambda day: progress(
                     "reading_prices", current_price_day=day.isoformat()
@@ -446,7 +541,7 @@ def main():
             )
             rows.extend(new_rows)
             if processed_day is not None:
-                last_processed_day, last_exact = processed_day, exact
+                last_processed_day = processed_day
             if not should_write:
                 state["months_processed"] += 1
                 progress("running", month_updated=0, month_fallback_pairs=0)
