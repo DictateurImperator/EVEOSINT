@@ -42,7 +42,7 @@
             <div class="muted-line small">{{ job.key }}</div>
           </div>
 
-          <div class="text-end" {% if job.type == "killmail_archive_refresh" %}data-archive-job-header{% endif %}>
+          <div class="text-end" {% if job.type == "killmail_archive_refresh" %}data-archive-job-header{% elif job.type == "zkill_prices" %}data-prices-job-header{% endif %}>
             {% if job.running %}
               <span class="badge text-bg-warning">running</span>
               {% if job.started_at %}
@@ -92,7 +92,10 @@
           </form>
         {% elif job.type == "zkill_prices" %}
           <p class="muted-line small">Import all daily zKill item valuation prices since 2003. Resumes from saved days; requests are sequential and spaced out.</p>
-          <a class="btn btn-outline-primary mb-3" href="/admin/prices">Open historical price import</a>
+          {% with prices_enabled=job.enabled %}
+          {% include "admin_prices_progress.html" %}
+          {% endwith %}
+          <a href="/admin/prices" class="small mt-2">Open dedicated price history screen</a>
         {% elif job.type == "mer_economy" %}
           <p class="muted-line small">Import economic data from downloaded MER archives. Unchanged archives are skipped.</p>
           <a class="btn btn-outline-primary mb-3" href="/admin/mer">Open Admin MER</a>

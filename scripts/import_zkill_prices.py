@@ -325,6 +325,7 @@ def main():
                 progress("running", current_day=day.isoformat(), message=None)
                 try:
                     count = import_day(conn, client, day)
+                    state["last_success_day"] = day.isoformat()
                     state["downloaded"] += 1
                     state["items"] += count
                     state["empty"] += int(count == 0)

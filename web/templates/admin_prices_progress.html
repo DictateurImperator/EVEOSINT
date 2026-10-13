@@ -1,0 +1,37 @@
+<section class="content-card p-3">
+  {% if 'admin.jobs.run' in user.permissions %}
+  <form id="prices-form" class="d-flex flex-wrap gap-3 align-items-end">
+    <label>From<input class="form-control" type="date" min="2003-01-01" name="date_from"></label>
+    <label>Through<input class="form-control" type="date" min="2003-01-01" name="date_to"></label>
+    <button class="btn btn-primary" id="prices-start" {% if not prices_enabled|default(true) %}disabled{% endif %}>Import all / resume</button>
+    <button class="btn btn-outline-danger" id="prices-stop" type="button" disabled>Stop</button>
+  </form>
+  {% endif %}
+  <p class="small muted-line mt-3">Leave dates empty for all available history from 2003-01-01 through yesterday (UTC). Imported days are reused; the last seven calendar days are refreshed. No automatic schedule. One request at a time, at least two seconds apart; rate limits slow or stop the job. Stopping preserves committed days.</p>
+  <div class="mb-2"><strong>Processing date (UTC): <span id="prices-date">—</span></strong></div>
+  <div id="prices-range" class="small muted-line mb-2"></div>
+  <progress id="prices-bar" class="w-100 mb-2" value="0" max="100" aria-label="Days processed"></progress>
+  <div id="prices-status" role="status">Loading status…</div>
+  <div id="prices-summary" class="my-3"></div>
+  <a class="btn btn-sm btn-outline-light" href="/admin/jobs/import_zkill_prices/log" target="_blank">Job log</a>
+</section>
+<script>
+(()=>{
+ const enabled={{ prices_enabled|default(true)|tojson }};
+ const el=id=>document.getElementById('prices-'+id), number=n=>Number(n||0).toLocaleString('en-US');
+ async function json(url,options={}){const r=await fetch(url,{...options,headers:{Accept:'application/json'},cache:'no-store'});const d=await r.json();if(!r.ok)throw Error(d.error||'Request failed');return d;}
+ async function refresh(){try{
+   const d=await json('/admin/prices/status'),p=d.progress||{},s=d.summary;
+   const badge=document.querySelector('[data-prices-job-header] .badge');if(badge){badge.textContent=d.running?'running':!enabled?'disabled':p.phase||'idle';badge.className='badge '+(d.running?'text-bg-warning':p.phase==='failed'?'text-bg-danger':!enabled?'text-bg-secondary':'text-bg-success');}
+   el('date').textContent=p.current_day||p.last_success_day||'—';
+   el('range').textContent=p.from&&p.through?'Import range: '+p.from+' → '+p.through:'';
+   el('bar').value=p.total_days?Math.min(100,100*(p.processed||0)/p.total_days):0;
+   el('status').textContent=(d.running?'Running · ':'')+(p.phase||'Not started')+' · Days '+number(p.processed)+' / '+number(p.total_days)+' · To download '+number(p.to_download)+' · Downloaded '+number(p.downloaded)+' · Reused '+number(p.skipped)+' · Empty '+number(p.empty)+' · Prices '+number(p.items)+' · Requests '+number(p.requests)+' · Errors '+number(p.errors)+(p.current_day?' · '+p.current_day:'')+(p.error||p.last_error?' · '+(p.error||p.last_error):'')+(p.message?' · '+p.message:'');
+   el('summary').textContent=s?'Saved history: '+number(s.days)+' days · '+number(s.items)+' item/day prices · '+number(s.empty)+' empty days · '+(s.first||'—')+' to '+(s.last||'—')+' · Database size '+(s.bytes/1024/1024).toFixed(1)+' MiB':'No imported history yet.';
+   if(el('start')){el('start').disabled=d.running||!enabled;el('stop').disabled=!d.running;el('form').querySelectorAll('input').forEach(input=>input.disabled=d.running);}
+ }catch(e){el('status').textContent=e.message;}}
+ if(el('form'))el('form').onsubmit=async e=>{e.preventDefault();try{await json('/admin/prices/start',{method:'POST',body:new FormData(el('form'))});await refresh();}catch(e){el('status').textContent=e.message;}};
+ if(el('stop'))el('stop').onclick=async()=>{try{await json('/admin/prices/stop',{method:'POST'});el('status').textContent='Stop requested. Waiting for the current request to finish.';}catch(e){el('status').textContent=e.message;}};
+ refresh();setInterval(refresh,5000);
+})();
+</script>

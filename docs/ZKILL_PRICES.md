@@ -1,7 +1,8 @@
 # Daily zKill item valuation history
 
 **Admin → Item Prices** launches a manual, resumable import. It is also linked
-from **Admin → Jobs**. Viewing requires `admin.jobs.view`; starting and stopping
+from **Admin → Jobs**, where the same start/stop controls and live dated progress
+are displayed directly on the job card. Viewing requires `admin.jobs.view`; starting and stopping
 requires `admin.jobs.run`. Visits do not start downloads. No daily schedule is added.
 
 Leave both dates empty to import the documented history from **2003-01-01**
@@ -65,7 +66,7 @@ that day's successful commit is retained. The PostgreSQL advisory lock prevents
 a second importer, including direct CLI launches. A rejected duplicate does not
 overwrite the running import's progress file.
 
-Progress includes date range, current date, total/processed/downloaded/reused/
+Progress includes a progress bar, date range, current date (or last saved date when finished), total/processed/downloaded/reused/
 empty days, item prices read, requests and errors. Saved coverage and actual
 PostgreSQL table/index/TOAST size are also shown. The job checks free space on
 the progress-file filesystem before each new day, preserving 2 GiB by default;

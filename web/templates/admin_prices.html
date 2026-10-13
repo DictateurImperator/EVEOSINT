@@ -2,33 +2,5 @@
 {% block content %}
 <h1 class="h3">Historical item prices</h1>
 <p class="muted-line">Daily ISK valuations provided by zKillboard. These are the values zKill uses, including fixed valuations; they are not necessarily actual historical market trades. Missing item prices remain unknown.</p>
-<section class="content-card p-3">
-  {% if can_run %}
-  <form id="prices-form" class="d-flex flex-wrap gap-3 align-items-end">
-    <label>From<input class="form-control" type="date" min="2003-01-01" name="date_from"></label>
-    <label>Through<input class="form-control" type="date" min="2003-01-01" name="date_to"></label>
-    <button class="btn btn-primary" id="prices-start">Import all / resume</button>
-    <button class="btn btn-outline-danger" id="prices-stop" type="button">Stop</button>
-  </form>
-  {% endif %}
-  <p class="small muted-line mt-3">Leave dates empty for all available history from 2003-01-01 through yesterday (UTC). Imported days are reused; the last seven calendar days are refreshed. No automatic schedule. One request at a time, at least two seconds apart; rate limits slow or stop the job. Stopping preserves committed days.</p>
-  <div id="prices-status" role="status">Loading status…</div>
-  <div id="prices-summary" class="my-3"></div>
-  <a class="btn btn-sm btn-outline-light" href="/admin/jobs/import_zkill_prices/log" target="_blank">Job log</a>
-</section>
-<script>
-(()=>{
- const el=id=>document.getElementById('prices-'+id), number=n=>Number(n||0).toLocaleString('en-US');
- async function json(url,options={}){const r=await fetch(url,{...options,headers:{Accept:'application/json'},cache:'no-store'});const d=await r.json();if(!r.ok)throw Error(d.error||'Request failed');return d;}
- async function refresh(){try{
-   const d=await json('/admin/prices/status'),p=d.progress||{},s=d.summary;
-   el('status').textContent=(d.running?'Running · ':'')+(p.phase||'Not started')+' · Days '+number(p.processed)+' / '+number(p.total_days)+' · To download '+number(p.to_download)+' · Downloaded '+number(p.downloaded)+' · Reused '+number(p.skipped)+' · Empty '+number(p.empty)+' · Prices '+number(p.items)+' · Requests '+number(p.requests)+' · Errors '+number(p.errors)+(p.current_day?' · '+p.current_day:'')+(p.error?' · '+p.error:'')+(p.message?' · '+p.message:'');
-   el('summary').textContent=s?'Saved history: '+number(s.days)+' days · '+number(s.items)+' item/day prices · '+number(s.empty)+' empty days · '+(s.first||'—')+' to '+(s.last||'—')+' · Database size '+(s.bytes/1024/1024).toFixed(1)+' MiB':'No imported history yet.';
-   if(el('start')){el('start').disabled=d.running;el('stop').disabled=!d.running;}
- }catch(e){el('status').textContent=e.message;}}
- if(el('form'))el('form').onsubmit=async e=>{e.preventDefault();try{await json('/admin/prices/start',{method:'POST',body:new FormData(el('form'))});await refresh();}catch(e){el('status').textContent=e.message;}};
- if(el('stop'))el('stop').onclick=async()=>{try{await json('/admin/prices/stop',{method:'POST'});el('status').textContent='Stop requested. Waiting for the current request to finish.';}catch(e){el('status').textContent=e.message;}};
- refresh();setInterval(refresh,5000);
-})();
-</script>
+{% include "admin_prices_progress.html" %}
 {% endblock %}
