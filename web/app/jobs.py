@@ -5,7 +5,7 @@ import signal
 import subprocess
 import sys
 from collections import deque
-from datetime import date, datetime
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 from .config import JOBS_CONFIG_PATH
@@ -153,7 +153,7 @@ def _normalize_job(raw_job):
     log_path = raw_job.get("log_path")
     enabled = bool(raw_job.get("enabled", True))
 
-    if job_type not in {"sde", "killmails", "recent_kill_pilots_affiliation", "character_skill_inference", "population_alliances_init", "population_alliances_daily", "sovereignty_esi", "killmail_forensics_setup", "killmail_forensics_analysis", "killmail_archive_refresh", "mer_economy", "first_loss_study", "first_loss_purge"}:
+    if job_type not in {"sde", "killmails", "recent_kill_pilots_affiliation", "character_skill_inference", "population_alliances_init", "population_alliances_daily", "sovereignty_esi", "killmail_forensics_setup", "killmail_forensics_analysis", "killmail_archive_refresh", "mer_economy", "first_loss_study", "first_loss_purge", "zkill_prices"}:
         raise JobError(f"job_type_invalid:{key}")
 
     if not isinstance(command, list) or not command:
@@ -301,7 +301,16 @@ def load_jobs_config():
             "log_path": str(Path.home() / "eveosint/data/logs/first_loss_purge.log"), "enabled": True,
         }))
 
+    if not any(job["key"] == "import_zkill_prices" for job in jobs):
+        jobs.append(_normalize_job({
+            "key": "import_zkill_prices", "label": "Market · Import historical zKill prices",
+            "type": "zkill_prices",
+            "command": [sys.executable, str(Path(__file__).resolve().parents[2] / "scripts/import_zkill_prices.py")],
+            "log_path": str(Path.home() / "eveosint/data/logs/zkill_prices_import.log"), "enabled": True,
+        }))
+
     allowed_keys = {
+        "import_zkill_prices",
         "purge_first_loss_study",
         "analyze_first_losses",
         "import_mer_economy",
@@ -744,5 +753,51 @@ def first_loss_purge_progress():
     if runtime["running"] and (not progress or progress.get("pid") != runtime["pid"]):
         progress = {"phase": "starting"}
     elif progress and not runtime["running"] and progress.get("phase") not in {"completed", "failed"}:
+        progress = dict(progress, phase="interrupted")
+    return {"running": runtime["running"], "progress": progress}
+
+
+def run_zkill_prices(start="", end=""):
+    job = get_job("import_zkill_prices")
+    if job["type"] != "zkill_prices":
+        raise JobError("job_type_mismatch:import_zkill_prices")
+    command = list(job["command"])
+    start_date = _parse_date(start, "from") if start else date(2003, 1, 1)
+    end_date = _parse_date(end, "through") if end else datetime.now(timezone.utc).date() - timedelta(days=1)
+    if not date(2003, 1, 1) <= start_date <= end_date <= datetime.now(timezone.utc).date():
+        raise JobError("Choose UTC dates from 2003-01-01 through today.")
+    command += ["--from", start_date.isoformat(), "--through", end_date.isoformat()]
+    return _start_process(job, command)
+
+
+def stop_zkill_prices():
+    job = get_job("import_zkill_prices")
+    running, pid = _cleanup_stale_pid(job["key"])
+    if not running:
+        return True, "already_stopped"
+    try:
+        arguments = Path(f"/proc/{pid}/cmdline").read_bytes().split(b"\0")
+        if os.fsencode(job["command"][1]) not in arguments:
+            raise JobError("job_process_mismatch:import_zkill_prices")
+        os.kill(pid, signal.SIGTERM)
+    except ProcessLookupError:
+        return True, "already_stopped"
+    except OSError as exc:
+        raise JobError("job_stop_failed:import_zkill_prices") from exc
+    return True, "stop_requested"
+
+
+def zkill_prices_progress():
+    runtime = _read_runtime_status("import_zkill_prices")
+    path = Path.home() / "eveosint/data/market/zkill_prices_progress.json"
+    try:
+        progress = json.loads(path.read_text())
+        if not isinstance(progress, dict):
+            progress = None
+    except (OSError, ValueError):
+        progress = None
+    if runtime["running"] and (not progress or progress.get("pid") != runtime["pid"]):
+        progress = {"phase": "starting"}
+    elif progress and not runtime["running"] and progress.get("phase") not in {"completed", "failed", "paused", "schema_ready"}:
         progress = dict(progress, phase="interrupted")
     return {"running": runtime["running"], "progress": progress}
