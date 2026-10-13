@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% block content %}
-<div class="mb-3"><a href="/admin/debug">← Admin Debug</a></div>
-<h1 class="h3">First loss · Return and trajectories</h1>
+<div class="mb-3"><a href="/admin/jobs">← Admin Jobs</a></div>
+<h1 class="h3">Report · First loss · Return and trajectories</h1>
 <p class="muted-line">Did the character return after their first known loss? Which loss profiles are associated with return, and what changed afterwards?</p>
 <section class="content-card p-3 mb-3">
   <p class="small muted-line">All identified characters with a loss are included, including first losses against NPCs. Return means subsequent activity in recorded killmails, including NPC losses; login retention is unavailable. PvP return includes participation as attacker or victim against players. The first 30 minutes belong to the initial episode. Missing archives and insufficient follow-up stay unknown.</p>
@@ -11,11 +11,15 @@
     <button class="btn btn-primary" id="fl-start" type="submit">Analyze all / resume</button>
     <button class="btn btn-outline-danger" id="fl-stop" type="button">Stop</button>
     <button class="btn btn-outline-secondary" id="fl-rebuild" type="button">Rebuild study</button>
+    <button class="btn btn-outline-danger" id="fl-purge" type="button">Delete study data</button>
   </form>
   <div class="small muted-line mt-2">Auto compares group counts in one run, then fits the selected model on every character. Runs only when started manually. Analyze / resume reuses prepared data when changing grouping. Rebuild replaces the study and rereads the complete history.</div>
   {% endif %}
+  <p class="small muted-line mt-2">Delete study data removes all generated results, PCA coordinates, groups and checkpoints, freeing their database storage. Original killmails and other studies are retained. Download your report before deleting; the next analysis starts from scratch.</p>
+  <div id="fl-purge-status" class="small" role="status"></div>
+  <a class="btn btn-sm btn-outline-light" href="/admin/jobs/purge_first_loss_study/log" target="_blank">Purge log</a>
   <div id="fl-status" class="my-3" role="status">Loading status…</div>
-  <a class="btn btn-sm btn-outline-light" href="/admin/debug/first-loss/log" target="_blank">Job log</a>
+  <a class="btn btn-sm btn-outline-light" href="/admin/report/first-loss/log" target="_blank">Job log</a>
   <details class="small mt-3"><summary>Research dependency</summary><p class="mt-2">The job needs NumPy in its Python interpreter. If the log reports a missing dependency, install <code>scripts/first_loss_study/requirements.txt</code> there, then resume.</p></details>
 </section>
 <section class="content-card p-3 mb-3" id="fl-selection" hidden>
@@ -32,7 +36,7 @@
     <label>Loss cohort<select id="fl-year" class="form-select"><option value="all">All years</option></select></label>
     <label>Initial loss · model and PCA return comparison<select id="fl-scope" class="form-select"><option value="pvp" selected>Against players</option><option value="npc">Against NPCs / objects</option><option value="all">All losses</option></select></label>
     <label>PDF contents<select id="fl-pdf-scope" class="form-select"><option value="all">Full study</option><option value="view">Current selection</option></select></label>
-    <a id="fl-pdf" class="btn btn-outline-light" href="/admin/debug/first-loss/report.pdf">Download PDF · English</a>
+    <a id="fl-pdf" class="btn btn-outline-light" href="/admin/report/first-loss/report.pdf">Download PDF · English</a>
   </div>
   <div id="fl-overview" class="mb-3"></div>
   <div id="fl-quality" class="small text-warning mb-3"></div>
@@ -141,7 +145,7 @@
    for(const [key,color] of [['returned_mean','#4ade80'],['no_return_mean','#f87171']]){const vx=stat?.axes[a]?.[key],vy=stat?.axes[b]?.[key];if(vx!=null&&vy!=null)plane+='<circle cx="'+x(vx)+'" cy="'+y(vy)+'" r="7" fill="'+color+'" stroke="white" stroke-width="2"><title>Full-population '+key.replaceAll('_',' ')+'</title></circle>';}
    plane+='<text x="40" y="385" font-size="12" fill="#4ade80">Returned</text><text x="200" y="385" font-size="12" fill="#f87171">No observed return</text><text x="250" y="415" font-size="12" text-anchor="middle" fill="#94a3b8">PC'+(a+1)+' / PC'+(b+1)+' · '+count(sample.length)+' display points</text>';el('character-plane').innerHTML=plane;
  }
- function pdfLink(){const view=el('pdf-scope').value==='view';el('pdf').href='/admin/debug/first-loss/report.pdf'+(view?'?horizon='+el('horizon').value+'&year='+el('year').value+'&scope='+el('scope').value:'');}
+ function pdfLink(){const view=el('pdf-scope').value==='view';el('pdf').href='/admin/report/first-loss/report.pdf'+(view?'?horizon='+el('horizon').value+'&year='+el('year').value+'&scope='+el('scope').value:'');}
  function renderTrend(){
    if(!report?.summary)return;const s=report.summary,horizon=el('horizon').value,years=Object.keys(s.years).sort(),annual=s.factors_by_year?.[horizon]||{};
    const names=[...new Set(Object.values(annual).flatMap(v=>Object.keys(v)))].sort();
@@ -190,22 +194,24 @@
    renderModel();renderPca();renderReturnPca();renderTrend();pdfLink();
  }
  async function refresh(){try{
-   const data=await json('/admin/debug/first-loss/status'+(report?.update_token?'?known_updated_at='+encodeURIComponent(report.update_token):''));running=data.running;const p=data.progress||{};
+   const data=await json('/admin/report/first-loss/status'+(report?.update_token?'?known_updated_at='+encodeURIComponent(report.update_token):''));running=data.running;const p=data.progress||{};
    el('status').textContent=(running?'Running · ':'')+(p.phase||'Not started')+(p.month?' · '+p.month:'')+(p.total_months?' · Months '+(p.processed_months||0)+' / '+p.total_months:'')+(p.players?' · Characters '+count(p.players):'')+(p.message?' · '+p.message:'')+(p.error?' · '+p.error:'');
    if(p.phase==='selecting_profiles')el('status').textContent+=' · Group counts '+(p.tested_candidates||0)+' / '+(p.total_candidates||0)+(p.candidate_k?' · Testing '+p.candidate_k+' groups':'');
    if(p.pca_components)el('status').textContent+=' · PCA '+p.pca_components+' axes retain '+pct(p.pca_variance_retained)+' · '+count(p.projection_dimensions)+' coordinates';
    if(p.phase==='return_model')el('status').textContent+=' · Return model iteration '+count(p.iteration);
    if(p.phase==='return_importance')el('status').textContent+=' · Return models '+count(p.processed_models)+' / '+count(p.total_models);
-   if(el('start')){el('start').disabled=running;el('rebuild').disabled=running;el('stop').disabled=!running;}
+   const purge=data.purge||{}, pp=purge.progress||{}; el('purge-status').textContent=pp.phase?'Study data purge · '+pp.phase+(pp.error?' · '+pp.error:''):'';
+   if(el('start')){el('start').disabled=running||purge.running;el('rebuild').disabled=running||purge.running;el('purge').disabled=running||purge.running;el('stop').disabled=!running;}
    renderSelection(!running&&data.report?.status==='completed'?(data.report.unchanged?report?.summary?.cluster_selection:data.report.summary?.cluster_selection):p.cluster_selection);
    const key=data.report?data.report.id+':'+(data.report.update_token||''):null;
    if(!running&&data.report&&data.report.status==='completed'&&!data.report.unchanged&&loadedRun!==key){report=data.report;loadedRun=key;el('year').innerHTML='<option value="all">All years</option>'+Object.keys(report.summary.years).sort().map(y=>'<option>'+esc(y)+'</option>').join('');render();}
    else if(running||!data.report||data.report.status!=='completed'){report=null;loadedRun=null;render();}
  }catch(e){el('status').textContent=e.message;}}
- async function start(rebuild){try{const body=new FormData();body.set('clusters',el('clusters').value);body.set('rebuild',String(rebuild));await json('/admin/debug/first-loss/start',{method:'POST',body});loadedRun=null;report=null;await refresh();}catch(e){el('status').textContent=e.message;}}
+ async function start(rebuild){try{const body=new FormData();body.set('clusters',el('clusters').value);body.set('rebuild',String(rebuild));await json('/admin/report/first-loss/start',{method:'POST',body});loadedRun=null;report=null;await refresh();}catch(e){el('status').textContent=e.message;}}
  if(el('form'))el('form').onsubmit=e=>{e.preventDefault();start(false);};
+ if(el('purge'))el('purge').onclick=async()=>{if(!confirm('Delete all generated study results and checkpoints? Original killmails are retained.'))return;try{await json('/admin/report/first-loss/purge',{method:'POST'});el('purge-status').textContent='Study data purge · starting';await refresh();}catch(e){el('purge-status').textContent=e.message;}};
  if(el('rebuild'))el('rebuild').onclick=()=>start(true);
- if(el('stop'))el('stop').onclick=async()=>{try{await json('/admin/debug/first-loss/stop',{method:'POST'});el('status').textContent='Stop requested. Current SQL is cancelled; completed months are kept.';}catch(e){el('status').textContent=e.message;}};
+ if(el('stop'))el('stop').onclick=async()=>{try{await json('/admin/report/first-loss/stop',{method:'POST'});el('status').textContent='Stop requested. Current SQL is cancelled; completed months are kept.';}catch(e){el('status').textContent=e.message;}};
  el('horizon').onchange=render;el('year').onchange=render;refresh();setInterval(refresh,5000);
  el('scope').onchange=render;el('pdf-scope').onchange=pdfLink;el('axis-x').onchange=renderReturnPca;el('axis-y').onchange=renderReturnPca;
  el('trend-factor').onchange=renderTrend;el('trend-profile').onchange=renderTrend;

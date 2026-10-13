@@ -249,6 +249,12 @@ def build_context_menu(user, active_module, active_menu_key):
                     break
             items.insert(insert_at, pipeline_item)
 
+        if not any(item.get("menu_key") == "admin.report" for item in items):
+            items.append({
+                "id": None, "menu_key": "admin.report", "label": "Report",
+                "href": "/admin/report", "icon": "▤", "permission_key": "admin.jobs.view",
+            })
+
         if not any(item.get("menu_key") == "admin.debug" for item in items):
             debug_item = {
                 "id": None,

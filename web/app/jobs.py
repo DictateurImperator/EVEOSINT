@@ -153,7 +153,7 @@ def _normalize_job(raw_job):
     log_path = raw_job.get("log_path")
     enabled = bool(raw_job.get("enabled", True))
 
-    if job_type not in {"sde", "killmails", "recent_kill_pilots_affiliation", "character_skill_inference", "population_alliances_init", "population_alliances_daily", "sovereignty_esi", "killmail_forensics_setup", "killmail_forensics_analysis", "killmail_archive_refresh", "mer_economy", "first_loss_study"}:
+    if job_type not in {"sde", "killmails", "recent_kill_pilots_affiliation", "character_skill_inference", "population_alliances_init", "population_alliances_daily", "sovereignty_esi", "killmail_forensics_setup", "killmail_forensics_analysis", "killmail_archive_refresh", "mer_economy", "first_loss_study", "first_loss_purge"}:
         raise JobError(f"job_type_invalid:{key}")
 
     if not isinstance(command, list) or not command:
@@ -287,13 +287,22 @@ def load_jobs_config():
 
     if not any(job["key"] == "analyze_first_losses" for job in jobs):
         jobs.append(_normalize_job({
-            "key": "analyze_first_losses", "label": "Research · First-loss return and trajectories",
+            "key": "analyze_first_losses", "label": "Report · First-loss return and trajectories",
             "type": "first_loss_study",
             "command": [sys.executable, str(Path(__file__).resolve().parents[2] / "scripts/analyze_first_losses.py")],
             "log_path": str(Path.home() / "eveosint/data/logs/first_loss_study.log"), "enabled": True,
         }))
 
+    if not any(job["key"] == "purge_first_loss_study" for job in jobs):
+        jobs.append(_normalize_job({
+            "key": "purge_first_loss_study", "label": "Report · Delete first-loss study data",
+            "type": "first_loss_purge",
+            "command": [sys.executable, str(Path(__file__).resolve().parents[2] / "scripts/purge_first_loss_study.py")],
+            "log_path": str(Path.home() / "eveosint/data/logs/first_loss_purge.log"), "enabled": True,
+        }))
+
     allowed_keys = {
+        "purge_first_loss_study",
         "analyze_first_losses",
         "import_mer_economy",
         "sync_sde",
@@ -661,6 +670,8 @@ def read_mer_economy_progress():
 
 
 def run_first_loss_study(clusters="auto", rebuild=False):
+    if _cleanup_stale_pid("purge_first_loss_study")[0]:
+        raise JobError("Study data purge is running.")
     job = get_job("analyze_first_losses")
     if job["type"] != "first_loss_study":
         raise JobError("job_type_mismatch:analyze_first_losses")
@@ -707,6 +718,31 @@ def first_loss_progress():
         progress = None
     if runtime["running"] and (not progress or progress.get("pid") != runtime["pid"]):
         progress = {"phase": "starting"}
-    elif progress and not runtime["running"] and progress.get("phase") not in {"completed", "failed", "paused", "schema_ready"}:
+    elif progress and not runtime["running"] and progress.get("phase") not in {"completed", "failed", "paused", "schema_ready", "purged"}:
+        progress = dict(progress, phase="interrupted")
+    return {"running": runtime["running"], "progress": progress}
+
+
+def run_first_loss_purge():
+    if _cleanup_stale_pid("analyze_first_losses")[0]:
+        raise JobError("Stop the study and wait before deleting its data.")
+    job = get_job("purge_first_loss_study")
+    if job["type"] != "first_loss_purge":
+        raise JobError("job_type_mismatch:purge_first_loss_study")
+    return _start_process(job, job["command"])
+
+
+def first_loss_purge_progress():
+    runtime = _read_runtime_status("purge_first_loss_study")
+    path = Path.home() / "eveosint/data/research/first_loss_purge_progress.json"
+    try:
+        progress = json.loads(path.read_text())
+        if not isinstance(progress, dict):
+            progress = None
+    except (OSError, ValueError):
+        progress = None
+    if runtime["running"] and (not progress or progress.get("pid") != runtime["pid"]):
+        progress = {"phase": "starting"}
+    elif progress and not runtime["running"] and progress.get("phase") not in {"completed", "failed"}:
         progress = dict(progress, phase="interrupted")
     return {"running": runtime["running"], "progress": progress}

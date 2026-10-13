@@ -7,7 +7,7 @@ context are compared with subsequent return, PvP participation, further losses,
 attacker activity, and changes of location and ship. Clusters support these
 questions; they are not the final result by themselves.
 
-The experimental screen is **Admin → Debug → First-loss return & trajectories**.
+The experimental screen is **Admin → Report → First-loss return & trajectories**.
 It is also linked from Admin Jobs. Viewing the screen requires
 `admin.jobs.view`; starting, stopping or rebuilding requires `admin.jobs.run`.
 There is no automatic schedule or processing triggered by visiting a page.
@@ -210,7 +210,7 @@ truncated or zeroed according to the clustering retention threshold. The current
 basis, eigenvalues and preprocessing scales. Archiving all coordinates makes
 other axis views possible without repeating source extraction. Variance per
 axis, cumulative variance, retained axes and the largest input coefficients are
-shown in Admin Debug. Squared coefficients are axis weights, not causal effects
+shown in Admin Report. Squared coefficients are axis weights, not causal effects
 or percentages of return explained. PCA variance describes profile dispersion
 ([PCA documentation](https://scikit-learn.org/stable/modules/generated/sklearn.decomposition.PCA.html)).
 
@@ -258,7 +258,7 @@ is used to choose the count or centers. IDs are local to one fitted model.
 
 Model metadata preserves feature names, cohort scales, PCA axes, centers,
 random seeds, selected count, all candidate diagnostics, population size and
-NumPy version. Admin Debug shows comparison progress and the candidate table
+NumPy version. Admin Report shows comparison progress and the candidate table
 while the job runs, then the selected grouping and return/trajectory results.
 
 ## English PDF export
@@ -273,7 +273,7 @@ absent. Missing results are never replaced with invented values.
 
 The standard-library exporter needs no new server dependency. It reads the stored
 run snapshot; no raw killmail query, job launch or result write occurs. Permission
-is `admin.jobs.view`. `GET /admin/debug/first-loss/report.pdf` accepts
+is `admin.jobs.view`. `GET /admin/report/first-loss/report.pdf` accepts
 `horizon=all|7|30|90`, `year=all|YYYY`, `scope=all|pvp|npc`, with no-store download
 headers. Missing reports/cohorts are 404, incomplete studies 409. Local review
 can call `train(..., persist=False)` using a read-only connection; the resulting
@@ -392,3 +392,35 @@ python -m scripts.test_first_loss_admin_browser
 FIRST_LOSS_TEST_DSN='host=/tmp/lab port=55444 dbname=first_loss_test user=codex' \
   python -m unittest scripts.test_first_loss_study -v
 ```
+
+
+## Manual deletion of generated study data
+
+Admin → Report groups Analyze / resume, Stop, Rebuild, PDF export, job logs,
+and **Delete study data**. Legacy `/admin/debug/first-loss` URLs remain available.
+Viewing requires `admin.jobs.view`; changing or deleting results requires
+`admin.jobs.run`. No operation starts just from visiting this screen.
+
+`purge_first_loss_study` is a manual job running
+`scripts/purge_first_loss_study.py`. It truncates only the four
+`research.first_loss_*` tables listed explicitly in that script, retaining
+schema and sequences. This releases their table and index storage immediately;
+it needs no subsequent VACUUM FULL. Original killmails, imported archives and
+other research tables are retained. Saved reports must be downloaded before
+purging. The next study begins extraction again; there is no checkpoint to resume.
+
+The job uses the same PostgreSQL advisory lock as the analysis worker, including
+when either script is started directly. It refuses to purge during an analysis.
+Unexpected external foreign keys cause a rollback, not cascading deletion.
+A five-second table lock timeout prevents waiting indefinitely behind readers.
+The study progress file is reset after successful database commit. Purge status
+and errors appear in Report; its dedicated log is `first_loss_purge.log`.
+
+For command-line execution with the application's database credentials:
+
+```sh
+python scripts/purge_first_loss_study.py --db-config /path/to/config/db.json
+```
+
+No NumPy installation or scientific recalculation is required for this purge.
+The repository contains the report generator and research scripts, not generated PDFs.

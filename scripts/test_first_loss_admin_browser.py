@@ -268,6 +268,7 @@ def main():
         "permissions": {"admin.jobs.view", "admin.jobs.run"},
     }
     state = {"running": False, "progress": None}
+    purge_state = {"running": False, "progress": None}
     errors = []
     with patch.object(routes, "require_login", return_value=user), patch.object(
         routes, "first_loss_progress", side_effect=lambda: state
@@ -277,6 +278,10 @@ def main():
         routes, "stop_first_loss_study"
     ) as stop, patch.object(
         routes, "audit_log"
+    ), patch.object(
+        routes, "run_first_loss_purge"
+    ) as purge, patch.object(
+        routes, "first_loss_purge_progress", side_effect=lambda: purge_state
     ), sync_playwright() as playwright:
         browser = playwright.chromium.launch(args=["--no-sandbox"])
         page = browser.new_page()
@@ -301,7 +306,7 @@ def main():
             )
 
         page.route("**/*", handle)
-        page.goto("http://research.test/admin/debug/first-loss")
+        page.goto("http://research.test/admin/report/first-loss")
         expect(page.locator("#fl-cohorts")).to_contain_text("30.0%")
         expect(page.locator("#fl-clusters")).to_have_value("auto")
         expect(page.locator("#fl-selection-info")).to_contain_text("Chosen: 3 groups")
@@ -422,7 +427,7 @@ def main():
         page.select_option("#fl-scope", "npc")
         page.select_option("#fl-pdf-scope", "view")
         expect(page.locator("#fl-pdf")).to_have_attribute(
-            "href", "/admin/debug/first-loss/report.pdf?horizon=90&year=2026&scope=npc"
+            "href", "/admin/report/first-loss/report.pdf?horizon=90&year=2026&scope=npc"
         )
         with page.expect_download() as download:
             page.click("#fl-pdf")
@@ -449,6 +454,26 @@ def main():
         expect(page.locator("#fl-model-effects")).to_contain_text(
             "-12.0 pp", timeout=7000
         )
+        # Purge is manual, requires confirmation, and blocks study starts while running.
+        purge.assert_not_called()
+        page.once("dialog", lambda dialog: dialog.dismiss())
+        page.click("#fl-purge")
+        purge.assert_not_called()
+        page.once("dialog", lambda dialog: dialog.accept())
+        page.click("#fl-purge")
+        expect(page.locator("#fl-purge")).to_be_enabled()
+        purge.assert_called_once()
+        purge_state.update(running=True, progress={"phase": "running"})
+        expect(page.locator("#fl-start")).to_be_disabled(timeout=7000)
+        expect(page.locator("#fl-rebuild")).to_be_disabled()
+        expect(page.locator("#fl-purge")).to_be_disabled()
+        expect(page.locator("#fl-purge-status")).to_contain_text("running")
+        purge_state.update(running=False, progress={"phase": "completed"})
+        routes.report.return_value = None
+        state["progress"] = {"phase": "purged"}
+        expect(page.locator("#fl-results")).to_be_hidden(timeout=7000)
+        expect(page.locator("#fl-start")).to_be_enabled()
+        expect(page.locator("#fl-status")).to_contain_text("purged")
         assert not errors, errors
         browser.close()
     print("First-loss study browser checks passed.")

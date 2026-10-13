@@ -1,4 +1,4 @@
-"""Experimental first-loss study, kept under Admin Debug."""
+"""Manual research tools and reports under Admin Report."""
 
 import logging
 from datetime import datetime, timezone
@@ -14,6 +14,8 @@ from .main_objects import templates
 from .jobs import (
     JobError,
     first_loss_progress,
+    first_loss_purge_progress,
+    run_first_loss_purge,
     run_first_loss_study,
     stop_first_loss_study,
     read_job_log,
@@ -61,6 +63,7 @@ def report(include_model=False, known_updated_at=None):
     return result
 
 
+@router.get("/admin/report/first-loss/report.pdf")
 @router.get("/admin/debug/first-loss/report.pdf")
 def download_report(
     request: Request,
@@ -97,6 +100,8 @@ def download_report(
         return PlainTextResponse("The report could not be exported.", status_code=503)
 
 
+@router.get("/admin/report", response_class=HTMLResponse)
+@router.get("/admin/report/first-loss", response_class=HTMLResponse)
 @router.get("/admin/debug/first-loss", response_class=HTMLResponse)
 def page(request: Request):
     user = allowed(request, "admin.jobs.view")
@@ -107,7 +112,7 @@ def page(request: Request):
         user=user,
         title="EVEOSINT - First-loss return study",
         active_module="admin",
-        active_menu_key="admin.debug",
+        active_menu_key="admin.report",
     )
     context["can_run"] = "admin.jobs.run" in user.get("permissions", set())
     return templates.TemplateResponse(
@@ -115,6 +120,7 @@ def page(request: Request):
     )
 
 
+@router.get("/admin/report/first-loss/status")
 @router.get("/admin/debug/first-loss/status")
 def status(request: Request, known_updated_at: datetime | None = None):
     if allowed(request, "admin.jobs.view") is None:
@@ -124,6 +130,7 @@ def status(request: Request, known_updated_at: datetime | None = None):
             {
                 **first_loss_progress(),
                 "report": report(known_updated_at=known_updated_at),
+                "purge": first_loss_purge_progress(),
             },
             headers={"Cache-Control": "no-store"},
         )
@@ -134,6 +141,7 @@ def status(request: Request, known_updated_at: datetime | None = None):
         )
 
 
+@router.post("/admin/report/first-loss/start")
 @router.post("/admin/debug/first-loss/start")
 def start(request: Request, clusters: str = Form("auto"), rebuild: bool = Form(False)):
     user = allowed(request, "admin.jobs.run")
@@ -155,6 +163,7 @@ def start(request: Request, clusters: str = Form("auto"), rebuild: bool = Form(F
         return JSONResponse({"error": str(exc)}, status_code=409)
 
 
+@router.post("/admin/report/first-loss/stop")
 @router.post("/admin/debug/first-loss/stop")
 def stop(request: Request):
     user = allowed(request, "admin.jobs.run")
@@ -175,6 +184,7 @@ def stop(request: Request):
         return JSONResponse({"error": str(exc)}, status_code=409)
 
 
+@router.get("/admin/report/first-loss/log", response_class=PlainTextResponse)
 @router.get("/admin/debug/first-loss/log", response_class=PlainTextResponse)
 def log(request: Request):
     if allowed(request, "admin.jobs.view") is None:
@@ -183,3 +193,24 @@ def log(request: Request):
         return PlainTextResponse(read_job_log("analyze_first_losses", lines=150))
     except JobError:
         return PlainTextResponse("No first-loss study log yet.")
+
+
+@router.post("/admin/report/first-loss/purge")
+def delete_study(request: Request):
+    user = allowed(request, "admin.jobs.run")
+    if user is None:
+        return JSONResponse({"error": "Access denied."}, status_code=403)
+    try:
+        run_first_loss_purge()
+        audit_log(
+            request,
+            "admin_job_run",
+            user_id=user["id"],
+            username=user["username"],
+            target_type="job",
+            target_id="purge_first_loss_study",
+            details="Delete generated first-loss research data only",
+        )
+        return {"started": True}
+    except JobError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=409)
