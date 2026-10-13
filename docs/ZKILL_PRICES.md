@@ -1,8 +1,9 @@
 # Daily zKill item valuation history
 
-**Admin → Item Prices** launches a manual, resumable import. It is also linked
-from **Admin → Jobs**, where the same start/stop controls and live dated progress
-are displayed directly on the job card. Viewing requires `admin.jobs.view`; starting and stopping
+**Admin → Jobs** contains the manual, resumable import with start/stop controls
+and live dated progress directly on its job card. There is no separate Item Prices
+menu or screen; old `/admin/prices` page links redirect to Jobs.
+Viewing requires `admin.jobs.view`; starting and stopping
 requires `admin.jobs.run`. Visits do not start downloads. No daily schedule is added.
 
 Leave both dates empty to import the documented history from **2003-01-01**

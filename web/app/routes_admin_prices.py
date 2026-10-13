@@ -2,12 +2,10 @@
 
 import logging
 from fastapi import APIRouter, Request, Form
-from fastapi.responses import JSONResponse, PlainTextResponse
+from fastapi.responses import JSONResponse, PlainTextResponse, RedirectResponse
 from .auth import require_login
 from .audit import audit_log
 from .db import db
-from .layout import app_context
-from .main_objects import templates
 from .jobs import JobError, run_zkill_prices, stop_zkill_prices, zkill_prices_progress
 
 router = APIRouter()
@@ -45,17 +43,7 @@ def page(request: Request):
     user = allowed(request, "admin.jobs.view")
     if user is None:
         return PlainTextResponse("Access denied.", status_code=403)
-    context = app_context(
-        request=request,
-        user=user,
-        title="EVEOSINT - Historical item prices",
-        active_module="admin",
-        active_menu_key="admin.prices",
-    )
-    context["can_run"] = "admin.jobs.run" in user.get("permissions", set())
-    return templates.TemplateResponse(
-        request=request, name="admin_prices.html", context=context
-    )
+    return RedirectResponse("/admin/jobs", status_code=302)
 
 
 @router.get("/admin/prices/status")

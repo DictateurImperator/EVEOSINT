@@ -6,6 +6,7 @@ from fastapi import FastAPI, Request
 from fastapi.testclient import TestClient
 from playwright.sync_api import sync_playwright, expect
 from scripts.test_zkill_prices import routes
+from scripts.test_first_loss_admin import routes as study_routes
 
 
 def main():
@@ -14,7 +15,7 @@ def main():
 
     @app.get("/admin/jobs")
     def jobs_page(request: Request):
-        context = routes.app_context(
+        context = study_routes.app_context(
             request=request,
             user=user,
             title="Jobs",
@@ -31,7 +32,7 @@ def main():
                 "log_exists": False,
             }
         ]
-        return routes.templates.TemplateResponse(
+        return study_routes.templates.TemplateResponse(
             request=request, name="admin_jobs.html", context=context
         )
 
@@ -80,7 +81,7 @@ def main():
             route.fulfill(status=r.status_code, body=r.content, headers=dict(r.headers))
 
         page.route("**/*", handle)
-        page.goto("http://prices.test/admin/prices")
+        page.goto("http://prices.test/admin/jobs")
         expect(page.locator("#prices-summary")).to_contain_text("10,794")
         launch.assert_not_called()
         page.click("#prices-start")
