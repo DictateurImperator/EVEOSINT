@@ -153,7 +153,7 @@ def _normalize_job(raw_job):
     log_path = raw_job.get("log_path")
     enabled = bool(raw_job.get("enabled", True))
 
-    if job_type not in {"sde", "killmails", "recent_kill_pilots_affiliation", "character_skill_inference", "population_alliances_init", "population_alliances_daily", "sovereignty_esi", "killmail_forensics_setup", "killmail_forensics_analysis", "killmail_archive_refresh", "mer_economy", "first_loss_study", "first_loss_purge", "zkill_prices"}:
+    if job_type not in {"sde", "killmails", "recent_kill_pilots_affiliation", "character_skill_inference", "population_alliances_init", "population_alliances_daily", "sovereignty_esi", "killmail_forensics_setup", "killmail_forensics_analysis", "killmail_archive_refresh", "mer_economy", "first_loss_study", "first_loss_purge", "zkill_prices", "killmail_values"}:
         raise JobError(f"job_type_invalid:{key}")
 
     if not isinstance(command, list) or not command:
@@ -309,8 +309,17 @@ def load_jobs_config():
             "log_path": str(Path.home() / "eveosint/data/logs/zkill_prices_import.log"), "enabled": True,
         }))
 
+    if not any(job["key"] == "calculate_killmail_values" for job in jobs):
+        jobs.append(_normalize_job({
+            "key": "calculate_killmail_values", "label": "Killmails · Calculate ISK values",
+            "type": "killmail_values",
+            "command": [sys.executable, str(Path(__file__).resolve().parents[2] / "scripts/calculate_killmail_values.py")],
+            "log_path": str(Path.home() / "eveosint/data/logs/killmail_values.log"), "enabled": True,
+        }))
+
     allowed_keys = {
         "import_zkill_prices",
+        "calculate_killmail_values",
         "purge_first_loss_study",
         "analyze_first_losses",
         "import_mer_economy",
@@ -799,5 +808,65 @@ def zkill_prices_progress():
     if runtime["running"] and (not progress or progress.get("pid") != runtime["pid"]):
         progress = {"phase": "starting"}
     elif progress and not runtime["running"] and progress.get("phase") not in {"completed", "failed", "paused", "schema_ready"}:
+        progress = dict(progress, phase="interrupted")
+    return {"running": runtime["running"], "progress": progress}
+
+
+def _parse_month(value, field_name):
+    try:
+        return datetime.strptime(value, "%Y-%m").date()
+    except Exception as exc:
+        raise JobError(f"invalid_month:{field_name}") from exc
+
+
+def run_killmail_values(start="", end="", recalculate=False):
+    job = get_job("calculate_killmail_values")
+    if job["type"] != "killmail_values":
+        raise JobError("job_type_mismatch:calculate_killmail_values")
+    command = list(job["command"])
+    start_date = _parse_month(start, "from") if start else None
+    end_date = _parse_month(end, "through") if end else None
+    if start_date and end_date and start_date > end_date:
+        raise JobError("date_range_invalid")
+    if start_date:
+        command += ["--from", start_date.isoformat()]
+    if end_date:
+        command += ["--through", end_date.isoformat()]
+    if recalculate:
+        command.append("--recalculate")
+    return _start_process(job, command)
+
+
+def stop_killmail_values():
+    job = get_job("calculate_killmail_values")
+    running, pid = _cleanup_stale_pid(job["key"])
+    if not running:
+        return True, "already_stopped"
+    try:
+        arguments = Path(f"/proc/{pid}/cmdline").read_bytes().split(b"\0")
+        if os.fsencode(job["command"][1]) not in arguments:
+            raise JobError("job_process_mismatch:calculate_killmail_values")
+        os.kill(pid, signal.SIGTERM)
+    except ProcessLookupError:
+        return True, "already_stopped"
+    except OSError as exc:
+        raise JobError("job_stop_failed:calculate_killmail_values") from exc
+    return True, "stop_requested"
+
+
+def killmail_values_progress():
+    runtime = _read_runtime_status("calculate_killmail_values")
+    path = Path.home() / "eveosint/data/market/killmail_values_progress.json"
+    try:
+        progress = json.loads(path.read_text())
+        if not isinstance(progress, dict):
+            progress = None
+    except (OSError, ValueError):
+        progress = None
+    if runtime["running"] and (not progress or progress.get("pid") != runtime["pid"]):
+        progress = {"phase": "starting"}
+    elif progress and not runtime["running"] and progress.get("phase") not in {
+        "completed", "failed", "paused", "schema_ready"
+    }:
         progress = dict(progress, phase="interrupted")
     return {"running": runtime["running"], "progress": progress}

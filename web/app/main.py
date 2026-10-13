@@ -18,6 +18,7 @@ from .routes_admin_git import router as admin_git_router
 from .routes_admin_jobs import router as admin_jobs_router
 from .routes_admin_killmail_forensics import router as admin_killmail_forensics_router
 from .routes_admin_killmail_statistics import router as admin_killmail_statistics_router
+from .routes_admin_killmail_values import router as admin_killmail_values_router
 from .routes_admin_mer import router as admin_mer_router
 from .routes_admin_sov_colors import router as admin_sov_colors_router
 from .routes_admin_system import router as admin_system_router
@@ -262,6 +263,7 @@ app.include_router(admin_system_router)
 app.include_router(admin_sov_colors_router)
 app.include_router(admin_jobs_router)
 app.include_router(admin_killmail_statistics_router)
+app.include_router(admin_killmail_values_router)
 app.include_router(admin_debug_router)
 app.include_router(admin_first_loss_router)
 app.include_router(admin_prices_router)

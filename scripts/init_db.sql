@@ -90,6 +90,7 @@ CREATE TABLE IF NOT EXISTS rawkm.killmails (
     victim_alliance_id BIGINT,
     victim_ship_type_id BIGINT,
     victim_damage_taken INTEGER,
+    estimated_value_cents BIGINT,
     raw_json JSONB NOT NULL,
     source_url TEXT,
     archive_path TEXT,

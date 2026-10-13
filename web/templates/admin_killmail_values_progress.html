@@ -1,0 +1,44 @@
+<section id="values-job" data-can-run="{{ ('admin.jobs.run' in user.permissions)|tojson }}">
+  {% if 'admin.jobs.run' in user.permissions %}
+  <form id="values-form" class="mb-2">
+    <div class="d-flex flex-wrap gap-2 align-items-end">
+      <label>From month<input class="form-control" type="month" name="month_from"></label>
+      <label>Through month<input class="form-control" type="month" name="month_to"></label>
+      <label class="form-check mb-2">
+        <input class="form-check-input" type="checkbox" name="recalculate" value="1">
+        <span class="form-check-label">Recalculate existing values</span>
+      </label>
+      <button class="btn btn-primary" id="values-start" {% if not values_enabled|default(true) %}disabled{% endif %}>Calculate missing / resume</button>
+      <button class="btn btn-outline-danger" id="values-stop" type="button" disabled>Stop</button>
+    </div>
+  </form>
+  {% endif %}
+  <p class="small muted-line mt-3">Leave both months empty for every killmail. Completed months are committed separately. Stopping keeps them. A complete local daily zKill price history is required; this job sends no API requests.</p>
+  <div class="mb-2"><strong>Current month: <span id="values-month">—</span></strong></div>
+  <div id="values-range" class="small muted-line mb-2"></div>
+  <progress id="values-bar" class="w-100 mb-2" value="0" max="100" aria-label="Months processed"></progress>
+  <div id="values-status" role="status">Loading status…</div>
+  <div id="values-summary" class="my-3"></div>
+  <a class="btn btn-sm btn-outline-light" href="/admin/jobs/calculate_killmail_values/log" target="_blank">Job log</a>
+</section>
+<script>
+(()=>{
+ const enabled={{ values_enabled|default(true)|tojson }};
+ const el=id=>document.getElementById('values-'+id), number=n=>Number(n||0).toLocaleString('en-US');
+ const size=n=>{n=Number(n||0);if(Math.abs(n)<1024*1024)return number(n)+' B';return (n/1024/1024/1024).toFixed(2)+' GiB';};
+ async function json(url,options={}){const r=await fetch(url,{...options,headers:{Accept:'application/json'},cache:'no-store'});const d=await r.json();if(!r.ok)throw Error(d.error||'Request failed');return d;}
+ async function refresh(){try{
+   const d=await json('/admin/killmail-values/status'),p=d.progress||{},s=d.summary;
+   const badge=document.querySelector('[data-values-job-header] .badge');if(badge){badge.textContent=d.running?'running':!enabled?'disabled':p.phase||'idle';badge.className='badge '+(d.running?'text-bg-warning':p.phase==='failed'?'text-bg-danger':!enabled?'text-bg-secondary':'text-bg-success');}
+   el('month').textContent=p.current_month||'—';
+   el('range').textContent=p.from_month&&p.through_month?'Calculation range: '+p.from_month.slice(0,7)+' → '+p.through_month.slice(0,7):'';
+   el('bar').value=p.months_total?Math.min(100,100*(p.months_processed||0)/p.months_total):0;
+   el('status').textContent=(d.running?'Running · ':'')+(p.phase||'Not started')+' · Months '+number(p.months_processed)+' / '+number(p.months_total)+' · Killmails written '+number(p.killmails_valued)+' · Current partition '+number(p.month_killmails)+' kills · Missing before pass '+number(p.month_missing)+(p.current_price_day?' · Reading prices '+p.current_price_day:'')+' · Price fallbacks '+number(p.fallback_price_pairs)+(p.database_bytes_added!==undefined?' · Database change '+size(p.database_bytes_added):'')+(p.error?' · '+p.error:'')+(p.message?' · '+p.message:'');
+   el('summary').textContent=s?'Saved checkpoints: '+number(s.months)+' months · '+number(s.valued)+' / '+number(s.killmails)+' killmails valued · '+number(s.fallback_price_pairs)+' fallback price pairs':'No completed valuation month yet.';
+   if(el('start')){el('start').disabled=d.running||!enabled;el('stop').disabled=!d.running;el('form').querySelectorAll('input').forEach(input=>input.disabled=d.running);}
+ }catch(e){el('status').textContent=e.message;}}
+ if(el('form'))el('form').onsubmit=async e=>{e.preventDefault();try{await json('/admin/killmail-values/start',{method:'POST',body:new FormData(el('form'))});await refresh();}catch(e){el('status').textContent=e.message;}};
+ if(el('stop'))el('stop').onclick=async()=>{try{await json('/admin/killmail-values/stop',{method:'POST'});el('status').textContent='Stop requested. The current database statement is being cancelled.';}catch(e){el('status').textContent=e.message;}};
+ refresh();setInterval(refresh,5000);
+})();
+</script>

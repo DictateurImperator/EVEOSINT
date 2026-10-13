@@ -166,11 +166,17 @@ def ensure_tables(conn):
             victim_alliance_id BIGINT,
             victim_ship_type_id BIGINT,
             victim_damage_taken INTEGER,
+            estimated_value_cents BIGINT,
             http_last_modified TIMESTAMPTZ,
             imported_at TIMESTAMPTZ DEFAULT NOW(),
             PRIMARY KEY (killmail_id, killmail_time)
         )
         PARTITION BY RANGE (killmail_time);
+        """)
+
+        cur.execute(f"""
+        ALTER TABLE {t('killmails')}
+        ADD COLUMN IF NOT EXISTS estimated_value_cents BIGINT;
         """)
 
         cur.execute(f"""
@@ -497,6 +503,16 @@ def insert_killmail(
             victim.get("damage_taken"),
             payload.get("http_last_modified"),
         ))
+
+        cur.execute(
+            f"""
+            UPDATE {t('killmails')}
+            SET estimated_value_cents=NULL
+            WHERE killmail_id=%s
+            AND killmail_time=%s
+            """,
+            (kmid, killmail_time)
+        )
 
         cur.execute(
             f"""
