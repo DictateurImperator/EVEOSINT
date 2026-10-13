@@ -93,28 +93,15 @@ class PriceFormulaTests(unittest.TestCase):
 
 
 class AdminJobTests(unittest.TestCase):
-    def test_job_is_passive_and_builds_month_range(self):
+    def test_job_is_passive_and_has_no_user_range(self):
         with patch.object(jobs, "_read_config_file", return_value={"jobs": []}), patch.object(
             jobs, "_start_process"
         ) as launch:
             job = jobs.get_job("calculate_killmail_values")
             self.assertEqual(job["type"], "killmail_values")
             launch.assert_not_called()
-            jobs.run_killmail_values("2026-01", "2026-03", True)
-            launch.assert_called_once_with(
-                job,
-                job["command"]
-                + ["--from", "2026-01-01", "--through", "2026-03-01", "--recalculate"],
-            )
-
-    def test_invalid_month_range_is_rejected(self):
-        with patch.object(jobs, "_read_config_file", return_value={"jobs": []}), patch.object(
-            jobs, "_start_process"
-        ) as launch:
-            for start, end in (("bad", ""), ("2026-03", "2026-02")):
-                with self.assertRaises(jobs.JobError):
-                    jobs.run_killmail_values(start, end)
-            launch.assert_not_called()
+            jobs.run_killmail_values()
+            launch.assert_called_once_with(job, job["command"])
 
 
 if __name__ == "__main__":

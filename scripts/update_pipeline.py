@@ -482,6 +482,23 @@ def weekly_steps():
         step("superintel_refresh_affiliations", "SuperINTEL · refresh affiliations", "superintel"),
         step("superintel_build_report", "SuperINTEL · build daily report", "superintel"),
         step(
+            "killmail_missing_prices",
+            "Killmail values · fetch missing price dates",
+            "market",
+            [
+                py,
+                str(SCRIPT_DIR / "import_zkill_prices.py"),
+                "--refresh-days",
+                "0",
+            ],
+        ),
+        step(
+            "killmail_missing_values",
+            "Killmail values · fill empty values",
+            "market",
+            [py, str(SCRIPT_DIR / "calculate_killmail_values.py")],
+        ),
+        step(
             "character_skill_inference",
             "Character skill inference",
             "skills",

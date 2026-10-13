@@ -812,29 +812,11 @@ def zkill_prices_progress():
     return {"running": runtime["running"], "progress": progress}
 
 
-def _parse_month(value, field_name):
-    try:
-        return datetime.strptime(value, "%Y-%m").date()
-    except Exception as exc:
-        raise JobError(f"invalid_month:{field_name}") from exc
-
-
-def run_killmail_values(start="", end="", recalculate=False):
+def run_killmail_values():
     job = get_job("calculate_killmail_values")
     if job["type"] != "killmail_values":
         raise JobError("job_type_mismatch:calculate_killmail_values")
-    command = list(job["command"])
-    start_date = _parse_month(start, "from") if start else None
-    end_date = _parse_month(end, "through") if end else None
-    if start_date and end_date and start_date > end_date:
-        raise JobError("date_range_invalid")
-    if start_date:
-        command += ["--from", start_date.isoformat()]
-    if end_date:
-        command += ["--through", end_date.isoformat()]
-    if recalculate:
-        command.append("--recalculate")
-    return _start_process(job, command)
+    return _start_process(job, list(job["command"]))
 
 
 def stop_killmail_values():

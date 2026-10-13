@@ -88,3 +88,7 @@ Configuration defaults to `~/eveosint/config/db.json`, status to
 `~/eveosint/data/market/zkill_prices_progress.json`, and job log to
 `~/eveosint/data/logs/zkill_prices_import.log`. CLI options also include
 `--interval`, `--refresh-days` and `--min-free-gb`.
+
+The daily update pipeline checks the complete date range with `--refresh-days 0`.
+It downloads every absent price day, regardless of killmail activity, and never
+refreshes or re-downloads a day already stored locally.

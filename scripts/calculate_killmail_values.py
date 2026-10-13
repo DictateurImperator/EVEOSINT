@@ -82,14 +82,6 @@ def next_month(value):
     return date(value.year + (value.month == 12), value.month % 12 + 1, 1)
 
 
-def months_between(start, end):
-    current = date(start.year, start.month, 1)
-    last = date(end.year, end.month, 1)
-    while current <= last:
-        yield current
-        current = next_month(current)
-
-
 def cents(value):
     return int((Decimal(value) * 100).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
 
@@ -196,14 +188,23 @@ def month_counts(conn, month):
     return int(total), int(missing)
 
 
-def needed_prices(conn, month, missing_only):
+def target_months(conn):
+    query = sql.SQL(
+        """SELECT date_trunc('month',killmail_time)::date,
+                  max(((killmail_time-interval '1 hour') AT TIME ZONE 'UTC')::date)
+           FROM rawkm.killmails
+           WHERE estimated_value_cents IS NULL
+           GROUP BY 1 ORDER BY 1"""
+    )
+    with conn.cursor() as cur:
+        cur.execute(query)
+        return [(month, price_day) for month, price_day in cur]
+
+
+def needed_prices(conn, month):
     km = relation_name("killmails", month)
     items = relation_name("killmail_items", month)
-    predicate = (
-        sql.SQL("WHERE k.estimated_value_cents IS NULL")
-        if missing_only
-        else sql.SQL("WHERE TRUE")
-    )
+    predicate = sql.SQL("WHERE k.estimated_value_cents IS NULL")
     query = sql.SQL(
         """SELECT price_day,item_type_id FROM (
              SELECT DISTINCT ((k.killmail_time-interval '1 hour') AT TIME ZONE 'UTC')::date price_day,
@@ -265,10 +266,10 @@ def boundary_prices(day, type_ids, histories, exact, metadata):
     return rows
 
 
-def update_month(conn, month, price_rows, missing_only):
+def update_month(conn, month, price_rows):
     km = relation_name("killmails", month)
     items = relation_name("killmail_items", month)
-    condition = sql.SQL("AND k.estimated_value_cents IS NULL") if missing_only else sql.SQL("")
+    condition = sql.SQL("AND k.estimated_value_cents IS NULL")
     with conn.cursor() as cur:
         cur.execute(
             """CREATE TEMP TABLE valuation_prices(
@@ -339,14 +340,9 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--db-config", type=Path, default=Path.home() / "eveosint/config/db.json")
     parser.add_argument("--progress", type=Path, default=Path.home() / "eveosint/data/market/killmail_values_progress.json")
-    parser.add_argument("--from", dest="start", type=date.fromisoformat)
-    parser.add_argument("--through", dest="end", type=date.fromisoformat)
-    parser.add_argument("--recalculate", action="store_true")
     parser.add_argument("--min-free-gb", type=float, default=20.0)
     parser.add_argument("--schema-only", action="store_true")
     args = parser.parse_args()
-    if args.start and args.end and args.start > args.end:
-        parser.error("--from must be on or before --through")
     if not 0 <= args.min_free_gb <= 500:
         parser.error("Invalid disk reserve")
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -354,7 +350,7 @@ def main():
     conn = price_conn = None
     owns_lock = False
     state = {"pid": os.getpid(), "formula_version": FORMULA_VERSION, "months_processed": 0,
-             "killmails_valued": 0, "fallback_price_pairs": 0, "recalculate": args.recalculate}
+             "killmails_valued": 0, "fallback_price_pairs": 0}
 
     def progress(phase, **values):
         state.update(phase=phase, updated_at=datetime.now(UTC).isoformat(), **values)
@@ -387,19 +383,12 @@ def main():
         if args.schema_only:
             progress("schema_ready")
             return 0
-        with conn.cursor() as cur:
-            cur.execute("SELECT min(killmail_time)::date,max(killmail_time)::date FROM rawkm.killmails")
-            first_kill, last_kill = cur.fetchone()
-        if not first_kill:
-            progress("completed", message="No killmails to value.")
+        targets = target_months(conn)
+        if not targets:
+            progress("completed", months_total=0, message="No killmail has a missing value.")
             return 0
-        requested_start = args.start or first_kill
-        requested_end = args.end or last_kill
-        start = max(date(requested_start.year, requested_start.month, 1), first_kill)
-        end = min(next_month(date(requested_end.year, requested_end.month, 1)) - timedelta(days=1), last_kill)
-        if start > end:
-            raise RuntimeError("The selected range contains no killmails")
-        price_through = end
+        months = [month for month, _price_day in targets]
+        price_through = max(price_day for _month, price_day in targets)
         first_price, last_price, _days, missing_days = price_coverage(conn, price_through)
         if first_price != START or last_price != price_through or missing_days:
             raise RuntimeError(
@@ -407,7 +396,6 @@ def main():
                 f"found {first_price or 'none'} through {last_price or 'none'} with {missing_days} missing day(s)."
             )
         metadata = load_metadata(conn)
-        months = list(months_between(start, end))
         state.update(from_month=months[0].isoformat(), through_month=months[-1].isoformat(), months_total=len(months))
         with conn.cursor() as cur:
             cur.execute("SELECT pg_database_size(current_database())")
@@ -440,8 +428,8 @@ def main():
             state.update(current_month=month.isoformat(), month_index=index, month_killmails=total,
                          month_missing=missing, phase="reading_items")
             progress("reading_items")
-            should_write = bool(total and (args.recalculate or missing))
-            needed = needed_prices(conn, month, not args.recalculate) if should_write else {}
+            should_write = bool(missing)
+            needed = needed_prices(conn, month) if should_write else {}
             # Do not keep a raw-killmail transaction open while historical
             # price snapshots are streamed and reduced in Python.
             conn.commit()
@@ -467,20 +455,7 @@ def main():
                 raise StopRequested()
             progress("writing_values", price_pairs=len(rows))
             try:
-                updated, fallback = update_month(conn, month, rows, not args.recalculate)
-                with conn.cursor() as cur:
-                    cur.execute(
-                        """INSERT INTO market.killmail_valuation_months
-                           (month_start,formula_version,killmails_total,killmails_valued,fallback_price_pairs,calculated_at)
-                           VALUES(%s,%s,%s,%s,%s,now())
-                           ON CONFLICT(month_start) DO UPDATE SET
-                             formula_version=excluded.formula_version,
-                             killmails_total=excluded.killmails_total,
-                             killmails_valued=excluded.killmails_valued,
-                             fallback_price_pairs=excluded.fallback_price_pairs,
-                             calculated_at=excluded.calculated_at""",
-                        (month, FORMULA_VERSION, total, total - max(0, missing - updated), fallback),
-                    )
+                updated, fallback = update_month(conn, month, rows)
                 conn.commit()
             except Exception:
                 conn.rollback()
