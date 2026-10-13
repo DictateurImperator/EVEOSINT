@@ -8,7 +8,7 @@ import os
 import shutil
 import signal
 import threading
-from collections import defaultdict, deque
+from collections import OrderedDict, defaultdict, deque
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal, ROUND_CEILING, ROUND_HALF_UP
 from pathlib import Path
@@ -20,7 +20,7 @@ from psycopg2.extras import execute_values, register_default_jsonb
 
 START = date(2003, 1, 1)
 LOCK = 79130423
-FORMULA_VERSION = "zkill-like-v2"
+FORMULA_VERSION = "zkill-like-v3-cache"
 SCHEMA = Path(__file__).with_name("killmail_values_schema.sql")
 LOG = logging.getLogger("killmail_values")
 ONE_CENT = Decimal("0.01")
@@ -147,22 +147,125 @@ def load_history_counts(conn):
         return {type_id: int(count) for type_id, count in cur}
 
 
+class QuoteCache:
+    """Price/Build cache rules from zKill's dated source revisions.
+
+    rules_at is the source/valuation era, never the kill date. A cold cache
+    cannot recover the contents of zKill's old Redis instance.
+    """
+
+    MARKET_SWITCHES = (
+        (datetime(2016, 1, 20, 21, 23, 29, tzinfo=UTC), True),
+        (datetime(2016, 3, 28, 13, 5, 31, tzinfo=UTC), False),
+        (datetime(2016, 3, 28, 13, 42, 36, tzinfo=UTC), True),
+        (datetime(2016, 5, 6, 15, 59, 44, tzinfo=UTC), False),
+        (datetime(2016, 5, 6, 22, 39, 11, tzinfo=UTC), True),
+        (datetime(2018, 6, 19, 13, 39, 50, tzinfo=UTC), False),
+        (datetime(2018, 7, 31, 4, 44, 15, tzinfo=UTC), True),
+        (datetime(2019, 1, 13, 19, 46, 14, tzinfo=UTC), False),
+        (datetime(2023, 10, 23, 22, 50, 14, tzinfo=UTC), True),
+    )
+    SPLIT_TTL = datetime(2025, 11, 21, 16, 34, 53, tzinfo=UTC)
+    BUILD_RECALC = datetime(2024, 3, 2, 19, 56, 58, tzinfo=UTC)
+
+    def __init__(self, clock=None, rules_at=None):
+        self.clock = clock or (lambda: datetime.now(UTC))
+        self.rules_at = rules_at
+        self.market = OrderedDict()
+        self.built = OrderedDict()
+
+    def era(self):
+        return self.rules_at or self.clock()
+
+    def market_enabled(self):
+        # Earlier implementations used a different price backend. Do not
+        # assign the modern Redis policy to unsupported source revisions.
+        enabled = False
+        for start, active in self.MARKET_SWITCHES:
+            if self.era() >= start:
+                enabled = active
+        return enabled
+
+    def market_get(self, type_id, day):
+        if not self.market_enabled():
+            return None
+        bucket = self.market.get(day)
+        if bucket is None:
+            return None
+        expires, quotes = bucket
+        if self.clock() >= expires:
+            del self.market[day]
+            return None
+        self.market.move_to_end(day)
+        return quotes.get(type_id)
+
+    def market_put(self, type_id, day, result):
+        if not self.market_enabled():
+            return
+        now = self.clock()
+        bucket = self.market.get(day)
+        quotes = bucket[1] if bucket is not None and now < bucket[0] else {}
+        quotes[type_id] = result
+        midnight = datetime.combine(day, datetime.min.time(), tzinfo=UTC)
+        ttl = 86400
+        if self.era() >= self.SPLIT_TTL and midnight < now - timedelta(days=3):
+            ttl = 3600
+        # zKill expires the entire date hash after HSET, not each item.
+        self.market[day] = (now + timedelta(seconds=ttl), quotes)
+        self.market.move_to_end(day)
+        while len(self.market) > 64:
+            self.market.popitem(last=False)
+
+    def build_get(self, type_id, day, recalc=False):
+        if recalc and self.era() >= self.BUILD_RECALC:
+            return None
+        key = (type_id, day)
+        item = self.built.get(key)
+        if item is None:
+            return None
+        expires, result = item
+        if self.clock() >= expires:
+            del self.built[key]
+            return None
+        self.built.move_to_end(key)
+        return result
+
+    def build_put(self, type_id, day, result):
+        key = (type_id, day)
+        self.built[key] = (self.clock() + timedelta(days=1), result)
+        self.built.move_to_end(key)
+        while len(self.built) > 50000:
+            self.built.popitem(last=False)
+
+
 class Pricing:
     """Local equivalent of zKill Price/Build, with no network or writes."""
 
-    def __init__(self, metadata, recipes, counts, lookup=None):
+    def __init__(self, metadata, recipes, counts, lookup=None, *, clock=None, rules_at=None):
         self.metadata = metadata
         self.recipes = recipes
         self.counts = counts
         self.histories = defaultdict(lambda: deque(maxlen=100))
         self.lookup = lookup
         self.cache = {}
+        self.quotes = QuoteCache(clock, rules_at)
 
     def add_day(self, day, payload):
+        # Clear calculation traces, but keep unexpired Price/Build quotes:
+        # a market-history refresh does not invalidate zKill's quote cache.
         self.cache.clear()
         for key, value in (payload or {}).items():
+            type_id = int(key)
+            history = self.histories[type_id]
+            if history and history[-1][0] == day:
+                history.pop()
+            elif history and history[-1][0] > day:
+                # Replacing an older observation is unusual. The normal
+                # chronological import remains O(1) per item observation.
+                history = deque(((d, v) for d, v in history if d != day), maxlen=100)
+                self.histories[type_id] = history
             if value is not None and Decimal(str(value)) > 0:
-                self.histories[int(key)].append((day, Decimal(str(value))))
+                history.append((day, Decimal(str(value))))
 
     def market(self, type_id, day):
         # The do/while in zKill inspects at least one calendar date.
@@ -175,9 +278,12 @@ class Pricing:
         exact = next((v for d, v in observations if d == day), None)
         return [v for _d, v in observations], exact
 
-    def build(self, type_id, day, stack):
+    def build(self, type_id, day, stack, recalc=False):
         if " SKIN " in self.metadata.get(type_id, (None, None, ""))[2]:
             return ONE_CENT, False
+        cached = self.quotes.build_get(type_id, day, recalc)
+        if cached is not None:
+            return cached
         recipe = self.recipes.get(type_id)
         if not recipe:
             return ONE_CENT, True
@@ -190,12 +296,14 @@ class Pricing:
             value, missing = self.price(material, day, day - timedelta(days=1), True, stack)
             total += value * quantity
             unknown |= missing
-        return total / output, unknown
+        result = total / output, unknown
+        self.quotes.build_put(type_id, day, result)
+        return result
 
     def price(self, type_id, kill_day, market_day, date_only=False, stack=()):
         key = (type_id, kill_day, market_day, date_only)
-        if key in self.cache:
-            return self.cache[key]
+        # Recheck the real quote expiry on each request. A plain memo here
+        # would bypass TTLs and the historical disabled-cache revisions.
         if type_id in stack or len(stack) >= 32:
             return ONE_CENT, True
         result = self._price(type_id, kill_day, market_day, date_only, stack + (type_id,))
@@ -226,16 +334,21 @@ class Pricing:
                 unknown |= missing
             return total, unknown
         if category == 66:
-            built = self.build(type_id, kill_day, stack)
+            built = self.build(type_id, kill_day, stack, recalc=True)
             if built[0] > ONE_CENT:
                 return built
+        cached = self.quotes.market_get(type_id, market_day)
+        if cached is not None:
+            return cached
         history, exact = self.market(type_id, market_day)
         value, unknown = rolling_price(history)
         if value <= ONE_CENT:
             value, unknown = self.build(type_id, market_day, stack)
         if exact is not None and exact < value:
-            return exact, False
-        return value, unknown
+            value, unknown = exact, False
+        result = value, unknown
+        self.quotes.market_put(type_id, market_day, result)
+        return result
 
 
 def load_config(path):
