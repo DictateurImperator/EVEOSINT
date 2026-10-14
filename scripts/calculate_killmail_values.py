@@ -637,6 +637,9 @@ def main():
     parser.add_argument("--cache-rules-at", type=valuation_timestamp,
                         help="Cache source era: YYYY-MM-DD or an ISO timestamp with timezone; not the loss date")
     args = parser.parse_args()
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    LOG.info("START pid=%s formula=%s mode=%s recipes=%s", os.getpid(), FORMULA_VERSION,
+             args.valuation_mode, args.recipe_version)
     if not 0 <= args.min_free_gb <= 500:
         parser.error("Invalid disk reserve")
     if args.valuation_mode == "zkill" and args.recipe_version == "auto" and not args.list_recipe_versions:
@@ -656,7 +659,6 @@ def main():
                 history.recipes(args.recipe_version)
         except (OSError, ValueError) as exc:
             parser.error(str(exc))
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     stopped = threading.Event()
     conn = price_conn = None
     owns_lock = False
@@ -677,6 +679,10 @@ def main():
         temporary = args.progress.with_suffix(".tmp")
         temporary.write_text(json.dumps(state))
         temporary.replace(args.progress)
+        LOG.info("PROGRESS phase=%s month=%s price_day=%s months=%s/%s valued=%s unvalued=%s",
+                 phase, state.get("current_month", "-"), state.get("current_price_day", "-"),
+                 state["months_processed"], state.get("months_total", "?"),
+                 state["killmails_valued"], state["killmails_unvalued"])
 
     def stop(*_):
         stopped.set()
@@ -690,24 +696,29 @@ def main():
         signal.signal(sig, stop)
     try:
         cfg = load_config(args.db_config)
+        LOG.info("CONNECT_DATABASE")
         conn = psycopg2.connect(**cfg, application_name="killmail_valuation")
         with conn.cursor() as cur:
             cur.execute("SELECT pg_try_advisory_lock(%s)", (LOCK,))
             if not cur.fetchone()[0]:
                 raise RuntimeError("Another killmail valuation is running")
             owns_lock = True
+            progress("checking_schema")
             cur.execute("SET lock_timeout='10s'; SET statement_timeout=0; SET TIME ZONE 'UTC'")
             cur.execute(SCHEMA.read_text())
         conn.commit()
         if args.schema_only:
             progress("schema_ready")
             return 0
+        progress("finding_missing_values")
         targets = target_months(conn, args.valuation_mode)
         if not targets:
             progress("completed", months_total=0, message="No killmail has a missing value.")
             return 0
         months = [month for month, _price_day in targets]
+        state.update(from_month=months[0].isoformat(), through_month=months[-1].isoformat(), months_total=len(months))
         target_price_through = max(price_day for _month, price_day in targets)
+        progress("checking_price_coverage")
         with conn.cursor() as cur:
             cur.execute("SELECT max(price_date) FROM market.zkill_daily_prices")
             imported_through = cur.fetchone()[0]
@@ -726,17 +737,19 @@ def main():
                 f"Complete zKill price history is required from {START} through {price_through}; "
                 f"found {first_price or 'none'} through {last_price or 'none'} with {missing_days} missing day(s)."
             )
-        progress("loading_pricing_rules")
+        progress("loading_metadata")
         metadata = load_metadata(conn)
         automatic = args.recipe_version == "auto"
-        pricing = Pricing(metadata, {} if automatic else load_blueprints(conn, args.recipe_version, history),
-                          load_history_counts(conn), rules_at=args.cache_rules_at,
+        progress("loading_recipe_snapshot")
+        recipes = {} if automatic else load_blueprints(conn, args.recipe_version, history)
+        progress("counting_price_history")
+        counts = load_history_counts(conn)
+        pricing = Pricing(metadata, recipes, counts, rules_at=args.cache_rules_at,
                           valuation_mode=args.valuation_mode, recipe_history=history if automatic else None)
         state["recipe_count"] = len(pricing.recipes)
         LOG.info("VALUATION_RULES formula=%s recipes=%s recipe_count=%s cache_rules_at=%s",
                  FORMULA_VERSION, args.recipe_version, len(pricing.recipes), state["cache_rules_at"])
         conn.commit()
-        state.update(from_month=months[0].isoformat(), through_month=months[-1].isoformat(), months_total=len(months))
         with conn.cursor() as cur:
             cur.execute("SELECT pg_database_size(current_database())")
             state["database_bytes_start"] = int(cur.fetchone()[0])
@@ -762,6 +775,7 @@ def main():
                 raise StopRequested()
             if shutil.disk_usage(args.progress.parent).free < args.min_free_gb * 1024**3:
                 raise RuntimeError("Disk reserve reached before the next month; free space and resume.")
+            progress("counting_month", current_month=month.isoformat(), month_index=index)
             total, missing = month_counts(conn, month)
             state.update(current_month=month.isoformat(), month_index=index, month_killmails=total,
                          month_missing=missing, phase="reading_items")

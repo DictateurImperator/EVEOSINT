@@ -2,9 +2,12 @@
 
 import unittest
 import os
+import json
+import tempfile
 from datetime import date
 from decimal import Decimal
-from unittest.mock import patch
+from pathlib import Path
+from unittest.mock import MagicMock, patch
 
 from scripts import calculate_killmail_values as values
 from scripts.test_first_loss_admin import jobs
@@ -155,6 +158,42 @@ class AdminJobTests(unittest.TestCase):
             launch.assert_not_called()
             jobs.run_killmail_values()
             launch.assert_called_once_with(job, job["command"])
+
+    def test_initial_sql_scan_is_announced_before_it_starts(self):
+        conn = MagicMock()
+        conn.cursor.return_value.__enter__.return_value.fetchone.return_value = (True,)
+        with tempfile.TemporaryDirectory() as directory:
+            progress = Path(directory) / "progress.json"
+
+            def scan(*_):
+                self.assertEqual(json.loads(progress.read_text())["phase"], "finding_missing_values")
+                self.assertTrue(any("START pid=" in line for line in logs.output))
+                self.assertTrue(any("phase=finding_missing_values" in line for line in logs.output))
+                raise values.StopRequested()
+
+            with patch("sys.argv", ["calculator", "--progress", str(progress)]), \
+                 patch.object(values, "load_config", return_value={}), \
+                 patch.object(values.psycopg2, "connect", return_value=conn), \
+                 patch.object(values.signal, "signal"), \
+                 patch.object(values, "target_months", side_effect=scan), \
+                 self.assertLogs(values.LOG, level="INFO") as logs:
+                self.assertEqual(values.main(), 0)
+            self.assertEqual(json.loads(progress.read_text())["phase"], "paused")
+            conn.rollback.assert_called_once()
+
+    def test_rejected_duplicate_start_preserves_running_jobs_progress(self):
+        conn = MagicMock()
+        conn.cursor.return_value.__enter__.return_value.fetchone.return_value = (False,)
+        with tempfile.TemporaryDirectory() as directory:
+            progress = Path(directory) / "progress.json"
+            original = '{"pid":123,"phase":"writing_values"}'
+            progress.write_text(original)
+            with patch("sys.argv", ["calculator", "--progress", str(progress)]), \
+                 patch.object(values, "load_config", return_value={}), \
+                 patch.object(values.psycopg2, "connect", return_value=conn), \
+                 patch.object(values.signal, "signal"), self.assertLogs(values.LOG, level="INFO"):
+                self.assertEqual(values.main(), 1)
+            self.assertEqual(progress.read_text(), original)
 
 
 @unittest.skipUnless(os.environ.get("KILLMAIL_VALUES_TEST_DSN"), "Set an isolated killmail_values_test DSN")
