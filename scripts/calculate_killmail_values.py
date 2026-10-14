@@ -25,7 +25,7 @@ else:
 
 START = date(2003, 1, 1)
 LOCK = 79130423
-FORMULA_VERSION = "loss-day-v5-recipes"
+FORMULA_VERSION = "loss-day-v6-price-dates"
 SCHEMA = Path(__file__).with_name("killmail_values_schema.sql")
 LOG = logging.getLogger("killmail_values")
 ONE_CENT = Decimal("0.01")
@@ -159,6 +159,23 @@ def load_history_counts(conn):
         return {type_id: int(count) for type_id, count in cur}
 
 
+def load_first_prices(conn, through):
+    """One bounded aggregate, not an indexed lookup for every killmail item.
+
+    The small result contains the earliest positive quote for each type.
+    Streaming days supplies the latest earlier quote during valuation.
+    """
+    with conn.cursor() as cur:
+        cur.execute("""SELECT e.key::bigint,
+                              min(ARRAY[to_char(p.price_date,'YYYY-MM-DD'),e.value])
+                       FROM market.zkill_daily_prices p
+                       CROSS JOIN LATERAL jsonb_each_text(p.prices) e
+                       WHERE p.price_date<=%s AND e.value::numeric>0
+                       GROUP BY e.key""", (through,))
+        return {int(type_id): (date.fromisoformat(quote[0]), Decimal(quote[1]))
+                for type_id, quote in cur}
+
+
 class QuoteCache:
     """Price/Build cache rules from zKill's dated source revisions.
 
@@ -254,7 +271,7 @@ class Pricing:
     """Local equivalent of zKill Price/Build, with no network or writes."""
 
     def __init__(self, metadata, recipes, counts, lookup=None, *, clock=None, rules_at=None,
-                 valuation_mode="zkill", recipe_history=None):
+                 valuation_mode="zkill", recipe_history=None, first_prices=None):
         if valuation_mode not in {"zkill", "loss-day"}:
             raise ValueError("Unknown valuation mode")
         self.metadata = metadata
@@ -268,6 +285,7 @@ class Pricing:
         self.recipe_history = recipe_history
         self.recipe_day = None
         self.recipe_version = "fixed"
+        self.first_prices = dict(first_prices or {})
 
     def select_recipe_day(self, day):
         if self.recipe_history is None or self.recipe_day == day:
@@ -303,7 +321,11 @@ class Pricing:
                 history = deque(((d, v) for d, v in history if d != day), maxlen=100)
                 self.histories[type_id] = history
             if value is not None and Decimal(str(value)) > 0:
-                history.append((day, Decimal(str(value))))
+                quote = (day, Decimal(str(value)))
+                history.append(quote)
+                first = self.first_prices.get(type_id)
+                if first is None or day <= first[0]:
+                    self.first_prices[type_id] = quote
 
     def market(self, type_id, day):
         # The do/while in zKill inspects at least one calendar date.
@@ -315,6 +337,29 @@ class Pricing:
         )[:34]
         exact = next((v for d, v in observations if d == day), None)
         return [v for _d, v in observations], exact
+
+    def nearest_market(self, type_id, day):
+        """Exact day, latest earlier quote, then the first later quote.
+
+        No calendar cutoff: a very old earlier quote still takes priority
+        over a closer later one. Only positive imported quotes are used.
+        """
+        observations = self.histories.get(type_id, ())
+        earlier = max(((d, v) for d, v in observations if d <= day), default=None)
+        if earlier is not None:
+            return earlier[1], False
+        first = self.first_prices.get(type_id)
+        return (first[1], False) if first is not None else None
+
+    def preferred_build(self, type_id, day, stack, recalc=False):
+        try:
+            return self.build(type_id, day, stack, recalc)
+        except HistoricalRecipeUnavailable:
+            # An uncovered old recipe must not block a usable market quote.
+            quote = self.nearest_market(type_id, day) if self.valuation_mode == "loss-day" else None
+            if quote is None:
+                raise
+            return quote
 
     def build(self, type_id, day, stack, recalc=False):
         if " SKIN " in self.metadata.get(type_id, (None, None, ""))[2]:
@@ -366,7 +411,7 @@ class Pricing:
         if group in (4513, 4759):
             return Decimal("200"), False
         if group in (30, 659):
-            built = self.build(type_id, kill_day, stack)
+            built = self.preferred_build(type_id, kill_day, stack)
             if built[0] > 1:
                 return built
         if type_id == 2233:
@@ -378,18 +423,22 @@ class Pricing:
                 unknown |= missing
             return total, unknown
         if category == 66:
-            built = self.build(type_id, kill_day, stack, recalc=True)
+            built = self.preferred_build(type_id, kill_day, stack, recalc=True)
             if built[0] > ONE_CENT:
                 return built
         cached = self.quotes.market_get(type_id, market_day)
         if cached is not None:
             return cached
-        history, exact = self.market(type_id, market_day)
-        value, unknown = rolling_price(history)
-        if value <= ONE_CENT:
-            value, unknown = self.build(type_id, market_day, stack)
-        if exact is not None and exact < value:
-            value, unknown = exact, False
+        if self.valuation_mode == "loss-day":
+            quote = self.nearest_market(type_id, market_day)
+            value, unknown = quote if quote is not None else self.build(type_id, market_day, stack)
+        else:
+            history, exact = self.market(type_id, market_day)
+            value, unknown = rolling_price(history)
+            if value <= ONE_CENT:
+                value, unknown = self.build(type_id, market_day, stack)
+            if exact is not None and exact < value:
+                value, unknown = exact, False
         result = value, unknown
         self.quotes.market_put(type_id, market_day, result)
         return result
@@ -742,10 +791,20 @@ def main():
         automatic = args.recipe_version == "auto"
         progress("loading_recipe_snapshot")
         recipes = {} if automatic else load_blueprints(conn, args.recipe_version, history)
-        progress("counting_price_history")
-        counts = load_history_counts(conn)
+        first_prices = {}
+        if args.valuation_mode == "loss-day":
+            progress("finding_first_prices")
+            # Include later completed imported days even if every target KM
+            # predates the first quote. Never use today's unfinished file.
+            first_prices = load_first_prices(conn, min(imported_through, datetime.now(UTC).date() - timedelta(days=1)))
+            counts = {}
+            LOG.info("PRICE_DATES rule=exact_then_previous_then_first_later types=%s", len(first_prices))
+        else:
+            progress("counting_price_history")
+            counts = load_history_counts(conn)
         pricing = Pricing(metadata, recipes, counts, rules_at=args.cache_rules_at,
-                          valuation_mode=args.valuation_mode, recipe_history=history if automatic else None)
+                          valuation_mode=args.valuation_mode, recipe_history=history if automatic else None,
+                          first_prices=first_prices)
         state["recipe_count"] = len(pricing.recipes)
         LOG.info("VALUATION_RULES formula=%s recipes=%s recipe_count=%s cache_rules_at=%s",
                  FORMULA_VERSION, args.recipe_version, len(pricing.recipes), state["cache_rules_at"])

@@ -196,6 +196,53 @@ class AdminJobTests(unittest.TestCase):
             self.assertEqual(progress.read_text(), original)
 
 
+class PriceDateRuleTests(unittest.TestCase):
+    def test_exact_quote_is_used_even_if_the_older_average_is_lower(self):
+        engine = values.Pricing({}, {}, {}, valuation_mode="loss-day")
+        engine.add_day(date(2026, 1, 1), {"1": "10"})
+        engine.add_day(date(2026, 1, 2), {"1": "30"})
+        self.assertEqual(engine.price(1, date(2026, 1, 2), date(2026, 1, 2)), (Decimal("30"), False))
+
+    def test_latest_earlier_quote_has_no_calendar_limit(self):
+        engine = values.Pricing({}, {}, {}, valuation_mode="loss-day",
+                                first_prices={1: (date(2003, 1, 1), Decimal("10"))})
+        engine.add_day(date(2003, 1, 1), {"1": "10"})
+        engine.add_day(date(2007, 1, 1), {"1": "20"})
+        self.assertEqual(engine.price(1, date(2026, 1, 2), date(2026, 1, 2)), (Decimal("20"), False))
+
+    def test_earlier_quote_wins_over_a_closer_later_one(self):
+        engine = values.Pricing({}, {}, {}, valuation_mode="loss-day")
+        engine.add_day(date(2003, 1, 1), {"1": "10"})
+        engine.add_day(date(2026, 1, 3), {"1": "30"})
+        self.assertEqual(engine.price(1, date(2026, 1, 2), date(2026, 1, 2)), (Decimal("10"), False))
+
+    def test_first_later_quote_is_used_only_when_no_earlier_one_exists(self):
+        engine = values.Pricing({}, {}, {}, valuation_mode="loss-day",
+                                first_prices={1: (date(2007, 12, 17), Decimal("91500000.05"))})
+        self.assertEqual(engine.price(1, date(2007, 12, 1), date(2007, 12, 1)),
+                         (Decimal("91500000.05"), False))
+
+    def test_zero_and_null_observations_do_not_replace_a_positive_price(self):
+        engine = values.Pricing({}, {}, {}, valuation_mode="loss-day")
+        engine.add_day(date(2026, 1, 1), {"1": "12"})
+        engine.add_day(date(2026, 1, 2), {"1": "0"})
+        engine.add_day(date(2026, 1, 3), {"1": None})
+        self.assertEqual(engine.price(1, date(2026, 1, 3), date(2026, 1, 3)), (Decimal("12"), False))
+
+    def test_missing_old_recipe_does_not_block_a_market_quote(self):
+        from scripts.killmail_recipe_history import RecipeHistory
+        engine = values.Pricing({1: (30, 6, "Titan")}, {}, {}, valuation_mode="loss-day",
+                                recipe_history=RecipeHistory(runtime_dir=None),
+                                first_prices={1: (date(2010, 1, 1), Decimal("1000000000"))})
+        self.assertEqual(engine.price(1, date(2007, 12, 1), date(2007, 12, 1)),
+                         (Decimal("1000000000"), False))
+
+    def test_recursive_materials_use_the_same_date_selection_rule(self):
+        engine = values.Pricing({1: (30, 6, "Titan")}, {1: (1, {2: 3})}, {}, valuation_mode="loss-day",
+                                first_prices={2: (date(2010, 1, 1), Decimal("20"))})
+        self.assertEqual(engine.price(1, date(2007, 12, 1), date(2007, 12, 1)), (Decimal("60"), False))
+
+
 @unittest.skipUnless(os.environ.get("KILLMAIL_VALUES_TEST_DSN"), "Set an isolated killmail_values_test DSN")
 class DatabaseTests(unittest.TestCase):
     def setUp(self):
@@ -221,6 +268,27 @@ class DatabaseTests(unittest.TestCase):
     def tearDown(self):
         self.conn.rollback()
         self.conn.close()
+
+    def test_first_positive_quotes_can_follow_the_entire_target_kill_month(self):
+        with self.conn.cursor() as cur:
+            cur.execute("""CREATE SCHEMA market;
+                CREATE TABLE market.zkill_daily_prices(price_date date PRIMARY KEY,prices jsonb);
+                INSERT INTO market.zkill_daily_prices VALUES
+                    ('2026-02-01','{"1":0,"2":-1}'),
+                    ('2026-02-02','{"1":100,"2":null}'),
+                    ('2026-02-03','{"1":50,"2":20}'),
+                    ('2026-02-04','{"3":999}');
+                INSERT INTO rawkm.killmails VALUES(1,'2026-01-02 12:00:00+00',1,NULL);""")
+        first = values.load_first_prices(self.conn, date(2026, 2, 3))
+        self.assertEqual(first, {1: (date(2026, 2, 2), Decimal("100")),
+                                 2: (date(2026, 2, 3), Decimal("20"))})
+        engine = values.Pricing({}, {}, {}, valuation_mode="loss-day", first_prices=first)
+        day = date(2026, 1, 2)
+        rows = values.boundary_prices(day, [(day, 1)], engine)
+        self.assertEqual(values.update_month(self.conn, date(2026, 1, 1), rows, "loss-day")[0], 1)
+        with self.conn.cursor() as cur:
+            cur.execute("SELECT estimated_value_cents FROM rawkm.killmails")
+            self.assertEqual(cur.fetchone()[0], 10000)
 
     def test_sql_preserves_values_and_rounds_only_the_final_total(self):
         with self.conn.cursor() as cur:

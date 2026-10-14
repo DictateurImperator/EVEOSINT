@@ -8,16 +8,18 @@ The manual Admin Jobs action and daily pipeline run the same command without spe
 
 The default is `--valuation-mode loss-day --recipe-version auto`:
 
-- The valuation date is the killmail's **UTC calendar day**, including kills before 01:00 UTC. Hull, fitted items, cargo and recursive construction materials all use that same date.
+- The reference date is the killmail's **UTC calendar day**, including kills before 01:00 UTC. Hull, fitted items, cargo and recursive construction materials all use that same date.
 - Each date selects the latest archived CCP recipe set effective on or before it. The complete manufacturing chain uses that set, including output quantities and component recipes. Current recipes are never mixed into an old hull's construction.
-- The underlying market calculation remains zKill's rolling valuation: up to 34 positive observations within its calendar search bound, trimming both ends when 34 exist or the highest two when 7–33 exist; the exact daily quote caps a higher rolling average. This is not simply the raw daily market quote.
-- Existing fixed-price and item rules are retained: capsules, special ships, SKINs, blueprint copies, golden-pod implants and frigate-bay ships. Titans, supercarriers and structure modules use construction costs; other items also use construction when market history is missing.
+- Market prices follow this strict order: **the exact day's positive price; otherwise the latest earlier positive price; otherwise the first later positive price**. An earlier quote always takes priority over a closer later one. There is no lookback limit and no averaging in this mode. Zero, negative and null observations do not supply a price.
+- Existing fixed-price and item rules are retained: capsules, special ships, SKINs, blueprint copies, golden-pod implants and frigate-bay ships. Titans, supercarriers and structure modules use construction costs; other items also use construction when market history is missing. If an old construction recipe is unavailable, a market quote selected by the same date rule can still value the item.
 - Manufacturing uses `ceil(0.9 × raw material quantity)`, divided by recipe output quantity. Fractional cents survive recursive construction. Hull, destroyed items and dropped items are summed before rounding the final total to cents.
 - In-memory quotes are cleared when the imported price day or recipe set changes. A quote made from partial data cannot freeze an older value for the completed loss day.
 
 Today's unfinished trading day and days beyond the imported price history stay empty until a later daily run. Price coverage must be continuous from January 2003 through the completed valuation horizon. The job does not silently skip missing historical price files.
 
-If construction is required before the earliest archived recipe, the whole killmail stays **NULL**, with an unavailable-recipe count in progress. Market-priced items and known fixed prices can still be valued on those earlier dates. The existing 0.01 ISK fallback for an unpriced item with no recipe in an otherwise available set remains counted separately as a price fallback; it is not a verified market value.
+The first positive quote for every type is loaded once from all completed imported price days, including days after the latest target kill. The normal chronological stream supplies earlier quotes as the job advances. This uses a bounded aggregate and small in-memory dictionaries, without a database query for each item, another price table or network requests. For example, a December 1, 2007 Raven with no earlier quote can use its first available December 17 quote. This is a dated substitution, not proof that the price was observed on December 1.
+
+If construction is required before the earliest archived recipe and no market quote exists anywhere in the imported history, the whole killmail stays **NULL**, with an unavailable-recipe count in progress. Market-priced items and known fixed prices can still be valued on those earlier dates. The existing 0.01 ISK fallback for an unpriced item with no recipe in an otherwise available set remains counted separately as a price fallback; it is not a verified market value.
 
 ## Historical CCP manufacturing recipes
 
@@ -41,7 +43,7 @@ To extend the bundled catalogue, supply an ordered manifest (`version`, `snapsho
 
 ## Optional zKill source replay
 
-The previous source-replay engine remains available for explicit research. It uses the kill time minus 3,601 seconds for the market date, separate recursive component date offsets, and versioned quote-cache rules. Replay requires an explicit recipe set; it does not choose an era from the loss date:
+The previous source-replay engine remains available for explicit research. It retains zKill's trimmed rolling average and daily downward cap, kill time minus 3,601 seconds for the market date, separate recursive component date offsets, and versioned quote-cache rules. Replay requires an explicit recipe set; it does not choose an era from the loss date:
 
 ```bash
 python scripts/calculate_killmail_values.py --valuation-mode zkill \
@@ -56,7 +58,7 @@ The daily endpoint contains market history, not all final quotes once stored in 
 
 ## Progress, storage and verification
 
-Admin Jobs shows the current partition, price-reading date, completed months, values written, remaining unvalued kills, fallback counts and active historical recipe. Completed months commit separately; stopping retains them, and resuming selects only remaining NULLs. The progress file identifies `loss-day-v5-recipes` and the selected valuation mode. Existing values from earlier formula versions remain untouched by this update.
+Admin Jobs shows the current partition, price-reading date, completed months, values written, remaining unvalued kills, fallback counts and active historical recipe. Completed months commit separately; stopping retains them, and resuming selects only remaining NULLs. The progress file identifies `loss-day-v6-price-dates` and the selected valuation mode. Existing values from earlier formula versions remain untouched by this update.
 
 The final value payload is eight bytes per valued killmail. PostgreSQL row updates also generate WAL and obsolete row versions, so temporary and physical growth can exceed that logical payload. The job checks a free-disk reserve between months and uses an advisory lock against concurrent valuation runs.
 
