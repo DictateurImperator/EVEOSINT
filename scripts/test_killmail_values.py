@@ -228,6 +228,71 @@ class DatabaseTests(unittest.TestCase):
             cur.execute("SELECT singleton FROM rawkm.killmail_items_2026_01 WHERE item_type_id=10 ORDER BY item_index")
             self.assertEqual(cur.fetchall(), [(0,), (2,)])
 
+    def safety_fixture(self):
+        """Keep complete raw rows so an accidental non-price write is visible."""
+        with self.conn.cursor() as cur:
+            cur.execute("""ALTER TABLE rawkm.killmails ADD COLUMN raw_payload jsonb;
+                CREATE TABLE rawkm.killmails_2026_02 PARTITION OF rawkm.killmails
+                    FOR VALUES FROM ('2026-02-01') TO ('2026-03-01');
+                CREATE TABLE rawkm.killmail_attackers(killmail_id bigint,raw_payload jsonb);
+                INSERT INTO rawkm.killmails VALUES
+                    (1,'2026-01-02 12:00:00+00',1,NULL,'{"victim":101,"system":30000142}'),
+                    (2,'2026-01-02 12:00:00+00',1,777,'{"victim":102,"system":30000143}'),
+                    (3,'2026-01-02 12:00:00+00',99,NULL,'{"victim":103,"system":30000144}'),
+                    (1,'2026-02-02 12:00:00+00',1,NULL,'{"victim":104,"system":30000145}');
+                INSERT INTO rawkm.killmail_items VALUES
+                    (1,'2026-01-02 12:00:00+00',0,3,5,2,4,0),
+                    (2,'2026-01-02 12:00:00+00',0,3,5,3,0,0);
+                INSERT INTO rawkm.killmail_attackers VALUES
+                    (1,'{"character":201,"final_blow":true}'),
+                    (1,'{"character":202,"final_blow":false}'),
+                    (2,'{"character":203,"final_blow":true}');""")
+        day = date(2026, 1, 2)
+        return [(day, day, 1, Decimal("100"), False),
+                (day, day, 3, Decimal("2"), False)]
+
+    def raw_snapshot(self, include_value=False):
+        with self.conn.cursor() as cur:
+            column = "to_jsonb(k)" if include_value else "to_jsonb(k)-'estimated_value_cents'"
+            cur.execute(f"SELECT {column} FROM rawkm.killmails k ORDER BY killmail_time,killmail_id")
+            kills = cur.fetchall()
+            cur.execute("SELECT * FROM rawkm.killmail_items ORDER BY killmail_time,killmail_id,item_index")
+            items = cur.fetchall()
+            cur.execute("SELECT * FROM rawkm.killmail_attackers ORDER BY killmail_id,raw_payload::text")
+            attackers = cur.fetchall()
+        return kills, items, attackers
+
+    def test_valuation_preserves_all_killmail_data_items_attackers_and_other_months(self):
+        rows = self.safety_fixture()
+        before = self.raw_snapshot()
+        with self.conn.cursor() as cur:
+            # The production schema setup is also safe to run repeatedly.
+            cur.execute(values.SCHEMA.read_text())
+            cur.execute(values.SCHEMA.read_text())
+        self.assertEqual(values.update_month(self.conn, date(2026, 1, 1), rows, "loss-day")[0], 1)
+        self.assertEqual(self.raw_snapshot(), before)
+        with self.conn.cursor() as cur:
+            cur.execute("SELECT estimated_value_cents FROM rawkm.killmails ORDER BY killmail_time,killmail_id")
+            self.assertEqual(cur.fetchall(), [(11200,), (777,), (None,), (None,)])
+            # Remove only session-local staging tables to repeat the pass in
+            # this uncommitted fixture, as ON COMMIT DROP does in production.
+            cur.execute("DROP TABLE pg_temp.valuation_stage,pg_temp.valuation_prices")
+        after = self.raw_snapshot(include_value=True)
+        self.assertEqual(values.update_month(self.conn, date(2026, 1, 1), rows, "loss-day")[0], 0)
+        self.assertEqual(self.raw_snapshot(include_value=True), after)
+
+    def test_rolling_back_a_valuation_preserves_every_raw_row_and_value(self):
+        rows = self.safety_fixture()
+        before = self.raw_snapshot(include_value=True)
+        with self.conn.cursor() as cur:
+            cur.execute("SAVEPOINT before_valuation")
+        self.assertEqual(values.update_month(self.conn, date(2026, 1, 1), rows, "loss-day")[0], 1)
+        with self.conn.cursor() as cur:
+            cur.execute("ROLLBACK TO SAVEPOINT before_valuation")
+            cur.execute("SELECT to_regclass('pg_temp.valuation_stage'),to_regclass('pg_temp.valuation_prices')")
+            self.assertEqual(cur.fetchone(), (None, None))
+        self.assertEqual(self.raw_snapshot(include_value=True), before)
+
     def test_loss_day_recipe_transition_and_midnight_are_used_in_sql(self):
         import tempfile
         from pathlib import Path
