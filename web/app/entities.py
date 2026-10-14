@@ -5,6 +5,7 @@ from collections import OrderedDict
 from threading import Lock
 from time import perf_counter, monotonic
 from datetime import date, datetime, timedelta, timezone
+from decimal import Decimal, InvalidOperation
 from urllib.parse import quote
 
 from psycopg2.errors import QueryCanceled
@@ -1084,6 +1085,27 @@ def _format_isk(value):
     if abs_value >= 1_000:
         return f"{value / 1_000:.2f}k"
     return str(int(value))
+
+
+def _killmail_value_fields(value_cents=None, *, mer_isk=None):
+    """Compact amounts with an exact tooltip; NULL is distinct from zero."""
+    source = "calculated" if value_cents is not None else "mer" if mer_isk is not None else None
+    try:
+        value = Decimal(value_cents) / 100 if value_cents is not None else Decimal(str(mer_isk))
+        if not value.is_finite():
+            raise ValueError("Non-finite ISK value")
+    except (InvalidOperation, TypeError, ValueError):
+        return {"value_label": "—", "value_full_label": None,
+                "value_title": "Value not available yet", "value_source": None}
+    full = f"{value:,.2f} ISK"
+    label = f"{value:,.2f}".rstrip("0").rstrip(".")
+    for scale, suffix in ((10**12, "T"), (10**9, "B"), (10**6, "M"), (10**3, "K")):
+        if abs(value) >= scale:
+            label = f"{value / scale:,.2f}".rstrip("0").rstrip(".") + " " + suffix
+            break
+    return {"value_label": label, "value_full_label": full,
+            "value_title": ("Estimated total: " if source == "calculated" else "MER loss value: ") + full,
+            "value_source": source}
 
 
 def _damage_percent(damage_done, victim_damage_taken):
@@ -2785,7 +2807,8 @@ def _character_killmails(conn, character_id, page=1, per_page=100, filters=None)
             vcorp.ticker AS victim_corporation_ticker,
             km.victim_alliance_id,
             vall.name AS victim_alliance_name,
-            vall.ticker AS victim_alliance_ticker
+            vall.ticker AS victim_alliance_ticker,
+            (to_jsonb(km)->>'estimated_value_cents')::bigint AS estimated_value_cents
         FROM page_ids p
         JOIN rawkm.killmails km
           ON km.killmail_id = p.killmail_id
@@ -2941,7 +2964,10 @@ def _character_killmails(conn, character_id, page=1, per_page=100, filters=None)
             final_by_km[key] = payload
 
     rows = []
+    values_by_km = {}
     for detail_row in detail_rows:
+        *detail_row, stored_value_cents = detail_row
+        values_by_km[(int(detail_row[2]), detail_row[3])] = stored_value_cents
         (
             side,
             order_index,
@@ -3147,7 +3173,7 @@ def _character_killmails(conn, character_id, page=1, per_page=100, filters=None)
             "final_corporation": final_corporation,
             "final_alliance": final_alliance,
             "zkill_url": f"https://zkillboard.com/kill/{int(killmail_id)}/",
-            "value_label": None,
+            **_killmail_value_fields(values_by_km.get((int(killmail_id), killmail_time))),
         })
 
     timing_marks["build_rows_ms"] = round((perf_counter() - build_started) * 1000, 1)
@@ -3774,7 +3800,8 @@ def _hydrate_global_killmail_entries(conn, page_entries):
             vcorp.ticker,
             COALESCE(km.victim_alliance_id, vhist.alliance_id),
             vall.name,
-            vall.ticker
+            vall.ticker,
+            (to_jsonb(km)->>'estimated_value_cents')::bigint AS estimated_value_cents
         FROM page_ids p
         JOIN rawkm.killmails km
           ON km.killmail_id = p.killmail_id
@@ -3907,6 +3934,7 @@ def _hydrate_global_killmail_entries(conn, page_entries):
 
     killmails = []
     for row in detail_rows:
+        *row, stored_value_cents = row
         (
             _order_index,
             killmail_id,
@@ -4014,7 +4042,7 @@ def _hydrate_global_killmail_entries(conn, page_entries):
             "final_corporation": final_corporation,
             "final_alliance": final_alliance,
             "zkill_url": f"https://zkillboard.com/kill/{int(killmail_id)}/",
-            "value_label": None,
+            **_killmail_value_fields(stored_value_cents),
         })
 
     return killmails
@@ -4488,7 +4516,8 @@ def _group_entity_killmails(conn, entity_type, entity_id, page=1, per_page=100, 
             vcorp.ticker AS victim_corporation_ticker,
             COALESCE(km.victim_alliance_id, vhist.alliance_id) AS victim_alliance_id,
             vall.name AS victim_alliance_name,
-            vall.ticker AS victim_alliance_ticker
+            vall.ticker AS victim_alliance_ticker,
+            (to_jsonb(km)->>'estimated_value_cents')::bigint AS estimated_value_cents
         FROM page_ids p
         JOIN rawkm.killmails km
           ON km.killmail_id = p.killmail_id
@@ -4704,7 +4733,10 @@ def _group_entity_killmails(conn, entity_type, entity_id, page=1, per_page=100, 
     }
 
     rows = []
+    values_by_km = {}
     for detail_row in detail_rows:
+        *detail_row, stored_value_cents = detail_row
+        values_by_km[(int(detail_row[2]), detail_row[3])] = stored_value_cents
         (
             side,
             order_index,
@@ -4917,7 +4949,7 @@ def _group_entity_killmails(conn, entity_type, entity_id, page=1, per_page=100, 
             "final_corporation": final_corporation,
             "final_alliance": final_alliance,
             "zkill_url": f"https://zkillboard.com/kill/{int(killmail_id)}/",
-            "value_label": None,
+            **_killmail_value_fields(values_by_km.get((int(killmail_id), killmail_time))),
         })
 
     timing_marks["build_rows_ms"] = round((perf_counter() - build_started) * 1000, 1)
@@ -5623,7 +5655,7 @@ def _group_entity_mer_killmails(conn, entity_type, entity_id, page=1, per_page=1
                 "alliance", killer_alliance_id, killer_alliance_name, alliance_entities
             ),
             "zkill_url": None,
-            "value_label": _format_isk(value),
+            **_killmail_value_fields(mer_isk=value),
             "ccp_isk_lost": ccp_isk_lost,
             "ccp_isk_destroyed": ccp_isk_destroyed,
             "zkb_isk_lost": zkb_isk_lost,
@@ -9797,7 +9829,8 @@ def get_killmail_detail(killmail_id):
                     vall.name AS victim_alliance_name,
                     vall.ticker AS victim_alliance_ticker,
                     km.victim_ship_type_id,
-                    km.victim_damage_taken
+                    km.victim_damage_taken,
+                    (to_jsonb(km)->>'estimated_value_cents')::bigint AS estimated_value_cents
                 FROM rawkm.killmails km
                 LEFT JOIN entities.characters vc
                   ON vc.character_id = km.victim_character_id
@@ -9830,6 +9863,7 @@ def get_killmail_detail(killmail_id):
             victim_alliance_ticker,
             victim_ship_type_id,
             victim_damage_taken,
+            stored_value_cents,
         ) = killmail_row
 
         source_url = None
@@ -10017,6 +10051,6 @@ def get_killmail_detail(killmail_id):
         "destroyed_items": destroyed_items,
         "source_url": source_url,
         "zkill_url": f"https://zkillboard.com/kill/{int(row_killmail_id)}/",
-        "value_label": None,
+        **_killmail_value_fields(stored_value_cents),
     }
 

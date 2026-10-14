@@ -58,6 +58,8 @@ The daily endpoint contains market history, not all final quotes once stored in 
 
 ## Progress, storage and verification
 
+Stored estimates appear by default under the time in global and derived killboards (character, corporation, alliance, coalition, ship and location), and in the killmail detail header. Amounts use K/M/B/T; hovering shows the full amount to the cent. Hidden MER rows retain their MER loss value. A missing calculated value displays an em dash rather than zero. Display reads the existing row during normal page hydration and neither calculates nor changes values. Reading the optional field through `to_jsonb(km)` also lets pages load before the valuation job has added its column.
+
 Admin Jobs shows the current partition, price-reading date, completed months, values written, remaining unvalued kills, fallback counts and active historical recipe. Completed months commit separately; stopping retains them, and resuming selects only remaining NULLs. The progress file identifies `loss-day-v6-price-dates` and the selected valuation mode. Existing values from earlier formula versions remain untouched by this update.
 
 The final value payload is eight bytes per valued killmail. PostgreSQL row updates also generate WAL and obsolete row versions, so temporary and physical growth can exceed that logical payload. The job checks a free-disk reserve between months and uses an advisory lock against concurrent valuation runs.

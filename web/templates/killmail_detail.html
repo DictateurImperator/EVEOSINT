@@ -110,7 +110,7 @@
 
   .killmail-summary {
     display: grid;
-    grid-template-columns: minmax(0, 1.6fr) repeat(4, minmax(115px, 0.55fr));
+    grid-template-columns: minmax(0, 1.6fr) repeat(5, minmax(115px, 0.55fr));
     gap: 1px;
     margin-bottom: 0.8rem;
     border: 1px solid rgba(137, 169, 178, 0.32);
@@ -175,6 +175,8 @@
     font-size: 0.95rem;
     font-variant-numeric: tabular-nums;
   }
+
+  .summary-stat .killmail-total-value { color:#22d3ee; font-weight:700; cursor:help; white-space:nowrap; }
 
   .killmail-main-grid {
     display: grid;
@@ -811,6 +813,10 @@
             {{ killmail.victim.character.name if killmail.victim.character else "Unknown" }}
           {% endif %}
         </div>
+      </div>
+      <div class="summary-stat" data-killmail-total-value>
+        <div class="label">Estimated value (ISK)</div>
+        <div class="value killmail-total-value" title="{{ killmail.value_title }}">{{ killmail.value_label }}</div>
       </div>
       <div class="summary-stat">
         <div class="label">Attackers</div>
