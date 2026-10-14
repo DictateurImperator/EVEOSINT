@@ -228,6 +228,57 @@ class DatabaseTests(unittest.TestCase):
             cur.execute("SELECT singleton FROM rawkm.killmail_items_2026_01 WHERE item_type_id=10 ORDER BY item_index")
             self.assertEqual(cur.fetchall(), [(0,), (2,)])
 
+    def test_loss_day_recipe_transition_and_midnight_are_used_in_sql(self):
+        import tempfile
+        from pathlib import Path
+        from scripts.killmail_recipe_history import RecipeHistory, record_snapshot
+
+        def blueprints(hull_quantity, component_quantity, output):
+            return [{"activities": {"manufacturing": {
+                "products": [{"typeID": t, "quantity": n}],
+                "materials": [{"typeID": m, "quantity": q}],
+            }}} for t, n, m, q in [(1, 1, 2, hull_quantity), (2, output, 4, component_quantity)]]
+
+        with tempfile.TemporaryDirectory() as directory:
+            record_snapshot("test-before", "2026-01-01", blueprints(10, 10, 1), "test", directory)
+            record_snapshot("test-after", "2026-01-02", blueprints(20, 5, 2), "test", directory)
+            history = RecipeHistory(runtime_dir=directory)
+            engine = values.Pricing({1: (30, 6, "Titan")}, {}, {4: 100},
+                                    valuation_mode="loss-day", recipe_history=history)
+            engine.add_day(date(2026, 1, 1), {"4": "90"})
+            engine.add_day(date(2026, 1, 2), {"4": "30"})
+            with self.conn.cursor() as cur:
+                cur.execute("""INSERT INTO rawkm.killmails VALUES
+                    (1,'2026-01-01 23:30:00+00',1,NULL),
+                    (2,'2026-01-02 00:30:00+00',1,NULL),
+                    (3,'2026-01-03 12:00:00+00',1,NULL);""")
+            needed = values.needed_prices(self.conn, date(2026, 1, 1), "loss-day")
+            self.assertIn((date(2026, 1, 2), 1), needed[date(2026, 1, 2)])
+            rows = [row for day, pairs in needed.items() if day <= date(2026, 1, 2)
+                    for row in values.boundary_prices(day, pairs, engine)]
+            updated, _ = values.update_month(self.conn, date(2026, 1, 1), rows, "loss-day")
+            self.assertEqual(updated, 2)
+            with self.conn.cursor() as cur:
+                cur.execute("SELECT killmail_id,estimated_value_cents FROM rawkm.killmails ORDER BY killmail_id")
+                self.assertEqual(cur.fetchall(), [(1, 729000), (2, 135000), (3, None)])
+            self.assertEqual(values.target_months(self.conn, "loss-day"),
+                             [(date(2026, 1, 1), date(2026, 1, 3))])
+
+    def test_unavailable_recipe_does_not_store_a_fictional_one_cent_price(self):
+        day = date(2026, 1, 2)
+        with self.conn.cursor() as cur:
+            cur.execute("""INSERT INTO rawkm.killmails VALUES
+                (1,'2026-01-02 12:00:00+00',1,NULL),
+                (2,'2026-01-02 12:00:00+00',2,NULL);
+                INSERT INTO rawkm.killmail_items_2026_01 VALUES
+                (2,'2026-01-02 12:00:00+00',0,3,5,1,0,0);""")
+        rows = [(day, day, 1, None, True), (day, day, 2, Decimal("100"), False),
+                (day, day, 3, None, True)]
+        self.assertEqual(values.update_month(self.conn, date(2026, 1, 1), rows, "loss-day")[0], 0)
+        with self.conn.cursor() as cur:
+            cur.execute("SELECT estimated_value_cents FROM rawkm.killmails")
+            self.assertEqual(cur.fetchall(), [(None,), (None,)])
+
     def test_historical_hel_values_are_written_to_the_killmail_at_the_cent(self):
         from scripts.test_killmail_recipe_history import historical_fixture, fixture_pricing
 

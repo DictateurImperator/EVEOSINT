@@ -11,7 +11,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from scripts import calculate_killmail_values as values
-from scripts.killmail_recipe_history import CATALOG, MANIFEST, RecipeHistory
+from scripts.killmail_recipe_history import CATALOG, MANIFEST, RecipeHistory, record_snapshot
 
 
 def historical_fixture():
@@ -41,10 +41,10 @@ def fixture_pricing(case, recipe_version, cache_rules_at, history=None):
 class RecipeTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.history = RecipeHistory()
+        cls.history = RecipeHistory(runtime_dir=None)
 
     def test_every_bundled_snapshot_reconstructs_its_verified_recipe_set(self):
-        self.assertEqual(len(self.history.versions), 36)
+        self.assertGreaterEqual(len(self.history.versions), 157)
         for version, metadata in self.history.versions.items():
             with self.subTest(version=version):
                 self.assertEqual(len(self.history.recipes(version)), metadata["recipe_count"])
@@ -55,6 +55,74 @@ class RecipeTests(unittest.TestCase):
         for missing in ("2003-01-01", "2022-05-09", "2026-10-13", "../data", "current"):
             with self.subTest(version=missing), self.assertRaises(ValueError):
                 self.history.resolve(missing)
+
+    def test_loss_date_uses_past_recipes_and_confirmed_patch_dates(self):
+        for day, version in [
+            ("2014-07-21", None), ("2014-07-22", "fuzzwork-crius-1.0-100038"),
+            ("2014-09-29", "fuzzwork-hyperion-1.0-101505"),
+            ("2014-09-30", "fuzzwork-oceanus-1.0-105658"),
+            ("2015-12-07", "fuzzwork-parallax-1-115480"),
+            ("2015-12-08", "fuzzwork-frostline-1.0-116241"),
+            ("2016-03-07", "fuzzwork-yc118-2-116998"),
+            ("2016-03-08", "fuzzwork-yc118-3-117575"),
+            ("2016-10-11", "20161011"),
+            ("2021-04-26", "20210413"), ("2021-04-27", "20210427"),
+            ("2022-05-09", "20220405"), ("2022-05-10", "20220510"),
+            ("2023-06-12", "20230315"), ("2023-06-13", "20230619"),
+            ("2024-09-17", "20240909"), ("2024-09-18", "20240919"),
+        ]:
+            with self.subTest(day=day):
+                self.assertEqual(self.history.version_on(date.fromisoformat(day)), version)
+
+    def test_imported_sde_extends_history_without_replacing_old_dates(self):
+        rows = [{"activities": {"manufacturing": {
+            "products": [{"typeID": 1, "quantity": 3}],
+            "materials": [{"typeID": 2, "quantity": 11}],
+        }}}]
+        with tempfile.TemporaryDirectory() as directory:
+            record_snapshot("build-test-1", "2026-11-01T11:00:00Z", rows, "https://example.test/ccp-sde", directory)
+            record_snapshot("build-test-1", "2026-11-01T11:00:00Z", rows, "https://example.test/ccp-sde", directory)
+            record_snapshot("build-test-2", "2026-12-01T11:00:00Z", rows, "https://example.test/ccp-sde", directory)
+            history = RecipeHistory(runtime_dir=directory)
+            self.assertEqual(history.version_on(date(2026, 11, 1)), "build-test-1")
+            self.assertEqual(history.version_on(date(2026, 12, 1)), "build-test-2")
+            self.assertEqual(history.version_on(date(2022, 5, 10)), "20220510")
+            self.assertEqual(values.load_blueprints(None, "build-test-1", history), {1: (3, {2: 10})})
+            self.assertEqual(len(list(Path(directory).glob("*.json.gz"))), 1)
+
+    def test_loss_day_keeps_component_recipes_and_prices_on_the_loss_day(self):
+        engine = values.Pricing({1: (30, 6, "Titan")}, {1: (1, {2: 3}), 2: (2, {3: 4})},
+                                {3: 100}, valuation_mode="loss-day")
+        engine.add_day(date(2026, 1, 1), {"3": "90"})
+        engine.add_day(date(2026, 1, 2), {"3": "30"})
+        self.assertEqual(engine.price(1, date(2026, 1, 2), date(2026, 1, 1)), (Decimal("180"), False))
+
+    def test_recipe_change_clears_market_and_build_quotes(self):
+        engine = values.Pricing({}, {}, {}, valuation_mode="loss-day", recipe_history=self.history)
+        engine.select_recipe_day(date(2022, 5, 9))
+        engine.quotes.market_put(1, date(2022, 5, 9), (Decimal("10"), False))
+        engine.quotes.build_put(1, date(2022, 5, 9), (Decimal("10"), False))
+        engine.select_recipe_day(date(2022, 5, 10))
+        self.assertEqual(engine.recipe_version, "20220510")
+        self.assertFalse(engine.quotes.market)
+        self.assertFalse(engine.quotes.built)
+        self.assertEqual(engine.recipes[22852][1][57486], 360)
+
+    def test_uncovered_construction_is_left_empty_but_known_market_prices_work(self):
+        engine = values.Pricing({1: (30, 6, "Titan")}, {}, {2: 100},
+                                valuation_mode="loss-day", recipe_history=self.history)
+        day = date(2009, 1, 2)
+        engine.add_day(day, {"2": "12"})
+        rows = values.boundary_prices(day, [(day, 1), (day, 2)], engine)
+        self.assertEqual(rows, [(day, day, 1, None, True), (day, day, 2, Decimal("12"), False)])
+
+    def test_loss_day_refresh_does_not_preserve_a_quote_from_partial_prices(self):
+        engine = values.Pricing({}, {}, {1: 100}, valuation_mode="loss-day")
+        day = date(2026, 1, 1)
+        engine.add_day(day, {"1": "10"})
+        self.assertEqual(engine.price(1, day, day)[0], Decimal("10"))
+        engine.add_day(day, {"1": "30"})
+        self.assertEqual(engine.price(1, day, day)[0], Decimal("30"))
 
     def test_changed_output_and_complete_component_chain_are_historical(self):
         before = values.load_blueprints(None, "2022-04-05", self.history)

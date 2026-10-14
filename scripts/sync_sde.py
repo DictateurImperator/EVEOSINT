@@ -10,6 +10,11 @@ import requests
 import psycopg2
 from psycopg2.extras import Json, execute_values
 
+if __package__:
+    from .killmail_recipe_history import RUNTIME, record_snapshot
+else:
+    from killmail_recipe_history import RUNTIME, record_snapshot
+
 CONFIG_PATH = Path.home() / "eveosint" / "config" / "db.json"
 
 def load_db_config():
@@ -165,17 +170,55 @@ def get_latest_build(conn):
 
         if obj.get("_key") == "sde":
             if "_value" in obj:
-                return int(obj["_value"])
-            if "value" in obj:
-                return int(obj["value"])
-            if "buildNumber" in obj:
-                return int(obj["buildNumber"])
-            if "build_number" in obj:
-                return int(obj["build_number"])
-
-            raise RuntimeError(f"Format latest.jsonl inconnu: {obj}")
+                build = int(obj["_value"])
+            elif "value" in obj:
+                build = int(obj["value"])
+            elif "buildNumber" in obj:
+                build = int(obj["buildNumber"])
+            elif "build_number" in obj:
+                build = int(obj["build_number"])
+            else:
+                raise RuntimeError(f"Format latest.jsonl inconnu: {obj}")
+            if obj.get("releaseDate"):
+                with conn.cursor() as cur:
+                    cur.execute("""INSERT INTO app_meta(key,value) VALUES (%s,%s)
+                                   ON CONFLICT(key) DO UPDATE SET value=EXCLUDED.value""",
+                                (f"sde_release_date:{build}", obj["releaseDate"]))
+            return build
 
     raise RuntimeError("Clé sde introuvable")
+
+
+def retain_imported_recipes(conn, build, directory=RUNTIME):
+    """Retain the imported build before a later SDE replaces its blueprints."""
+    version = f"build-{build}"
+    manifest_path = directory / "manifest.json"
+    if manifest_path.exists():
+        manifest = json.loads(manifest_path.read_text())
+        if any(row["version"] == version for row in manifest["snapshots"]):
+            return
+    with conn.cursor() as cur:
+        cur.execute("SELECT value FROM app_meta WHERE key=%s", (f"sde_release_date:{build}",))
+        row = cur.fetchone()
+    released = row[0] if row else None
+    if not released:
+        # One small metadata request bootstraps an already-imported build;
+        # no second SDE archive is downloaded.
+        response = requests.get(
+            f"https://developers.eveonline.com/static-data/tranquility/changes/{build}.jsonl",
+            headers={"User-Agent": USER_AGENT}, timeout=(5, 30),
+        )
+        response.raise_for_status()
+        metadata = next(json.loads(line) for line in response.text.splitlines()
+                        if line.strip() and json.loads(line).get("_key") == "_meta")
+        released = metadata["releaseDate"]
+    with conn.cursor() as cur:
+        cur.execute("SELECT data FROM public.sde_blueprints WHERE build_number=%s", (build,))
+        rows = [row[0] for row in cur]
+    record_snapshot(version, released, rows,
+                    f"https://developers.eveonline.com/static-data/tranquility/eve-online-static-data-{build}-jsonl.zip",
+                    directory)
+    print(f"SDE RECIPES retained={version} released={released}")
 
 
 def get_current_build(conn):
@@ -691,6 +734,10 @@ def main():
     ensure_base_tables(conn)
 
     build = get_latest_build(conn)
+    current = get_current_build(conn)
+    if current is not None:
+        # Preserve the previous build before import_file replaces its tables.
+        retain_imported_recipes(conn, current)
 
     if already_imported(conn, build):
         # Even when the remote SDE has not changed, the two denormalized work
@@ -744,6 +791,7 @@ def main():
         """, (str(build),))
 
     conn.commit()
+    retain_imported_recipes(conn, build)
     conn.close()
 
     print("DONE")

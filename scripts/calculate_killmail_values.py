@@ -25,7 +25,7 @@ else:
 
 START = date(2003, 1, 1)
 LOCK = 79130423
-FORMULA_VERSION = "zkill-like-v4-recipes"
+FORMULA_VERSION = "loss-day-v5-recipes"
 SCHEMA = Path(__file__).with_name("killmail_values_schema.sql")
 LOG = logging.getLogger("killmail_values")
 ONE_CENT = Decimal("0.01")
@@ -68,6 +68,10 @@ FIXED_PRICES = {
 
 
 class StopRequested(Exception):
+    pass
+
+
+class HistoricalRecipeUnavailable(Exception):
     pass
 
 
@@ -249,7 +253,10 @@ class QuoteCache:
 class Pricing:
     """Local equivalent of zKill Price/Build, with no network or writes."""
 
-    def __init__(self, metadata, recipes, counts, lookup=None, *, clock=None, rules_at=None):
+    def __init__(self, metadata, recipes, counts, lookup=None, *, clock=None, rules_at=None,
+                 valuation_mode="zkill", recipe_history=None):
+        if valuation_mode not in {"zkill", "loss-day"}:
+            raise ValueError("Unknown valuation mode")
         self.metadata = metadata
         self.recipes = recipes
         self.counts = counts
@@ -257,11 +264,34 @@ class Pricing:
         self.lookup = lookup
         self.cache = {}
         self.quotes = QuoteCache(clock, rules_at)
+        self.valuation_mode = valuation_mode
+        self.recipe_history = recipe_history
+        self.recipe_day = None
+        self.recipe_version = "fixed"
+
+    def select_recipe_day(self, day):
+        if self.recipe_history is None or self.recipe_day == day:
+            return
+        version = self.recipe_history.version_on(day)
+        if version != self.recipe_version:
+            self.recipes = load_blueprints(None, version, self.recipe_history) if version else {}
+            self.recipe_version = version
+            # Quotes that include construction must never cross recipe sets.
+            self.quotes.market.clear()
+            self.quotes.built.clear()
+            self.cache.clear()
+            LOG.info("RECIPE_DATE day=%s version=%s", day, version or "unavailable")
+        self.recipe_day = day
 
     def add_day(self, day, payload):
         # Clear calculation traces, but keep unexpired Price/Build quotes:
         # a market-history refresh does not invalidate zKill's quote cache.
         self.cache.clear()
+        if self.valuation_mode == "loss-day":
+            # Retrospective daily prices use the complete imported snapshot,
+            # not a quote frozen before that day's data was available.
+            self.quotes.market.clear()
+            self.quotes.built.clear()
         for key, value in (payload or {}).items():
             type_id = int(key)
             history = self.histories[type_id]
@@ -289,6 +319,8 @@ class Pricing:
     def build(self, type_id, day, stack, recalc=False):
         if " SKIN " in self.metadata.get(type_id, (None, None, ""))[2]:
             return ONE_CENT, False
+        if self.recipe_history is not None and self.recipe_version is None:
+            raise HistoricalRecipeUnavailable(f"No archived CCP recipe set covers {self.recipe_day}")
         cached = self.quotes.build_get(type_id, day, recalc)
         if cached is not None:
             return cached
@@ -301,7 +333,8 @@ class Pricing:
         for material, quantity in requirements.items():
             if material == type_id:
                 continue
-            value, missing = self.price(material, day, day - timedelta(days=1), True, stack)
+            material_day = day if self.valuation_mode == "loss-day" else day - timedelta(days=1)
+            value, missing = self.price(material, day, material_day, True, stack)
             total += value * quantity
             unknown |= missing
         result = total / output, unknown
@@ -309,6 +342,9 @@ class Pricing:
         return result
 
     def price(self, type_id, kill_day, market_day, date_only=False, stack=()):
+        if self.valuation_mode == "loss-day":
+            self.select_recipe_day(kill_day)
+            market_day = kill_day
         key = (type_id, kill_day, market_day, date_only)
         # Recheck the real quote expiry on each request. A plain memo here
         # would bypass TTLs and the historical disabled-cache revisions.
@@ -429,31 +465,40 @@ def month_counts(conn, month):
     return int(total), int(missing)
 
 
-def target_months(conn):
+def pricing_date_sql(valuation_mode="zkill", alias=None):
+    column = sql.Identifier(alias, "killmail_time") if alias else sql.Identifier("killmail_time")
+    if valuation_mode == "loss-day":
+        return sql.SQL("({} AT TIME ZONE 'UTC')::date").format(column)
+    if valuation_mode == "zkill":
+        return sql.SQL("(({}-interval '3601 seconds') AT TIME ZONE 'UTC')::date").format(column)
+    raise ValueError("Unknown valuation mode")
+
+
+def target_months(conn, valuation_mode="zkill"):
     query = sql.SQL(
         """SELECT date_trunc('month',killmail_time)::date,
-                  max(((killmail_time-interval '3601 seconds') AT TIME ZONE 'UTC')::date)
+                  max({price_day})
            FROM rawkm.killmails
            WHERE estimated_value_cents IS NULL
            GROUP BY 1 ORDER BY 1"""
-    )
+    ).format(price_day=pricing_date_sql(valuation_mode))
     with conn.cursor() as cur:
         cur.execute(query)
         return [(month, price_day) for month, price_day in cur]
 
 
-def needed_prices(conn, month):
+def needed_prices(conn, month, valuation_mode="zkill"):
     km = relation_name("killmails", month)
     items = relation_name("killmail_items", month)
     predicate = sql.SQL("WHERE k.estimated_value_cents IS NULL")
     query = sql.SQL(
         """SELECT price_day,kill_day,item_type_id FROM (
-             SELECT DISTINCT ((k.killmail_time-interval '3601 seconds') AT TIME ZONE 'UTC')::date price_day,
+             SELECT DISTINCT {price_day} price_day,
                     (k.killmail_time AT TIME ZONE 'UTC')::date kill_day,
                     k.victim_ship_type_id item_type_id
              FROM {}.{} k {} AND k.victim_ship_type_id IS NOT NULL
              UNION
-             SELECT DISTINCT ((k.killmail_time-interval '3601 seconds') AT TIME ZONE 'UTC')::date,
+             SELECT DISTINCT {price_day},
                     (k.killmail_time AT TIME ZONE 'UTC')::date,
                     i.item_type_id
              FROM {}.{} k JOIN {}.{} i
@@ -466,6 +511,7 @@ def needed_prices(conn, month):
         sql.Identifier("rawkm"), sql.Identifier(km), predicate,
         sql.Identifier("rawkm"), sql.Identifier(km),
         sql.Identifier("rawkm"), sql.Identifier(items), predicate,
+        price_day=pricing_date_sql(valuation_mode, "k"),
     )
     by_day = defaultdict(list)
     with conn.cursor() as cur:
@@ -497,12 +543,16 @@ def advance_prices(
 def boundary_prices(day, pairs, pricing):
     rows = []
     for kill_day, type_id in pairs:
-        value, fallback = pricing.price(type_id, kill_day, day)
+        try:
+            value, fallback = pricing.price(type_id, kill_day, day)
+        except HistoricalRecipeUnavailable:
+            # NULL signals an unavailable recipe, not a fictional 0.01 price.
+            value, fallback = None, True
         rows.append((kill_day, day, type_id, value, fallback))
     return rows
 
 
-def update_month(conn, month, price_rows):
+def update_month(conn, month, price_rows, valuation_mode="zkill"):
     km = relation_name("killmails", month)
     items = relation_name("killmail_items", month)
     condition = sql.SQL("AND k.estimated_value_cents IS NULL")
@@ -537,18 +587,24 @@ def update_month(conn, month, price_rows):
                    FROM {}.{} k
                    LEFT JOIN {}.{} i ON i.killmail_id=k.killmail_id AND i.killmail_time=k.killmail_time
                    LEFT JOIN valuation_prices h
-                     ON h.price_day=((k.killmail_time-interval '3601 seconds') AT TIME ZONE 'UTC')::date
+                     ON h.price_day={price_day}
                     AND h.kill_day=(k.killmail_time AT TIME ZONE 'UTC')::date
                     AND h.item_type_id=k.victim_ship_type_id
                    LEFT JOIN valuation_prices p
-                     ON p.price_day=((k.killmail_time-interval '3601 seconds') AT TIME ZONE 'UTC')::date
+                     ON p.price_day={price_day}
                     AND p.kill_day=(k.killmail_time AT TIME ZONE 'UTC')::date
                     AND p.item_type_id=i.item_type_id
                    WHERE TRUE {}
-                   GROUP BY k.killmail_id,k.killmail_time,h.unit_price_isk"""
+                   GROUP BY k.killmail_id,k.killmail_time,h.unit_price_isk
+                   HAVING h.unit_price_isk IS NOT NULL AND count(*) FILTER (
+                     WHERE i.item_type_id IS NOT NULL AND p.unit_price_isk IS NULL
+                       AND COALESCE(i.singleton,0)<>2 AND COALESCE(i.flag,0)<>179
+                       AND NOT (i.item_type_id=33329 AND COALESCE(i.flag,0)=89)
+                   )=0"""
             ).format(
                 sql.Identifier("rawkm"), sql.Identifier(km),
                 sql.Identifier("rawkm"), sql.Identifier(items), condition,
+                price_day=pricing_date_sql(valuation_mode, "k"),
             ),
             (MAX_BIGINT,),
         )
@@ -572,8 +628,10 @@ def main():
     parser.add_argument("--progress", type=Path, default=Path.home() / "eveosint/data/market/killmail_values_progress.json")
     parser.add_argument("--min-free-gb", type=float, default=20.0)
     parser.add_argument("--schema-only", action="store_true")
-    parser.add_argument("--recipe-version", default="current",
-                        help="current database SDE, or an exact archived CCP SDE version")
+    parser.add_argument("--valuation-mode", choices=("loss-day", "zkill"), default="loss-day",
+                        help="Loss-day prices/recipes by default; zkill retains source replay date offsets")
+    parser.add_argument("--recipe-version", default="auto",
+                        help="auto selects recipes by loss date; current or an exact snapshot overrides it")
     parser.add_argument("--list-recipe-versions", action="store_true",
                         help="List bundled recipe snapshots and exit without connecting to the database")
     parser.add_argument("--cache-rules-at", type=valuation_timestamp,
@@ -581,6 +639,10 @@ def main():
     args = parser.parse_args()
     if not 0 <= args.min_free_gb <= 500:
         parser.error("Invalid disk reserve")
+    if args.valuation_mode == "zkill" and args.recipe_version == "auto" and not args.list_recipe_versions:
+        parser.error("zKill replay requires an explicit --recipe-version")
+    if args.cache_rules_at and args.valuation_mode != "zkill":
+        parser.error("--cache-rules-at is only used with --valuation-mode zkill")
     history = None
     if args.list_recipe_versions or args.recipe_version != "current":
         try:
@@ -588,9 +650,10 @@ def main():
             if args.list_recipe_versions:
                 print(json.dumps(history.manifest, indent=2))
                 return 0
-            args.recipe_version = history.resolve(args.recipe_version)
-            # Fail before schema changes or writes if the snapshot is corrupt.
-            history.recipes(args.recipe_version)
+            if args.recipe_version != "auto":
+                args.recipe_version = history.resolve(args.recipe_version)
+                # Fail before schema changes or writes if the snapshot is corrupt.
+                history.recipes(args.recipe_version)
         except (OSError, ValueError) as exc:
             parser.error(str(exc))
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -599,9 +662,11 @@ def main():
     owns_lock = False
     state = {"pid": os.getpid(), "formula_version": FORMULA_VERSION, "months_processed": 0,
              "killmails_valued": 0, "fallback_price_pairs": 0,
+             "valuation_mode": args.valuation_mode, "killmails_unvalued": 0,
+             "unavailable_recipe_price_pairs": 0,
              "recipe_version": args.recipe_version,
              "cache_rules_at": args.cache_rules_at.isoformat() if args.cache_rules_at else "current"}
-    if history is not None:
+    if history is not None and args.recipe_version != "auto":
         snapshot = history.versions[args.recipe_version]
         state.update(recipe_snapshot_date=snapshot["snapshot_date"],
                      recipe_source=snapshot["source"], recipe_sha256=snapshot["recipes_sha256"])
@@ -637,12 +702,24 @@ def main():
         if args.schema_only:
             progress("schema_ready")
             return 0
-        targets = target_months(conn)
+        targets = target_months(conn, args.valuation_mode)
         if not targets:
             progress("completed", months_total=0, message="No killmail has a missing value.")
             return 0
         months = [month for month, _price_day in targets]
-        price_through = max(price_day for _month, price_day in targets)
+        target_price_through = max(price_day for _month, price_day in targets)
+        with conn.cursor() as cur:
+            cur.execute("SELECT max(price_date) FROM market.zkill_daily_prices")
+            imported_through = cur.fetchone()[0]
+        if imported_through is None:
+            raise RuntimeError("Import zKill price history before calculating killmail values")
+        price_through = min(target_price_through, imported_through)
+        if args.valuation_mode == "loss-day":
+            # Today's trading day is unfinished. Those kills stay NULL and
+            # are picked up automatically once its daily prices are imported.
+            price_through = min(price_through, datetime.now(UTC).date() - timedelta(days=1))
+        state.update(price_available_through=price_through.isoformat(),
+                     target_latest_price_day=target_price_through.isoformat())
         first_price, last_price, _days, missing_days = price_coverage(conn, price_through)
         if first_price != START or last_price != price_through or missing_days:
             raise RuntimeError(
@@ -651,8 +728,10 @@ def main():
             )
         progress("loading_pricing_rules")
         metadata = load_metadata(conn)
-        pricing = Pricing(metadata, load_blueprints(conn, args.recipe_version, history),
-                          load_history_counts(conn), rules_at=args.cache_rules_at)
+        automatic = args.recipe_version == "auto"
+        pricing = Pricing(metadata, {} if automatic else load_blueprints(conn, args.recipe_version, history),
+                          load_history_counts(conn), rules_at=args.cache_rules_at,
+                          valuation_mode=args.valuation_mode, recipe_history=history if automatic else None)
         state["recipe_count"] = len(pricing.recipes)
         LOG.info("VALUATION_RULES formula=%s recipes=%s recipe_count=%s cache_rules_at=%s",
                  FORMULA_VERSION, args.recipe_version, len(pricing.recipes), state["cache_rules_at"])
@@ -688,7 +767,7 @@ def main():
                          month_missing=missing, phase="reading_items")
             progress("reading_items")
             should_write = bool(missing)
-            needed = needed_prices(conn, month) if should_write else {}
+            needed = needed_prices(conn, month, args.valuation_mode) if should_write else {}
             # Do not keep a raw-killmail transaction open while historical
             # price snapshots are streamed and reduced in Python.
             conn.commit()
@@ -714,7 +793,7 @@ def main():
                 raise StopRequested()
             progress("writing_values", price_pairs=len(rows))
             try:
-                updated, fallback = update_month(conn, month, rows)
+                updated, fallback = update_month(conn, month, rows, args.valuation_mode)
                 conn.commit()
             except Exception:
                 conn.rollback()
@@ -722,6 +801,14 @@ def main():
             state["months_processed"] += 1
             state["killmails_valued"] += updated
             state["fallback_price_pairs"] += fallback
+            state["killmails_unvalued"] += max(0, missing - updated)
+            state["unavailable_recipe_price_pairs"] += sum(value is None for _kd, _pd, _t, value, _f in rows)
+            if automatic:
+                version = pricing.recipe_version
+                state.update(active_recipe_version=version or "unavailable",
+                             recipe_snapshot_date=history.versions[version]["snapshot_date"] if version else None,
+                             recipe_day=pricing.recipe_day.isoformat() if pricing.recipe_day else None,
+                             recipe_count=len(pricing.recipes))
             LOG.info("VALUATION_MONTH month=%s updated=%s total=%s fallback_pairs=%s", month, updated, total, fallback)
             progress("running", month_updated=updated, month_fallback_pairs=fallback)
         with conn.cursor() as cur:

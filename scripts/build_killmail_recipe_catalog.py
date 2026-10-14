@@ -8,9 +8,9 @@ import json
 from pathlib import Path
 
 if __package__:
-    from .killmail_recipe_history import DATA, canonical_json
+    from .killmail_recipe_history import DATA, canonical_json, raw_recipes
 else:
-    from killmail_recipe_history import DATA, canonical_json
+    from killmail_recipe_history import DATA, canonical_json, raw_recipes
 
 
 def pack(manifest_path, source_dir, output_dir):
@@ -26,22 +26,7 @@ def pack(manifest_path, source_dir, output_dir):
     previous = {}
     for entry in manifest:
         raw = (source_dir / f"blueprints-{entry['version']}.json").read_bytes()
-        recipes = {}
-        for row in json.loads(raw):
-            activities = row.get("activities", {})
-            manufacture = activities.get("manufacturing") or activities.get("1") or {}
-            products = manufacture.get("products", [])
-            materials = manufacture.get("materials", [])
-            if not products or not materials:
-                continue
-            product = products[0]
-            type_id = product.get("productTypeID", product.get("typeID"))
-            if type_id is None:
-                continue
-            recipes[str(type_id)] = [product.get("quantity", 1), [
-                [material.get("materialTypeID", material.get("typeID")), material["quantity"]]
-                for material in materials
-            ]]
+        recipes = raw_recipes(json.loads(raw))
         metadata = {key: entry[key] for key in ("version", "snapshot_date", "source")}
         date_kind = ("mirror_timestamp" if entry["version"] == "build-2960198" else
                      "ccp_release_timestamp" if entry["version"].startswith("build-") else
@@ -51,6 +36,9 @@ def pack(manifest_path, source_dir, output_dir):
             recipes_sha256=hashlib.sha256(canonical_json(recipes)).hexdigest(),
             recipe_count=len(recipes), date_kind=entry.get("date_kind", date_kind),
         )
+        for key in ("effective_from", "effective_source"):
+            if key in entry:
+                metadata[key] = entry[key]
         upsert = [[int(type_id), *recipes[type_id]] for type_id in sorted(recipes, key=int)
                   if recipes[type_id] != previous.get(type_id)]
         removed = sorted(int(type_id) for type_id in previous.keys() - recipes.keys())
