@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Manually refresh changed, previously imported EVE Ref daily archives.
+"""Refresh changed, previously imported EVE Ref daily archives.
 
-No scheduler, CCP requests or zKillboard submissions. Archives are downloaded only when their remote modification date is later than
+Run manually or by the daily update pipeline. No CCP requests or zKillboard submissions. Archives are downloaded only when their remote modification date is later than
 our local download date, including on the first run.
 """
 

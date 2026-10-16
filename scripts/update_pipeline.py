@@ -477,27 +477,16 @@ def weekly_steps():
     py = str(PYTHON_BIN)
     return [
         step("sync_sde", "SDE sync", "sde", [py, str(SCRIPT_DIR / "sync_sde.py")]),
+        step(
+            "killmail_archive_refresh",
+            "Killmails · Refresh updated EVE Ref archives",
+            "killmails",
+            [py, str(SCRIPT_DIR / "refresh_killmail_archives.py")],
+        ),
         step("superintel_sync_killmails", "SuperINTEL · sync killmails", "superintel"),
         step("superintel_build_events", "SuperINTEL · build events", "superintel"),
         step("superintel_refresh_affiliations", "SuperINTEL · refresh affiliations", "superintel"),
         step("superintel_build_report", "SuperINTEL · build daily report", "superintel"),
-        step(
-            "killmail_missing_prices",
-            "Killmail values · fetch missing price dates",
-            "market",
-            [
-                py,
-                str(SCRIPT_DIR / "import_zkill_prices.py"),
-                "--refresh-days",
-                "0",
-            ],
-        ),
-        step(
-            "killmail_missing_values",
-            "Killmail values · fill empty values",
-            "market",
-            [py, str(SCRIPT_DIR / "calculate_killmail_values.py")],
-        ),
         step(
             "character_skill_inference",
             "Character skill inference",
@@ -550,6 +539,23 @@ def weekly_steps():
             "sovereignty",
             [py, str(SCRIPT_DIR / "sync_sovereignty_esi.py")],
         ),
+        step(
+            "killmail_missing_prices",
+            "Market · Import historical zKill prices",
+            "market",
+            [
+                py,
+                str(SCRIPT_DIR / "import_zkill_prices.py"),
+                "--refresh-days",
+                "0",
+            ],
+        ),
+        step(
+            "killmail_missing_values",
+            "Killmails · Calculate ISK values",
+            "market",
+            [py, str(SCRIPT_DIR / "calculate_killmail_values.py")],
+        ),
     ]
 
 
@@ -595,7 +601,7 @@ def run_pipeline(mode, trigger):
         "trigger": trigger,
         "pid": os.getpid(),
         "timezone": "Europe/Paris",
-        "scheduled_time": "15:30",
+        "scheduled_time": "14:30",
         "weekly_days": WEEKLY_DAYS,
         "target_day": target_day.isoformat(),
         "pipeline_status": "running",
@@ -619,14 +625,15 @@ def run_pipeline(mode, trigger):
         log_line(log_handle, "pipeline", f"weekly=True target_day={state['target_day']}")
 
         try:
-            # Step 1: SDE first. Only calculate SuperINTEL's dynamic date range afterwards.
-            if not run_step(state, 0, log_handle):
-                raise PipelineError("step_failed:sync_sde")
+            # Refresh SDE and changed archives before resolving SuperINTEL's range.
+            super_indexes = [idx for idx, item in enumerate(state["steps"]) if item["group"] == "superintel"]
+            for idx in range(super_indexes[0]):
+                if not run_step(state, idx, log_handle):
+                    raise PipelineError(f"step_failed:{state['steps'][idx]['id']}")
 
             commands, super_meta = superintel_commands(target_day)
             state["superintel"] = super_meta
 
-            super_indexes = [1, 2, 3, 4]
             if commands is None:
                 for idx in super_indexes:
                     state["steps"][idx]["status"] = "skipped"
@@ -642,7 +649,7 @@ def run_pipeline(mode, trigger):
                         raise PipelineError(f"step_failed:{state['steps'][idx]['id']}")
 
             # Remaining unified weekly pipeline steps.
-            for idx in range(5, len(state["steps"])):
+            for idx in range(super_indexes[-1] + 1, len(state["steps"])):
                 if not run_step(state, idx, log_handle):
                     raise PipelineError(f"step_failed:{state['steps'][idx]['id']}")
 

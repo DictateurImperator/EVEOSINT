@@ -278,7 +278,7 @@ is made to display this card. See https://developers.eveonline.com/docs/services
 ## Refresh archives that received late killmails
 
 In **Administration → Jobs**, start **Killmails · Refresh updated EVE Ref
-archives** manually. Optional **From / Through** dates select archive days,
+archives** manually, or let the daily update pipeline run it immediately after SDE sync. Optional **From / Through** dates select archive days,
 inclusively. Empty dates check every day successfully imported by the regular
 killmail importer. This job does not schedule itself or backfill days that have
 never been imported.

@@ -634,7 +634,7 @@ eveosint-update.service
 eveosint-update.timer
 ```
 
-The current unified pipeline is launched in `weekly` mode and the application displays a schedule of **15:30 Europe/Paris**.
+The current unified pipeline is launched in `weekly` mode and the application displays a schedule of **14:30 Europe/Paris**.
 
 Create:
 
@@ -668,12 +668,27 @@ Create:
 Description=Run EVEOSINT update pipeline daily
 
 [Timer]
-OnCalendar=*-*-* 15:30:00 Europe/Paris
+OnCalendar=*-*-* 14:30:00 Europe/Paris
 Persistent=true
 Unit=eveosint-update.service
 
 [Install]
 WantedBy=timers.target
+```
+
+The ordered daily run starts with SDE sync and updated EVE Ref archives, then
+runs the existing SuperINTEL, skills, affiliations, entities, ships, population and
+sovereignty steps. Historical zKill price import runs next, followed by calculation
+of killmails whose ISK value is NULL. Steps run sequentially; a failure stops the run.
+
+To update an existing timer from the deployed repository (Europe/Paris handles
+summer and winter time automatically):
+
+```bash
+sudo install -m 644 deploy/eveosint-update.timer /etc/systemd/system/eveosint-update.timer
+sudo systemctl daemon-reload
+sudo systemctl restart eveosint-update.timer
+sudo systemctl list-timers eveosint-update.timer
 ```
 
 Enable it:

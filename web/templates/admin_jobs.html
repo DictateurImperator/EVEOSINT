@@ -110,7 +110,7 @@
           <p class="muted-line small">Study observable return after the first known loss, its associated factors, and subsequent changes in PvP, location and ships. Includes all characters with a recorded loss.</p>
           <a class="btn btn-outline-primary mb-3" href="/admin/report/first-loss">Open first-loss study · Admin Report</a>
         {% elif job.type == "killmail_archive_refresh" %}
-          <p class="muted-line small">Check previously imported days against EVE Ref archive updates. Import missing killmails and match the affected MER months. Leave dates empty to check all imported history. Runs only when started manually.</p>
+          <p class="muted-line small">Check previously imported days against EVE Ref archive updates. Import missing killmails and match the affected MER months. Leave dates empty to check all imported history. Also runs daily after SDE sync in the update pipeline.</p>
           <form method="post" action="/admin/jobs/killmail-archives/refresh" class="mb-3">
             <div class="d-flex flex-wrap gap-2 align-items-end">
               <label>From <input type="date" name="date_from" class="form-control"></label>

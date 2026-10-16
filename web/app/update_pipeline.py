@@ -131,7 +131,7 @@ def get_timer_status():
         "service_state": service.get("ActiveState") or "unknown",
         "service_substate": service.get("SubState") or "unknown",
         "service_result": service.get("Result") or None,
-        "schedule": "Every day 15:30 Europe/Paris",
+        "schedule": "Every day 14:30 Europe/Paris",
         "weekly_schedule": "Every day: unified weekly pipeline",
     }
 

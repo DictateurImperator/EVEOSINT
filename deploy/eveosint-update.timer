@@ -1,0 +1,11 @@
+[Unit]
+Description=Run EVEOSINT update pipeline every day at 14:30 Europe/Paris
+
+[Timer]
+OnCalendar=*-*-* 14:30:00 Europe/Paris
+Persistent=true
+AccuracySec=1min
+Unit=eveosint-update.service
+
+[Install]
+WantedBy=timers.target
