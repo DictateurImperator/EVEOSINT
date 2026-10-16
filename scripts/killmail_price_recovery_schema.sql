@@ -24,3 +24,10 @@ CREATE TABLE IF NOT EXISTS market.killmail_price_gaps (
  checked_at timestamptz NOT NULL DEFAULT now(),
  PRIMARY KEY (price_date,item_type_id)
 );
+
+-- Item-page prices and explicitly requested fallbacks have no source killmail.
+ALTER TABLE market.zkill_recovered_prices ALTER COLUMN source_killmail_id DROP NOT NULL;
+ALTER TABLE market.zkill_recovered_prices ADD COLUMN IF NOT EXISTS source_kind text NOT NULL DEFAULT 'kill_page';
+ALTER TABLE market.zkill_recovered_prices ADD COLUMN IF NOT EXISTS source_price_date date;
+ALTER TABLE market.killmail_price_gaps ADD COLUMN IF NOT EXISTS source_kind text;
+ALTER TABLE market.killmail_price_gaps ADD COLUMN IF NOT EXISTS source_price_date date;

@@ -1,11 +1,11 @@
 <section id="recovery-job">
-  <p class="small muted-line">Diagnose items blocking NULL killmail values, then recover unit prices from same-day imported kills on zKill. Finish or stop the valuation job first. After recovery, NULL killmail values are recalculated automatically using saved prices; existing killmail values are retained.</p>
+  <p class="small muted-line">Diagnose items blocking NULL killmail values, then read their zKill item pages and dated price tables. Missing prices default to 0.01 ISK. Finish or stop the valuation job first. After recovery, NULL killmail values are recalculated automatically using saved prices; existing killmail values are retained.</p>
   {% if 'admin.jobs.run' in user.permissions %}
   <button class="btn btn-primary" id="recovery-start" {% if not recovery_enabled %}disabled{% endif %}>Diagnose and recover missing prices</button>
   <button class="btn btn-outline-danger" id="recovery-stop" disabled>Stop</button>
   {% endif %}
   <div id="recovery-status" role="status" class="my-3">Loading status…</div>
-  <p class="small muted-line">Sequential requests, at least 2 seconds apart. The estimate sums missing days for each item (five candidate pages at most per pair, excluding HTTP retries). Shared pages are reused. Up to five same-day kills per item/date; unavailable or ambiguous prices remain unresolved. Only the final step fills NULL value fields; raw killmail data is retained.</p>
+  <p class="small muted-line">One item page per distinct item, reused for all missing dates. Sequential requests at least 2 seconds apart; no kill-page requests. Price order: loss day → previous → first later → displayed zKill price → 0.01 ISK. HTTP retries may add calls. Only the final step fills NULL value fields.</p>
   <a class="btn btn-sm btn-outline-light" href="/admin/killmail-price-recovery/report.csv">Download item/date diagnosis (CSV)</a>
   <a class="btn btn-sm btn-outline-light" href="/admin/jobs/recover_killmail_prices/log" target="_blank" rel="noopener">Job log</a>
 </section>
@@ -23,6 +23,7 @@
    (p.current_day?' · UTC date '+p.current_day:'')+(p.current_type_id?' · Item '+p.current_type_id:'')+
    ' · Missing items '+(p.missing_items||0)+' · Missing item/date pairs '+(p.missing_item_days||0)+' · Estimated calls ≤ '+(p.estimated_calls_max||0)+
    (p.planned_calls_max!==undefined?' · Planned calls ≤ '+p.planned_calls_max+' ('+(p.distinct_candidate_pages||0)+' distinct pages)':'')+
+   ' · Items fetched '+(p.items_processed||0)+' · Fallback pairs at 0.01 ISK '+(p.fallback_pairs||0)+
    ' · Items/dates checked '+(p.gaps_processed||0)+' / '+(p.gaps_total||0)+' · Recovered '+(p.recovered||0)+
    ' · Unresolved '+(p.unresolved||0)+' · Requests '+(p.requests||0)+
    (p.valuation_pid?' · Valuation '+(p.valuation_phase||'')+' · Months '+(p.valuation_months_processed||0)+' / '+(p.valuation_months_total||0)+' · KM valued '+(p.killmails_valued||0)+' · KM still unvalued '+(p.killmails_unvalued||0):'')+(p.error?' · '+p.error:'')+(p.message?' · '+p.message:'');

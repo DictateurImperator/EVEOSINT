@@ -54,7 +54,7 @@ def start(
         audit_log(
             request, "admin_job_run", user_id=user["id"], username=user["username"],
             target_type="job", target_id="recover_killmail_prices",
-            details="Diagnose NULL killmail values and recover same-day item quotes",
+            details="Diagnose NULL killmail values and read item pages and use 0.01 ISK for missing prices",
         )
         return {"started": True}
     except JobError as exc:
@@ -83,12 +83,12 @@ def report(request: Request):
         return JSONResponse({"error": "Access denied."}, status_code=403)
     output = io.StringIO()
     writer = csv.writer(output)
-    writer.writerow(['UTC day', 'Item ID', 'Item name', 'Reason', 'Explanation', 'Status', 'Unit price ISK', 'Source kill', 'Last error'])
+    writer.writerow(['UTC day', 'Item ID', 'Item name', 'Reason', 'Explanation', 'Status', 'Unit price ISK', 'Source kill', 'Price source', 'Source price date', 'Last error'])
     with db() as conn, conn.cursor() as cur:
         cur.execute("SELECT to_regclass('market.killmail_price_gaps')")
         if cur.fetchone()[0]:
             cur.execute("""SELECT price_date,item_type_id,item_name,reason,detail,status,unit_price_isk,
-                           source_killmail_id,last_error FROM market.killmail_price_gaps
+                           source_killmail_id,to_jsonb(g)->>'source_kind',to_jsonb(g)->>'source_price_date',last_error FROM market.killmail_price_gaps g
                            WHERE active ORDER BY price_date,item_type_id""")
             for row in cur:
                 # Prevent spreadsheet formula evaluation in externally sourced names/errors.

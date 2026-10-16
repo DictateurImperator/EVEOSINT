@@ -70,57 +70,50 @@ Offline tests cover every bundled snapshot checksum, recipe changes and output y
 
 **Admin → Jobs → Market · Diagnose and recover missing item prices** is a manual
 job. Let the normal valuation pass finish first. The worker shares its advisory
-lock, so the expensive diagnostic and normal calculator cannot run concurrently.
+lock, so diagnosis and the normal calculator cannot run concurrently.
 
-It selects only killmails with `estimated_value_cents IS NULL`, checks their hull
-and ordinary items with the same dated recipe/price calculator, and records
-item/date blockers: absent prices and recipes, missing current SDE types, missing
-historic recipe sets, unpriced components, recursion limits, unfinished or
-unimported price days, and missing victim ship IDs. Unknown component prices are
-also reported even if the calculator returned a provisional one-cent fallback.
-A NULL killmail with no detected item blocker can simply be awaiting the normal
-valuation pass; this diagnostic does not invent an item problem for it.
+It selects NULL-valued killmails and diagnoses their hulls, items and recipe
+components with the normal calculator. The CSV lists item/date blockers and
+reasons, including missing prices, recipes, current SDE metadata, unavailable
+historical recipes, unfinished/unimported days and missing victim ship IDs.
 
-The job shows months, UTC dates, distinct missing items and **missing item/date
-pairs**: the sum of each item's missing days, not the product of all items and the
-whole date range. The first network budget is at most five requests per pair.
-Before making requests, it finds up to five imported same-day kills per pair and
-shows the resulting candidate-page budget and distinct page count. Actual requests
-can be lower through reuse or stopping at the first quote, or higher if HTTP
-retries are needed. A CSV report contains reasons, status, unit prices and source
-kill IDs. Non-price problems are excluded from the request estimate.
+Recovery now fetches **one `/item/{type_id}/` page per distinct missing item** and
+reuses it for all dates. It makes **no kill-page or kill-list requests**. The
+estimate shows distinct missing items (normal request count), missing item/date
+pairs, actual requests and fallback pairs. HTTP retries can add requests.
 
-Requests are sequential, spaced at least two seconds apart, with gzip and a
-project User-Agent. HTTP 420/429 honors Retry-After with bounded retries; 5xx also
-backs off. This follows zKill's request etiquette:
-https://zkillboard.com/api/docs/ . No broad kill-list crawling or CCP calls.
+For each missing item/date, price selection is:
 
-For each candidate kill page, the parser verifies its canonical kill ID and UTC
-date. It reads raw line totals and divides by quantity, excludes BPCs, frigate bay
-entries, special implant lines, one-cent placeholders and conflicting per-line
-quotes. Linked losses are not mistaken for the requested kill's hull. A price
-shown today on an old kill page is a **zKill valuation quote for that loss date**,
-not proof of an actual historical market trade or of the original cached total.
-If five candidates provide no usable quote, the pair stays unresolved in the CSV.
+1. Dated price on the loss day in the item's displayed market table.
+2. Latest earlier dated price; if none, first later dated price.
+3. The page's explicitly displayed **zKillboard Price**, including 0.01 ISK.
+4. **0.01 ISK** if no price exists or the item page returns 404, as requested.
 
-Two small tables are created automatically by
-`scripts/killmail_price_recovery_schema.sql`: `market.killmail_price_gaps` stores
-sparse diagnoses and `market.zkill_recovered_prices` stores sparse supplementary
-quotes with their source kill and fetch time. Original daily JSON snapshots,
-counts and hashes are preserved. Positive daily prices always take priority.
-Recovered prices enter the same loss-day → previous → first later selection rule.
+HTTP errors, rate limits and invalid page identities are not treated as missing
+prices. Requests remain sequential and at least two seconds apart, with gzip,
+a project User-Agent and bounded backoff on 420/429 and 5xx, following
+https://zkillboard.com/api/docs/ . The table on an item page may show only recent
+observations. A displayed current price is not represented as an original
+historical market price: `source_kind` distinguishes `item_history`,
+`item_current`, `fallback` and earlier `kill_page` recoveries. `source_price_date`
+records the selected observation date where available. The source URL is saved.
+
+The idempotent `scripts/killmail_price_recovery_schema.sql` creates/migrates two
+small tables, `market.killmail_price_gaps` and `market.zkill_recovered_prices`.
+Item-page and fallback entries have no source kill ID. Original daily snapshots,
+counts and hashes are preserved; positive daily prices always take priority.
+Previously saved recovered prices remain intact.
 
 Finally the job automatically runs the regular NULL-only calculator, committing
-completed months normally. Progress includes its month and valued/unvalued counts.
-Stop cancels diagnosis SQL, interrupts request waits, or terminates the child
-calculator with its normal rollback behavior. Saved quotes and completed months
-are retained. No raw killmail, item or attacker rows are deleted. No PDFs or large
-HTML archives are stored. This tool is not added to the daily pipeline.
-
-CLI, using the same interpreter as other jobs:
+completed months normally. Progress includes its months and valued/unvalued
+counts. Stop cancels diagnosis SQL, interrupts request waits or terminates the
+child calculator with its normal rollback behavior. Saved prices and completed
+months are retained. Raw killmail data is retained; existing non-NULL values are
+not recalculated. No large HTML archives are stored, and this manual recovery
+job is not added to the daily pipeline.
 
 ```bash
 python scripts/recover_killmail_prices.py
-# Optional diagnosis/report only: no HTTP requests or recalculation.
+# Diagnosis only: no HTTP requests or recalculation.
 python scripts/recover_killmail_prices.py --diagnose-only
 ```

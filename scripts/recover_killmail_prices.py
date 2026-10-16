@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Diagnose NULL killmail values, then recover sparse quotes from same-day zKill pages."""
+"""Diagnose NULL killmail values, then recover quotes from zKill item pages."""
 import argparse
 import json
 import logging
@@ -32,84 +32,82 @@ LOG = logging.getLogger('killmail_price_recovery')
 SCHEMA = Path(__file__).with_name('killmail_price_recovery_schema.sql')
 LOCK = 79130424
 
+def positive_price(text):
+    try:
+        value = Decimal(text.replace(',', '').replace('\xa0', '').strip())
+        return value if value.is_finite() and value > 0 else None
+    except (InvalidOperation, AttributeError):
+        return None
 
-class KillPage(HTMLParser):
-    """Read raw numeric amounts, never formatted/rounded text or kill totals."""
+
+class ItemPage(HTMLParser):
+    """Read the item page's dated market table and separately labelled current price."""
     def __init__(self):
         super().__init__(convert_charrefs=True)
-        self.rows = []
-        self.row = None
+        self.item_ids = set()
+        self.history = {}
+        self.current = None
+        self.heading = None
+        self.heading_text = ''
+        self.market_section = False
+        self.cells = None
         self.cell = None
-        self.section = ''
-        self.day = None
-        self.kill_ids = set()
 
     def handle_starttag(self, tag, attrs):
         a = dict(attrs)
         if tag == 'link' and a.get('rel') == 'canonical':
-            match = re.fullmatch(r'https://zkillboard.com/kill/(\d+)/', a.get('href', ''))
+            match = re.fullmatch(r'https://zkillboard.com/item/(\d+)/', a.get('href', ''))
             if match:
-                self.kill_ids.add(int(match[1]))
-        if tag == 'tr':
-            self.row = {'attrs': a, 'cells': []}
-        elif self.row is not None and tag in ('td', 'th'):
-            self.cell = {'attrs': a, 'text': '', 'types': set(), 'kills': set(), 'raw': a.get('raw')}
-            self.row['cells'].append(self.cell)
-        elif self.cell is not None:
-            if 'raw' in a and self.cell['raw'] is None:
-                self.cell['raw'] = a['raw']
-            if tag == 'a':
-                for kind, target in [('item', 'types'), ('kill', 'kills')]:
-                    match = re.fullmatch(r'/' + kind + r'/(\d+)/', a.get('href', ''))
-                    if match:
-                        self.cell[target].add(int(match[1]))
+                self.item_ids.add(int(match[1]))
+        if tag in ('h4', 'h5'):
+            self.heading, self.heading_text = tag, ''
+        if tag == 'tr' and self.market_section:
+            self.cells = []
+        if tag == 'td' and self.cells is not None:
+            self.cell = ''
 
     def handle_data(self, text):
+        if self.heading is not None:
+            self.heading_text += text
         if self.cell is not None:
-            self.cell['text'] += text
+            self.cell += text
 
     def handle_endtag(self, tag):
-        if tag in ('td', 'th'):
-            self.cell = None
-        if tag != 'tr' or self.row is None:
-            return
-        cells = self.row['cells']
-        for cell in cells:
-            if 'info_kill_dttm' in cell['attrs'].get('class', '').split():
-                match = re.match(r'(\d{4}-\d\d-\d\d) ', cell['text'])
+        if tag == self.heading:
+            text = self.heading_text.strip()
+            if tag == 'h4':
+                self.market_section = text == 'Market Prices - The Forge'
+            if tag == 'h5' and self.market_section:
+                match = re.fullmatch(r'zKillboard Price:\s*(.*?)\s+ISK', text)
                 if match:
-                    self.day = date.fromisoformat(match[1])
-        if 'hide-when-sorted' in self.row['attrs'].get('class', '').split() and cells:
-            self.section = cells[0]['text']
-        if 'item_row' in self.row['attrs'].get('class', '').split() and len(cells) == 4:
-            self.rows.append((self.section, cells))
-        self.row = None
+                    self.current = positive_price(match[1])
+            self.heading = None
+        if tag == 'td' and self.cell is not None:
+            self.cells.append(self.cell.strip())
+            self.cell = None
+        if tag == 'tr' and self.cells is not None:
+            if len(self.cells) == 2:
+                raw_day, raw_price = self.cells
+                if re.fullmatch(r'\d{4}-\d{2}-\d{2}', raw_day):
+                    try:
+                        day = date.fromisoformat(raw_day)
+                    except ValueError:
+                        day = None
+                    price = positive_price(raw_price)
+                    if day is not None and price is not None:
+                        if day in self.history and self.history[day] != price:
+                            raise ValueError('Conflicting prices in item history')
+                        self.history[day] = price
+            self.cells = None
 
-    def quotes(self, day, kill_id):
-        if self.day != day or self.kill_ids != {kill_id}:
-            raise ValueError('Kill page identity/date mismatch or unsupported page layout')
-        quotes = defaultdict(set)
-        for section, cells in self.rows:
-            # BPCs, frigate-bay entries and special implants are not ordinary unit quotes.
-            if 'Frigate Bay' in section or '(Copy)' in cells[1]['text']:
-                continue
-            ids = cells[1]['types']
-            if len(ids) != 1 or 'price' not in cells[3]['attrs'].get('class', '').split():
-                continue
-            if cells[0]['kills'] and cells[0]['kills'] != {kill_id}:
-                continue  # e.g. a linked ship loss on a capsule page
-            try:
-                qty = Decimal(cells[2]['attrs'].get('data-order', '0'))
-                amount = Decimal(cells[3]['raw'] or cells[3]['attrs'].get('data-order', 'NaN'))
-            except InvalidOperation:
-                continue
-            type_id = next(iter(ids))
-            if type_id == 33329 and 'Implant' in section:
-                continue
-            if qty.is_finite() and qty > 0 and qty == qty.to_integral_value() and amount.is_finite() and amount > Decimal('.01') * qty:
-                quotes[type_id].add(amount / qty)
-        # If multiple ordinary lines disagree, do not choose an arbitrary price.
-        return {t: next(iter(prices)) for t, prices in quotes.items() if len(prices) == 1}
+    def quote(self, day):
+        earlier = [d for d in self.history if d <= day]
+        source_day = max(earlier) if earlier else min(self.history, default=None)
+        if source_day is not None:
+            return self.history[source_day], 'item_history', source_day
+        if self.current is not None:
+            return self.current, 'item_current', None
+        return values.ONE_CENT, 'fallback', None
 
 
 class PageClient:
@@ -120,15 +118,15 @@ class PageClient:
         self.requests = 0
         self.cache = {}
 
-    def fetch(self, kill_id):
-        if kill_id in self.cache:
-            return self.cache[kill_id]
+    def fetch(self, type_id):
+        if type_id in self.cache:
+            return self.cache[type_id]
         for attempt in range(4):
             if self.stopped.wait(max(0, self.last + self.interval - time.monotonic())):
                 raise StopRequested()
             self.last = time.monotonic()
             self.requests += 1
-            r = self.session.get(f'https://zkillboard.com/kill/{int(kill_id)}/', timeout=(15, 60), allow_redirects=False)
+            r = self.session.get(f'https://zkillboard.com/item/{int(type_id)}/', timeout=(15, 60), allow_redirects=False)
             if r.status_code in (420, 429):
                 delay = max(60, retry_after(r.headers.get('Retry-After')) or 60)
                 if delay > 900 or attempt == 3:
@@ -141,14 +139,16 @@ class PageClient:
                     raise StopRequested()
                 continue
             if r.status_code == 404:
-                self.cache[kill_id] = None
+                self.cache[type_id] = None
                 return None
             r.raise_for_status()
             if r.status_code != 200 or len(r.content) > 4 * 1024 * 1024:
                 raise ValueError('Unexpected zKill response')
-            page = KillPage()
+            page = ItemPage()
             page.feed(r.text)
-            self.cache[kill_id] = page
+            if page.item_ids != {type_id}:
+                raise ValueError('Item page identity mismatch or unsupported response')
+            self.cache[type_id] = page
             # Bound memory; we retain parsed pages, not HTML archives.
             if len(self.cache) > 128:
                 self.cache.pop(next(iter(self.cache)))
@@ -180,24 +180,6 @@ class DiagnosticPricing(values.Pricing):
         return result
 
 
-def candidates(conn, day, type_id, limit=5):
-    """Search already imported kills on this UTC day; never crawl zKill lists."""
-    month = day.replace(day=1)
-    km, items = values.relation_name('killmails', month), values.relation_name('killmail_items', month)
-    query = sql.SQL('''SELECT killmail_id FROM (
-        (SELECT killmail_id FROM rawkm.{} WHERE killmail_time >= %s AND killmail_time < %s
-           AND victim_ship_type_id=%s ORDER BY killmail_id LIMIT %s)
-        UNION
-        (SELECT i.killmail_id FROM rawkm.{} i WHERE i.killmail_time >= %s AND i.killmail_time < %s
-           AND i.item_type_id=%s AND COALESCE(i.singleton,0)<>2 AND COALESCE(i.flag,0)<>179
-           AND NOT (i.item_type_id=33329 AND COALESCE(i.flag,0)=89)
-           ORDER BY i.killmail_id LIMIT %s)
-      ) q ORDER BY killmail_id LIMIT %s''').format(sql.Identifier(km), sql.Identifier(items))
-    with conn.cursor() as cur:
-        cur.execute(query, (day, day + timedelta(days=1), type_id, limit) * 2 + (limit,))
-        return [row[0] for row in cur]
-
-
 def save_gap(conn, day, type_id, name, reason, detail):
     with conn.cursor() as cur:
         cur.execute('''INSERT INTO market.killmail_price_gaps(price_date,item_type_id,item_name,reason,detail)
@@ -206,16 +188,18 @@ def save_gap(conn, day, type_id, name, reason, detail):
                     (day, type_id, name, reason, detail))
 
 
-def save_quote(conn, day, type_id, price, kill_id):
-    """Idempotent supplementary quote; never overwrite a daily snapshot or existing quote."""
+def save_quote(conn, day, type_id, price, kill_id=None, *, source_kind='kill_page', source_date=None):
+    """Positive official daily snapshots win; each supplementary quote retains its provenance."""
+    source_url = (f'https://zkillboard.com/kill/{kill_id}/' if kill_id is not None
+                  else f'https://zkillboard.com/item/{type_id}/')
     with conn.cursor() as cur:
         cur.execute('''INSERT INTO market.zkill_recovered_prices
-          (price_date,item_type_id,unit_price_isk,source_killmail_id,source_url)
-          SELECT %s,%s,%s,%s,%s WHERE NOT EXISTS (
+          (price_date,item_type_id,unit_price_isk,source_killmail_id,source_url,source_kind,source_price_date)
+          SELECT %s,%s,%s,%s,%s,%s,%s WHERE NOT EXISTS (
             SELECT 1 FROM market.zkill_daily_prices WHERE price_date=%s
             AND COALESCE((prices->>%s)::numeric,0)>0)
           ON CONFLICT(price_date,item_type_id) DO NOTHING''',
-          (day, type_id, price, kill_id, f'https://zkillboard.com/kill/{kill_id}/', day, str(type_id)))
+          (day, type_id, price, kill_id, source_url, source_kind, source_date, day, str(type_id)))
         return cur.rowcount
 
 
@@ -288,73 +272,51 @@ def gap_counts(conn):
     with conn.cursor() as cur:
         cur.execute("""SELECT count(DISTINCT item_type_id),count(*),count(DISTINCT price_date)
                        FROM market.killmail_price_gaps
-                       WHERE active AND status<>'recovered'
+                       WHERE active AND status NOT IN ('recovered','fallback')
                          AND reason NOT IN ('price_day_not_imported','missing_victim_ship')""")
         items, item_days, days = cur.fetchone()
     return dict(missing_items=items, missing_item_days=item_days, missing_dates=days,
-                estimated_calls_max=item_days * 5)
+                estimated_calls_max=items)
 
 
 def recover(conn, stopped, client, progress):
     with conn.cursor() as cur:
-        cur.execute('''SELECT price_date,item_type_id FROM market.killmail_price_gaps
-          WHERE active AND status<>'recovered' AND reason NOT IN ('price_day_not_imported','missing_victim_ship')
-          ORDER BY price_date,item_type_id''')
+        cur.execute("""SELECT price_date,item_type_id FROM market.killmail_price_gaps
+          WHERE active AND status NOT IN ('recovered','fallback') AND reason NOT IN ('price_day_not_imported','missing_victim_ship')
+          ORDER BY item_type_id,price_date""")
         gaps = cur.fetchall()
-    conn.commit()
     counts = gap_counts(conn)
-    progress('planning_calls', **counts, gaps_total=len(gaps), gaps_processed=0,
-             recovered=0, unresolved=0, requests=0, planned_calls_max=0)
-    plan = []
-    calls_max = 0
-    unique_kills = set()
+    conn.commit()
+    total_items = counts['missing_items']
+    progress('recovering_items', **counts, gaps_total=len(gaps), gaps_processed=0,
+             items_processed=0, recovered=0, fallback_pairs=0, unresolved=0, requests=0,
+             planned_calls_max=total_items, distinct_candidate_pages=total_items)
+    recovered = fallbacks = items_processed = 0
+    last_type = None
+    page = None
     for index, (day, type_id) in enumerate(gaps, 1):
         if stopped.is_set():
             raise StopRequested()
-        ids = candidates(conn, day, type_id)
+        if type_id != last_type:
+            progress('recovering_items', current_day=str(day), current_type_id=type_id, requests=client.requests)
+            page = client.fetch(type_id)
+            last_type = type_id
+            items_processed += 1
+        price, kind, source_day = page.quote(day) if page is not None else (values.ONE_CENT, 'fallback', None)
         with conn.cursor() as cur:
-            cur.execute('UPDATE market.killmail_price_gaps SET candidate_killmail_ids=%s WHERE price_date=%s AND item_type_id=%s', (ids, day, type_id))
+            save_quote(conn, day, type_id, price, source_kind=kind, source_date=source_day)
+            cur.execute("""UPDATE market.killmail_price_gaps SET status=%s,unit_price_isk=%s,
+                source_killmail_id=NULL,source_kind=%s,source_price_date=%s,
+                last_error=%s,checked_at=now() WHERE price_date=%s AND item_type_id=%s""",
+                ('fallback' if kind == 'fallback' else 'recovered', price, kind, source_day,
+                 'No price found on item page; user-requested 0.01 ISK fallback.' if kind == 'fallback' else None,
+                 day, type_id))
         conn.commit()
-        plan.append((day, type_id, ids))
-        calls_max += len(ids)
-        unique_kills.update(ids)
-        progress('planning_calls', candidates_planned=index, current_day=str(day),
-                 planned_calls_max=calls_max, distinct_candidate_pages=len(unique_kills))
-    progress('recovering', planned_calls_max=calls_max)
-
-    recovered = unresolved = 0
-    for index, (day, type_id, ids) in enumerate(plan, 1):
-        if stopped.is_set():
-            raise StopRequested()
-        progress('recovering', current_day=str(day), current_type_id=type_id)
-        found = None
-        for kill_id in ids:
-            if stopped.is_set():
-                raise StopRequested()
-            page = client.fetch(kill_id)
-            if page is None:
-                continue
-            try:
-                quote = page.quotes(day, kill_id).get(type_id)
-            except ValueError as exc:
-                LOG.warning('Rejected kill %s: %s', kill_id, exc)
-                continue
-            if quote is not None:
-                found = (quote, kill_id)
-                break
-        with conn.cursor() as cur:
-            if found:
-                save_quote(conn, day, type_id, *found)
-                cur.execute('''UPDATE market.killmail_price_gaps SET status='recovered',unit_price_isk=%s,
-                    source_killmail_id=%s,last_error=NULL,checked_at=now() WHERE price_date=%s AND item_type_id=%s''', (*found, day, type_id))
-                recovered += 1
-            else:
-                cur.execute('''UPDATE market.killmail_price_gaps SET status='not_found',
-                    last_error=%s,checked_at=now() WHERE price_date=%s AND item_type_id=%s''',
-                    ('No same-day imported kill containing an ordinary priced line found in the five candidates.', day, type_id))
-                unresolved += 1
-        conn.commit()
-        progress('recovering', gaps_processed=index, recovered=recovered, unresolved=unresolved, requests=client.requests)
+        recovered += kind != 'fallback'
+        fallbacks += kind == 'fallback'
+        progress('recovering_items', current_day=str(day), current_type_id=type_id,
+                 gaps_processed=index, items_processed=items_processed, recovered=recovered,
+                 fallback_pairs=fallbacks, unresolved=0, requests=client.requests)
 
 
 def recalculate(conn, args, stopped, progress):

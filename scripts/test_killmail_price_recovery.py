@@ -14,56 +14,47 @@ jobs = fixtures.jobs
 DAY = date(2007, 12, 5)
 
 
-def page_html(rows='', day=DAY, kill=248):
-    return f'<link rel="canonical" href="https://zkillboard.com/kill/{kill}/"><table><tr><td class="info_kill_dttm">{day} 23:28<br></td></tr>{rows}</table>'
+def item_html(type_id=4318, current='0.01', rows=''):
+    return f'<link rel="canonical" href="https://zkillboard.com/item/{type_id}/"><h4>Market Prices - The Forge</h4><h5>zKillboard Price: {current} ISK</h5><table>{rows}</table>'
 
 
-def row(item=1, qty='3', amount='12.3456', name='Item', link=248):
-    return f'<tr class="item_row"><td><a href="/kill/{link}/">icon</a></td><td><a href="/item/{item}/">{name}</a></td><td data-order="{qty}">{qty}</td><td class="price" data-order="{amount}" raw="{amount}">rounded display ignored</td></tr>'
-
-
-def parse(rows, **kwargs):
-    p = recovery.KillPage()
-    p.feed(page_html(rows, **kwargs))
-    return p
+def parse_item(**kwargs):
+    page=recovery.ItemPage();page.feed(item_html(**kwargs));return page
 
 
 class ParserTests(unittest.TestCase):
-    def test_raw_line_amount_divided_by_quantity(self):
-        self.assertEqual(parse(row()).quotes(DAY, 248), {1: Decimal('4.1152')})
+    def test_dated_history_uses_previous_before_first_later(self):
+        page=parse_item(current='999', rows='<tr><td>2010-01-01</td><td>1,234.56</td></tr><tr><td>2010-01-03</td><td>200</td></tr>')
+        self.assertEqual(page.quote(date(2010,1,2)),(Decimal('1234.56'),'item_history',date(2010,1,1)))
+        self.assertEqual(page.quote(date(2007,1,1)),(Decimal('1234.56'),'item_history',date(2010,1,1)))
+        self.assertEqual(page.quote(date(2010,1,3))[0],Decimal('200'))
 
-    def test_rejects_identity_date_and_missing_layout(self):
-        for p in [parse(row(), day=date(2008, 1, 1)), parse(row(), kill=249), recovery.KillPage()]:
-            with self.assertRaises(ValueError):
-                p.quotes(DAY, 248)
+    def test_explicit_cent_is_valid_and_missing_price_defaults_to_cent(self):
+        self.assertEqual(parse_item().quote(DAY),(Decimal('.01'),'item_current',None))
+        for current in ('0','NaN','unknown'):
+            self.assertEqual(parse_item(current=current).quote(DAY),(Decimal('.01'),'fallback',None))
 
-    def test_rejects_special_lines_and_conflicting_quotes(self):
-        self.assertEqual(parse(row(name='Blueprint (Copy)')).quotes(DAY, 248), {})
-        self.assertEqual(parse(row(link=255)).quotes(DAY, 248), {})
-        self.assertEqual(parse('<tr class="hide-when-sorted"><th>Frigate Bay</th></tr>'+row()).quotes(DAY, 248), {})
-        self.assertEqual(parse(row(amount='.03')).quotes(DAY, 248), {})
-        self.assertEqual(parse(row()+row(amount='30')).quotes(DAY, 248), {})
-        for qty, amount in [('0','1'),('-2','3'),('1','NaN'),('1','Infinity'),('1.5','30')]:
-            self.assertEqual(parse(row(qty=qty, amount=amount)).quotes(DAY, 248), {})
+    def test_rejects_wrong_identity(self):
+        session=MagicMock()
+        session.get.return_value=MagicMock(status_code=200,content=b'x',text=item_html(type_id=1))
+        with self.assertRaises(ValueError):
+            recovery.PageClient(session,threading.Event()).fetch(4318)
 
-    def test_http_404_cached_and_redirect_not_followed(self):
-        session = MagicMock()
-        session.get.return_value.status_code = 404
-        client = recovery.PageClient(session, threading.Event())
-        self.assertIsNone(client.fetch(123))
-        self.assertIsNone(client.fetch(123))
-        session.get.assert_called_once_with('https://zkillboard.com/kill/123/', timeout=(15,60), allow_redirects=False)
+    def test_http_404_cached_and_only_item_url_requested(self):
+        session=MagicMock();session.get.return_value.status_code=404
+        client=recovery.PageClient(session,threading.Event())
+        self.assertIsNone(client.fetch(123));self.assertIsNone(client.fetch(123))
+        session.get.assert_called_once_with('https://zkillboard.com/item/123/',timeout=(15,60),allow_redirects=False)
 
     def test_rate_limit_wait_and_then_success(self):
-        session = MagicMock()
-        limited = MagicMock(status_code=429, headers={'Retry-After':'125'})
-        ok = MagicMock(status_code=200, content=b'x', text=page_html(row()))
-        session.get.side_effect = [limited, ok]
-        stopped = MagicMock()
-        stopped.wait.return_value = False
-        client = recovery.PageClient(session, stopped)
+        session=MagicMock()
+        limited=MagicMock(status_code=429,headers={'Retry-After':'125'})
+        ok=MagicMock(status_code=200,content=b'x',text=item_html(type_id=248))
+        session.get.side_effect=[limited,ok]
+        stopped=MagicMock();stopped.wait.return_value=False
+        client=recovery.PageClient(session,stopped)
         self.assertIsNotNone(client.fetch(248))
-        self.assertTrue(any(call.args == (125.0,) for call in stopped.wait.call_args_list))
+        self.assertTrue(any(call.args==(125.0,) for call in stopped.wait.call_args_list))
 
     def test_diagnostics_include_missing_component(self):
         pricing = recovery.DiagnosticPricing({1:(None,None,'Root')}, {1:(1,{2:3})}, {}, valuation_mode='loss-day')
@@ -166,20 +157,13 @@ class RecoveryDatabaseTests(unittest.TestCase):
             self.assertEqual(cur.fetchall(),[(1,4235),(2,987654)])
             cur.execute('SELECT * FROM rawkm.killmail_items');self.assertEqual(cur.fetchall(),before)
 
-    def test_candidates_are_same_day_and_exclude_blueprint_copies(self):
-        with self.conn.cursor() as cur:
-            cur.execute("INSERT INTO rawkm.killmails VALUES(1,'2026-01-01 12:00+00',2,NULL),(2,'2026-01-02 12:00+00',2,NULL)")
-            cur.execute("INSERT INTO rawkm.killmail_items VALUES(3,'2026-01-01 12:00+00',0,2,5,1,0,2)")
-        self.assertEqual(recovery.candidates(self.conn,date(2026,1,1),2),[1])
-
-
     def test_call_estimate_sums_actual_missing_item_days(self):
         day=date(2026,1,1)
         recovery.save_gap(self.conn,day,1,'One','no_price_or_recipe','Missing')
         recovery.save_gap(self.conn,day,2,'Two','no_price_or_recipe','Missing')
         recovery.save_gap(self.conn,date(2026,1,2),1,'One','no_price_or_recipe','Missing')
         recovery.save_gap(self.conn,day,0,'Missing hull','missing_victim_ship','Raw data problem')
-        self.assertEqual(recovery.gap_counts(self.conn),dict(missing_items=2,missing_item_days=3,missing_dates=2,estimated_calls_max=15))
+        self.assertEqual(recovery.gap_counts(self.conn),dict(missing_items=2,missing_item_days=3,missing_dates=2,estimated_calls_max=2))
         with self.conn.cursor() as cur:
             cur.execute("UPDATE market.killmail_price_gaps SET status='recovered' WHERE item_type_id=2")
         self.assertEqual(recovery.gap_counts(self.conn)['missing_item_days'],2)
@@ -200,21 +184,51 @@ class RecoveryDatabaseTests(unittest.TestCase):
             with self.conn.cursor() as cur:
                 cur.execute('SELECT item_type_id,reason FROM market.killmail_price_gaps WHERE active')
                 self.assertEqual(cur.fetchall(),[(2,'type_missing_from_sde')])
-            page=parse(row(item=2,link=1),day=day,kill=1)
+            page=parse_item(type_id=2,current='4.12')
             client=MagicMock(requests=1)
             client.fetch.return_value=page
             progress=MagicMock()
             recovery.recover(self.conn,stopped,client,progress)
-            client.fetch.assert_called_once_with(1)
+            client.fetch.assert_called_once_with(2)
             with self.conn.cursor() as cur:
                 cur.execute('SELECT unit_price_isk,source_killmail_id FROM market.zkill_recovered_prices')
-                self.assertEqual(cur.fetchone(),(Decimal('4.1152'),1))
+                self.assertEqual(cur.fetchone(),(Decimal('4.12'),None))
             self.assertTrue(any(call.kwargs.get('planned_calls_max')==1 for call in progress.call_args_list))
         finally:
             # This fixture commits deliberately; cleanup is confined to the guarded test DB.
             self.conn.rollback()
             with self.conn.cursor() as cur:
                 cur.execute('DROP SCHEMA rawkm CASCADE; DROP SCHEMA market CASCADE; DROP TABLE public.sde_types; DROP TABLE IF EXISTS public.sde_groups')
+            self.conn.commit()
+
+
+    def test_one_item_request_serves_multiple_dates_and_404_uses_cent(self):
+        day=date(2026,1,1)
+        try:
+            recovery.save_gap(self.conn,day,2,'Two','no_price_or_recipe','Missing')
+            recovery.save_gap(self.conn,date(2026,1,2),2,'Two','no_price_or_recipe','Missing')
+            recovery.save_gap(self.conn,day,99,'Removed type','no_price_or_recipe','Missing')
+            self.conn.commit()
+            page=parse_item(type_id=2,current='4.12')
+            client=MagicMock(requests=2)
+            client.fetch.side_effect=lambda type_id: page if type_id==2 else None
+            progress=MagicMock()
+            recovery.recover(self.conn,threading.Event(),client,progress)
+            self.assertEqual([call.args for call in client.fetch.call_args_list],[(2,),(99,)])
+            with self.conn.cursor() as cur:
+                cur.execute('SELECT item_type_id,price_date,unit_price_isk,source_kind,source_killmail_id FROM market.zkill_recovered_prices ORDER BY item_type_id,price_date')
+                self.assertEqual(cur.fetchall(),[(2,day,Decimal('4.12'),'item_current',None),
+                    (2,date(2026,1,2),Decimal('4.12'),'item_current',None),
+                    (99,day,Decimal('.01'),'fallback',None)])
+                cur.execute("SELECT status FROM market.killmail_price_gaps WHERE item_type_id=99")
+                self.assertEqual(cur.fetchone()[0],'fallback')
+                cur.execute(recovery.SCHEMA.read_text())  # Migration is safe to rerun.
+            self.assertEqual(progress.call_args.kwargs['fallback_pairs'],1)
+            self.assertEqual(progress.call_args.kwargs['items_processed'],2)
+        finally:
+            self.conn.rollback()
+            with self.conn.cursor() as cur:
+                cur.execute('DROP SCHEMA rawkm CASCADE; DROP SCHEMA market CASCADE; DROP TABLE public.sde_types')
             self.conn.commit()
 
 
