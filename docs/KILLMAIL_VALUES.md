@@ -65,3 +65,62 @@ Admin Jobs shows the current partition, price-reading date, completed months, va
 The final value payload is eight bytes per valued killmail. PostgreSQL row updates also generate WAL and obsolete row versions, so temporary and physical growth can exceed that logical payload. The job checks a free-disk reserve between months and uses an advisory lock against concurrent valuation runs.
 
 Offline tests cover every bundled snapshot checksum, recipe changes and output yields, recursive same-day prices, cache invalidation and retention during SDE synchronization. PostgreSQL tests use an isolated disposable database and check NULL-only writes, UTC boundaries, unavailable prices/recipes and continuation after new daily price data arrives. No production valuation is started by these checks.
+
+## Diagnose and recover missing prices
+
+**Admin → Jobs → Market · Diagnose and recover missing item prices** is a manual
+job. Let the normal valuation pass finish first. The worker shares its advisory
+lock, so the expensive diagnostic and normal calculator cannot run concurrently.
+
+It selects only killmails with `estimated_value_cents IS NULL`, checks their hull
+and ordinary items with the same dated recipe/price calculator, and records
+item/date blockers: absent prices and recipes, missing current SDE types, missing
+historic recipe sets, unpriced components, recursion limits, unfinished or
+unimported price days, and missing victim ship IDs. Unknown component prices are
+also reported even if the calculator returned a provisional one-cent fallback.
+A NULL killmail with no detected item blocker can simply be awaiting the normal
+valuation pass; this diagnostic does not invent an item problem for it.
+
+The job shows months, UTC dates, distinct missing items and **missing item/date
+pairs**: the sum of each item's missing days, not the product of all items and the
+whole date range. The first network budget is at most five requests per pair.
+Before making requests, it finds up to five imported same-day kills per pair and
+shows the resulting candidate-page budget and distinct page count. Actual requests
+can be lower through reuse or stopping at the first quote, or higher if HTTP
+retries are needed. A CSV report contains reasons, status, unit prices and source
+kill IDs. Non-price problems are excluded from the request estimate.
+
+Requests are sequential, spaced at least two seconds apart, with gzip and a
+project User-Agent. HTTP 420/429 honors Retry-After with bounded retries; 5xx also
+backs off. This follows zKill's request etiquette:
+https://zkillboard.com/api/docs/ . No broad kill-list crawling or CCP calls.
+
+For each candidate kill page, the parser verifies its canonical kill ID and UTC
+date. It reads raw line totals and divides by quantity, excludes BPCs, frigate bay
+entries, special implant lines, one-cent placeholders and conflicting per-line
+quotes. Linked losses are not mistaken for the requested kill's hull. A price
+shown today on an old kill page is a **zKill valuation quote for that loss date**,
+not proof of an actual historical market trade or of the original cached total.
+If five candidates provide no usable quote, the pair stays unresolved in the CSV.
+
+Two small tables are created automatically by
+`scripts/killmail_price_recovery_schema.sql`: `market.killmail_price_gaps` stores
+sparse diagnoses and `market.zkill_recovered_prices` stores sparse supplementary
+quotes with their source kill and fetch time. Original daily JSON snapshots,
+counts and hashes are preserved. Positive daily prices always take priority.
+Recovered prices enter the same loss-day → previous → first later selection rule.
+
+Finally the job automatically runs the regular NULL-only calculator, committing
+completed months normally. Progress includes its month and valued/unvalued counts.
+Stop cancels diagnosis SQL, interrupts request waits, or terminates the child
+calculator with its normal rollback behavior. Saved quotes and completed months
+are retained. No raw killmail, item or attacker rows are deleted. No PDFs or large
+HTML archives are stored. This tool is not added to the daily pipeline.
+
+CLI, using the same interpreter as other jobs:
+
+```bash
+python scripts/recover_killmail_prices.py
+# Optional diagnosis/report only: no HTTP requests or recalculation.
+python scripts/recover_killmail_prices.py --diagnose-only
+```

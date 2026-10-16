@@ -1,0 +1,36 @@
+<section id="recovery-job">
+  <p class="small muted-line">Diagnose items blocking NULL killmail values, then recover unit prices from same-day imported kills on zKill. Finish or stop the valuation job first. After recovery, NULL killmail values are recalculated automatically using saved prices; existing killmail values are retained.</p>
+  {% if 'admin.jobs.run' in user.permissions %}
+  <button class="btn btn-primary" id="recovery-start" {% if not recovery_enabled %}disabled{% endif %}>Diagnose and recover missing prices</button>
+  <button class="btn btn-outline-danger" id="recovery-stop" disabled>Stop</button>
+  {% endif %}
+  <div id="recovery-status" role="status" class="my-3">Loading status…</div>
+  <p class="small muted-line">Sequential requests, at least 2 seconds apart. The estimate sums missing days for each item (five candidate pages at most per pair, excluding HTTP retries). Shared pages are reused. Up to five same-day kills per item/date; unavailable or ambiguous prices remain unresolved. Only the final step fills NULL value fields; raw killmail data is retained.</p>
+  <a class="btn btn-sm btn-outline-light" href="/admin/killmail-price-recovery/report.csv">Download item/date diagnosis (CSV)</a>
+  <a class="btn btn-sm btn-outline-light" href="/admin/jobs/recover_killmail_prices/log" target="_blank" rel="noopener">Job log</a>
+</section>
+<script>
+(()=>{
+ const enabled={{ recovery_enabled|tojson }}, el=id=>document.getElementById('recovery-'+id);
+ async function call(path,method='GET'){
+  const r=await fetch('/admin/killmail-price-recovery/'+path,{method,headers:{Accept:'application/json'},cache:'no-store'});
+  const d=await r.json();if(!r.ok)throw Error(d.error||'Request failed');return d;
+ }
+ async function refresh(){try{
+  const d=await call('status'),p=d.progress||{};
+  el('status').textContent=(d.running?'Running · ':'')+(p.phase||'Not started')+
+   ' · Months '+(p.months_processed||0)+' / '+(p.months_total||0)+(p.current_month?' · Month '+p.current_month:'')+
+   (p.current_day?' · UTC date '+p.current_day:'')+(p.current_type_id?' · Item '+p.current_type_id:'')+
+   ' · Missing items '+(p.missing_items||0)+' · Missing item/date pairs '+(p.missing_item_days||0)+' · Estimated calls ≤ '+(p.estimated_calls_max||0)+
+   (p.planned_calls_max!==undefined?' · Planned calls ≤ '+p.planned_calls_max+' ('+(p.distinct_candidate_pages||0)+' distinct pages)':'')+
+   ' · Items/dates checked '+(p.gaps_processed||0)+' / '+(p.gaps_total||0)+' · Recovered '+(p.recovered||0)+
+   ' · Unresolved '+(p.unresolved||0)+' · Requests '+(p.requests||0)+
+   (p.valuation_pid?' · Valuation '+(p.valuation_phase||'')+' · Months '+(p.valuation_months_processed||0)+' / '+(p.valuation_months_total||0)+' · KM valued '+(p.killmails_valued||0)+' · KM still unvalued '+(p.killmails_unvalued||0):'')+(p.error?' · '+p.error:'')+(p.message?' · '+p.message:'');
+  if(el('start')){el('start').disabled=d.running||!enabled;el('stop').disabled=!d.running;}
+ }catch(e){el('status').textContent=e.message;}}
+ for(const action of ['start','stop'])if(el(action))el(action).onclick=async()=>{
+  el(action).disabled=true;try{await call(action,'POST');await refresh();}catch(e){el('status').textContent=e.message;el(action).disabled=false;}
+ };
+ refresh();setInterval(refresh,5000);
+})();
+</script>

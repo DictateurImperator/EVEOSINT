@@ -172,8 +172,40 @@ def load_first_prices(conn, through):
                        CROSS JOIN LATERAL jsonb_each_text(p.prices) e
                        WHERE p.price_date<=%s AND e.value::numeric>0
                        GROUP BY e.key""", (through,))
-        return {int(type_id): (date.fromisoformat(quote[0]), Decimal(quote[1]))
-                for type_id, quote in cur}
+        result = {int(type_id): (date.fromisoformat(quote[0]), Decimal(quote[1]))
+                  for type_id, quote in cur}
+        cur.execute("SELECT to_regclass('market.zkill_recovered_prices')")
+        if cur.fetchone()[0] is not None:
+            cur.execute("""SELECT r.item_type_id,r.price_date,r.unit_price_isk
+                           FROM market.zkill_recovered_prices r
+                           JOIN market.zkill_daily_prices d ON d.price_date=r.price_date
+                           WHERE r.price_date<=%s
+                             AND COALESCE((d.prices->>r.item_type_id::text)::numeric,0)<=0
+                           ORDER BY r.price_date""", (through,))
+            for type_id, day, value in cur:
+                if type_id not in result or day < result[type_id][0]:
+                    result[type_id] = (day, Decimal(value))
+        return result
+
+
+def price_stream_query(conn):
+    """Daily snapshots win; sparse kill-page quotes only fill missing/zero keys."""
+    with conn.cursor() as cur:
+        cur.execute("SELECT to_regclass('market.zkill_recovered_prices')")
+        available = cur.fetchone()[0] is not None
+    if not available:
+        return "SELECT price_date,prices FROM market.zkill_daily_prices WHERE price_date BETWEEN %s AND %s ORDER BY price_date"
+    return """SELECT p.price_date,
+                       p.prices || COALESCE(r.prices,'{}'::jsonb)
+                FROM market.zkill_daily_prices p
+                LEFT JOIN (
+                  SELECT r.price_date,jsonb_object_agg(r.item_type_id::text,r.unit_price_isk) prices
+                  FROM market.zkill_recovered_prices r
+                  JOIN market.zkill_daily_prices d ON d.price_date=r.price_date
+                  WHERE COALESCE((d.prices->>r.item_type_id::text)::numeric,0)<=0
+                  GROUP BY r.price_date
+                ) r ON r.price_date=p.price_date
+                WHERE p.price_date BETWEEN %s AND %s ORDER BY p.price_date"""
 
 
 class QuoteCache:
@@ -823,8 +855,9 @@ def main():
         )
         price_cursor = price_conn.cursor(name="killmail_valuation_price_stream")
         price_cursor.itersize = 1
+        stream_query = price_stream_query(conn)
         price_cursor.execute(
-            "SELECT price_date,prices FROM market.zkill_daily_prices WHERE price_date BETWEEN %s AND %s ORDER BY price_date",
+            stream_query,
             (START, price_through),
         )
         pending = price_cursor.fetchone()

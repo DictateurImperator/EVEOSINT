@@ -95,6 +95,10 @@
           {% with prices_enabled=job.enabled %}
           {% include "admin_prices_progress.html" %}
           {% endwith %}
+        {% elif job.type == "killmail_price_recovery" %}
+          {% with recovery_enabled=job.enabled %}
+          {% include "admin_killmail_price_recovery_progress.html" %}
+          {% endwith %}
         {% elif job.type == "killmail_values" %}
           <p class="muted-line small">Calculate each killmail's estimated ISK value from the local zKill price history. The result is stored directly on the killmail row.</p>
           {% with values_enabled=job.enabled %}

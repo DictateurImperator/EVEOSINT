@@ -153,7 +153,7 @@ def _normalize_job(raw_job):
     log_path = raw_job.get("log_path")
     enabled = bool(raw_job.get("enabled", True))
 
-    if job_type not in {"sde", "killmails", "recent_kill_pilots_affiliation", "character_skill_inference", "population_alliances_init", "population_alliances_daily", "sovereignty_esi", "killmail_forensics_setup", "killmail_forensics_analysis", "killmail_archive_refresh", "mer_economy", "first_loss_study", "first_loss_purge", "zkill_prices", "killmail_values"}:
+    if job_type not in {"sde", "killmails", "recent_kill_pilots_affiliation", "character_skill_inference", "population_alliances_init", "population_alliances_daily", "sovereignty_esi", "killmail_forensics_setup", "killmail_forensics_analysis", "killmail_archive_refresh", "mer_economy", "first_loss_study", "first_loss_purge", "zkill_prices", "killmail_values", "killmail_price_recovery"}:
         raise JobError(f"job_type_invalid:{key}")
 
     if not isinstance(command, list) or not command:
@@ -317,7 +317,16 @@ def load_jobs_config():
             "log_path": str(Path.home() / "eveosint/data/logs/killmail_values.log"), "enabled": True,
         }))
 
+    if not any(job["key"] == "recover_killmail_prices" for job in jobs):
+        jobs.append({
+            "key": "recover_killmail_prices", "label": "Market · Diagnose and recover missing item prices",
+            "type": "killmail_price_recovery",
+            "command": [sys.executable, str(Path(__file__).resolve().parents[2] / "scripts/recover_killmail_prices.py")],
+            "log_path": str(Path.home() / "eveosint/data/logs/killmail_price_recovery.log"), "enabled": True,
+        })
+
     allowed_keys = {
+        "recover_killmail_prices",
         "import_zkill_prices",
         "calculate_killmail_values",
         "purge_first_loss_study",
@@ -852,3 +861,43 @@ def killmail_values_progress():
     }:
         progress = dict(progress, phase="interrupted")
     return {"running": runtime["running"], "progress": progress}
+
+
+def run_killmail_price_recovery():
+    job = get_job('recover_killmail_prices')
+    if job['type'] != 'killmail_price_recovery':
+        raise JobError('job_type_mismatch:recover_killmail_prices')
+    return _start_process(job, list(job['command']))
+
+
+def stop_killmail_price_recovery():
+    job = get_job('recover_killmail_prices')
+    running, pid = _cleanup_stale_pid(job['key'])
+    if not running:
+        return True, 'already_stopped'
+    try:
+        arguments = Path(f'/proc/{pid}/cmdline').read_bytes().split(b'\0')
+        if os.fsencode(job['command'][1]) not in arguments:
+            raise JobError('job_process_mismatch:recover_killmail_prices')
+        os.kill(pid, signal.SIGTERM)
+    except ProcessLookupError:
+        return True, 'already_stopped'
+    except OSError as exc:
+        raise JobError('job_stop_failed:recover_killmail_prices') from exc
+    return True, 'stop_requested'
+
+
+def killmail_price_recovery_progress():
+    runtime = _read_runtime_status('recover_killmail_prices')
+    path = Path.home() / 'eveosint/data/market/killmail_price_recovery_progress.json'
+    try:
+        progress = json.loads(path.read_text())
+        if not isinstance(progress, dict):
+            progress = None
+    except (OSError, ValueError):
+        progress = None
+    if runtime['running'] and (not progress or progress.get('pid') != runtime['pid']):
+        progress = {'phase': 'starting'}
+    elif progress and not runtime['running'] and progress.get('phase') not in {'completed', 'failed', 'stopped'}:
+        progress = dict(progress, phase='interrupted')
+    return {'running': runtime['running'], 'progress': progress}
