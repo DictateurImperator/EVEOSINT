@@ -318,12 +318,12 @@ def load_jobs_config():
         }))
 
     if not any(job["key"] == "recover_killmail_prices" for job in jobs):
-        jobs.append({
+        jobs.append(_normalize_job({
             "key": "recover_killmail_prices", "label": "Market · Diagnose and recover missing item prices",
             "type": "killmail_price_recovery",
             "command": [sys.executable, str(Path(__file__).resolve().parents[2] / "scripts/recover_killmail_prices.py")],
             "log_path": str(Path.home() / "eveosint/data/logs/killmail_price_recovery.log"), "enabled": True,
-        })
+        }))
 
     allowed_keys = {
         "recover_killmail_prices",

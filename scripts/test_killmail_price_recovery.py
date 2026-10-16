@@ -219,6 +219,29 @@ class RecoveryDatabaseTests(unittest.TestCase):
 
 
 class AdminControlTests(unittest.TestCase):
+    def test_complete_jobs_page_with_default_recovery_job(self):
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+        from scripts.test_first_loss_admin import f
+        routes = f.load('routes_admin_jobs')
+        app = FastAPI()
+        app.include_router(routes.router)
+        user = {'id': 1, 'username': 'admin', 'permissions': {'admin.jobs.view', 'admin.jobs.run'}}
+        with patch.object(jobs, '_read_config_file', return_value={'jobs': []}), \
+             patch.object(routes, 'require_login', return_value=user), \
+             patch.object(routes, 'require_permission_or_redirect', return_value=None), \
+             patch.object(jobs, '_start_process') as launch:
+            listed = jobs.list_jobs_with_logs()
+            recovery_job = next(job for job in listed if job['key'] == 'recover_killmail_prices')
+            for field in ('log_exists', 'running', 'started_at', 'last_lines'):
+                self.assertIn(field, recovery_job)
+            response = TestClient(app).get('/admin/jobs')
+            self.assertEqual(response.status_code, 200)
+            self.assertIn('Diagnose and recover missing item prices', response.text)
+            self.assertIn('id="recovery-status"', response.text)
+            self.assertIn('id="values-status"', response.text)
+            launch.assert_not_called()
+
     def test_permissions_passive_status_and_manual_controls(self):
         from fastapi import FastAPI
         from fastapi.testclient import TestClient
