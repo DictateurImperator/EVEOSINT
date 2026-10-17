@@ -138,6 +138,53 @@
   <article class="changelog-version mb-3">
     <div class="changelog-version-head">
       <div class="changelog-version-title">
+        <span class="fw-bold">Next release</span>
+        <span class="changelog-status changelog-status-dev">In development</span>
+      </div>
+      <div class="muted-line small">Changes since 0.1.3</div>
+    </div>
+
+    <div class="changelog-grid">
+      <section class="changelog-group">
+        <h3>Rankings &amp; combat stats</h3>
+        <ul>
+          <li>New Leaderboard for characters, corporations and alliances, using full kill value or damage-weighted True ISK. Rank by ISK destroyed, lost, net balance, efficiency, kills or losses; browse historical months, search by name or rank, and filter memberships, including Universe and No alliance. Affiliations follow the selected date where history is available; NPC characters are excluded.</li>
+          <li>New Combat stats tab on entity profiles combines monthly kills, raw and True ISK, their ratio, and losses. Its Top kills view ranks the best 20 kills by raw or True ISK, with damage shares and killmail links. Provisional rankings update as each historical month is checked, with live progress.</li>
+        </ul>
+      </section>
+
+      <section class="changelog-group">
+        <h3>Killmail ISK values</h3>
+        <ul>
+          <li>Estimated ISK values appear directly in the main and entity killboards and killmail details. Compact amounts show their full value on hover.</li>
+          <li>Historical valuation uses loss-date prices and available dated construction recipes. Missing daily quotes use the nearest earlier price, or the first later price when none exists before the loss.</li>
+          <li>Abyssal modules use the corresponding T2 module price, or a standard module where no T2 equivalent exists. This local rule takes priority over zKill abyssal quotes; mutaplasmids retain their own prices.</li>
+        </ul>
+      </section>
+
+      <section class="changelog-group">
+        <h3>Fitting &amp; killmail details</h3>
+        <ul>
+          <li>Redesigned EVE-style fitting ring with a larger ship image, high/mid/low slots, rigs, subsystems, empty slots, associated charges and dropped/destroyed indicators.</li>
+          <li>Inventory lists unit prices, quantities, dropped and destroyed values, category subtotals, hull value and combined totals.</li>
+          <li>Clickable miniature maps show the kill's system, constellation and region.</li>
+        </ul>
+      </section>
+
+      <section class="changelog-group">
+        <h3>Navigation</h3>
+        <ul>
+          <li>Leaderboard now sits after Tools. Admin and Profiles have moved to the end of the main menu.</li>
+        </ul>
+      </section>
+    </div>
+
+    <div class="changelog-base">Base release: 0.1.3</div>
+  </article>
+
+  <article class="changelog-version mb-3">
+    <div class="changelog-version-head">
+      <div class="changelog-version-title">
         <span class="fw-bold">0.1.3</span>
         <span class="changelog-status">OK</span>
       </div>
