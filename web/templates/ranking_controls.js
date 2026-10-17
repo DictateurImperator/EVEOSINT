@@ -1,5 +1,17 @@
 (()=>{
   const $=id=>document.getElementById(id),kind=$('rankingKind');
+  const year=$('rankYear'),month=$('rankMonth');
+  const availableMonths=[...month.options].map(option=>({value:option.value,label:option.textContent,year:option.dataset.year}));
+  function showMonths(preferred){
+    const options=availableMonths.filter(option=>option.year===year.value);
+    month.replaceChildren(...options.map(option=>new Option(option.label,option.value)));
+    if(options.some(option=>option.value===preferred))month.value=preferred;
+  }
+  const selectedMonth=month.value;showMonths(selectedMonth);
+  year.addEventListener('change',()=>{
+    const preferred=year.value+'-'+month.value.slice(5);showMonths(preferred);
+    month.dispatchEvent(new Event('change'));
+  });
   document.querySelectorAll('[data-rank-kind]').forEach(tab=>tab.addEventListener('click',()=>{
     const params=new URLSearchParams(new FormData(kind.form));
     for(const name of ['q','target_id','position','page'])params.delete(name);
@@ -26,7 +38,7 @@
       timer=setTimeout(async()=>{
         controller=new AbortController();
         try{
-          const url=new URL('/admin/debug/rankings/lookup',location.origin);url.search=new URLSearchParams({kind:kind.value,purpose,q:input.value.trim(),through:document.querySelector('input[name="through"]').value||document.querySelector('input[name="through"]').dataset.defaultThrough||''});
+          const url=new URL('/admin/debug/rankings/lookup',location.origin);url.search=new URLSearchParams({kind:kind.value,purpose,q:input.value.trim(),through:month.value||month.dataset.defaultThrough||''});
           const response=await fetch(url,{signal:controller.signal});
           if(current!==sequence)return;
           if(!response.ok){message('Search unavailable. Try again or type more letters.');return;}
@@ -55,7 +67,7 @@
       if(index>=0&&['ArrowDown','ArrowUp'].includes(event.key)){event.preventDefault();buttons[(index+(event.key==='ArrowDown'?1:-1)+buttons.length)%buttons.length].focus();}
     });
     kind.addEventListener('change',cancel);
-    document.querySelector('input[name="through"]').addEventListener('change',cancel);
+    month.addEventListener('change',cancel);
     document.addEventListener('click',event=>{if(!input.parentElement.contains(event.target))cancel();});
   }
   autocomplete('rankName','rankNameResults','target',item=>{$('rankName').value=item.name;$('rankTarget').value=item.entity_id;});

@@ -103,6 +103,34 @@ class ControlTests(unittest.TestCase):
             self.assertIn('<strong>From the beginning</strong>',response.text)
 
 
+    def test_month_selectors_offer_only_built_months_and_default_to_latest(self):
+        from html.parser import HTMLParser
+        class SelectOptions(HTMLParser):
+            def __init__(self):
+                super().__init__();self.select=None;self.options={}
+            def handle_starttag(self,tag,attrs):
+                attrs=dict(attrs)
+                if tag=='select':
+                    self.select=attrs.get('id');self.options[self.select]=[]
+                elif tag=='option' and self.select:
+                    self.options[self.select].append(attrs)
+            def handle_endtag(self,tag):
+                if tag=='select':self.select=None
+        months=[dict(month=m,built_at='v',killmails=1,valued=1,zero_damage=0,entity_rows=1,dirty=False)
+                for m in [date(2025,12,1),JAN,FEB]]
+        with patch.object(rankings,'catalog',return_value=months),patch.object(rankings,'ranking_rows',return_value=([],True)) as query:
+            response=self.client.get('/admin/debug/rankings')
+            parser=SelectOptions();parser.feed(response.text)
+            self.assertEqual([o['value'] for o in parser.options['rankYear']],['2026','2025'])
+            self.assertEqual([o['value'] for o in parser.options['rankMonth']],['2026-02','2026-01','2025-12'])
+            self.assertEqual(next(o['value'] for o in parser.options['rankMonth'] if 'selected' in o),'2026-02')
+            self.assertEqual(query.call_args.args[4],FEB)
+            self.assertNotIn('type="month"',response.text)
+            query.reset_mock()
+            response=self.client.get('/admin/debug/rankings?through=2026-03')
+            self.assertIn('Choose a month available',response.text)
+            query.assert_not_called()
+
     def test_entity_tabs_keep_settings_but_reset_the_searched_entity_and_page(self):
         import html
         import re
@@ -398,6 +426,25 @@ class DatabaseTests(unittest.TestCase):
             self.assertEqual(rankings.lookup('999999999999999999999999','character'),[])
             self.assertEqual(rankings.lookup('old','corporation')[0]['alliance_name'],'Old Alliance')
             self.assertEqual(rankings.lookup('new','alliance')[0]['name'],'New Alliance')
+
+    def test_latest_score_cutoff_avoids_historical_snapshot_lookups(self):
+        self.build(JAN)
+        self.build(FEB)
+        executed=[]
+        class TraceCursor(psycopg2.extensions.cursor):
+            def execute(self,*args,**kwargs):
+                result=super().execute(*args,**kwargs)
+                executed.append(self.query.decode())
+                return result
+        with psycopg2.connect(self.dsn,cursor_factory=TraceCursor) as conn:
+            latest=rankings.explorer().explore(conn,rankings.engine(),'character','classic','destroyed',JAN,FEB,as_of=FEB)
+        self.assertTrue(latest['rows'])
+        self.assertFalse(any('LEFT JOIN LATERAL' in query for query in executed))
+        executed.clear()
+        with psycopg2.connect(self.dsn,cursor_factory=TraceCursor) as conn:
+            historical=rankings.explorer().explore(conn,rankings.engine(),'character','classic','destroyed',JAN,JAN,as_of=JAN)
+        self.assertTrue(any('LEFT JOIN LATERAL' in query for query in executed))
+        self.assertNotEqual(latest['rows'][0]['destroyed'],historical['rows'][0]['destroyed'])
 
     def test_npcs_keep_their_scores_but_are_not_ranked_or_suggested(self):
         with self.conn.cursor() as cur:

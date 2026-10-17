@@ -95,7 +95,13 @@ def explore(conn,engine,kind,mode,sort,first,last,*,as_of=None,includes=(),exclu
     fields={'destroyed':destroyed,'lost':'lost_cents','kills':'kills','losses':'losses',
             'unvalued_kills':'unvalued_kills','unvalued_losses':'unvalued_losses'}
     params=[]
-    if as_of is None:
+    with conn.cursor() as cur:
+        cur.execute("SET LOCAL statement_timeout='5s'")
+        cur.execute('SELECT max(month) FROM analytics.killmail_ranking_months')
+        latest=cur.fetchone()[0]
+    # Score cutoff and affiliation date are independent. The latest completed
+    # month already has current totals, even when its affiliations are historical.
+    if latest is None or last>=latest:
         values=sql.SQL(',').join(sql.SQL('c.{c} AS {a}').format(c=sql.Identifier(c),a=sql.Identifier(a)) for a,c in fields.items())
         snapshot=sql.SQL('')
     else:

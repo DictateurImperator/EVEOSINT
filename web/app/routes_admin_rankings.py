@@ -53,6 +53,8 @@ def page(request: Request):
             affiliation_month=last if custom_period or last<current_month else None
             if first>last:
                 raise ValueError(f'Choose a month on or after {first:%Y-%m}, the first available month.')
+            if last not in {m['month'] for m in months}:
+                raise ValueError('Choose a month available in the ranking selectors.')
             started=time.monotonic()
             if months[0].get('totals_ready',True):
                 target_id=None;position=offset+1
@@ -111,7 +113,9 @@ def page(request: Request):
         entity_tabs=[dict(kind=k,label=label,url=link(kind=k),active=kind==k)
                      for k,label in [('character','Characters'),('corporation','Corporations'),('alliance','Alliances')]],
         all_time_link='/admin/debug/rankings?'+urlencode({k:v for k,v in base.items() if k!='through'},doseq=True),
-        last=params.get('through',''),custom_period=custom_period,
+        last=last.strftime('%Y-%m') if last else '',custom_period=custom_period,
+        ranking_years=sorted({m['month'].year for m in months},reverse=True),
+        selected_year=last.year if last else None,
         period_from=first.strftime('%Y-%m') if first else '',period_through=last.strftime('%Y-%m') if last else '',
         membership_date=('end of '+affiliation_month.strftime('%B %Y')) if affiliation_month else 'today',
         lookup_default_through=lookup_default_through,

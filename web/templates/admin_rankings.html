@@ -16,14 +16,12 @@
  <input type="hidden" name="kind" id="rankingKind" value="{{ kind }}">
  <label class="small">Kill credit<select class="form-select form-select-sm" name="mode"><option value="classic" {% if mode=='classic' %}selected{% endif %}>Full kill value</option><option value="weighted" {% if mode=='weighted' %}selected{% endif %}>Damage share</option></select></label>
  <label class="small">Rank by<select class="form-select form-select-sm" name="sort">{% for value,label in [('destroyed','ISK destroyed'),('lost','ISK lost'),('net','Net ISK'),('efficiency','ISK efficiency'),('kills','Kills'),('losses','Losses')] %}<option value="{{ value }}" {% if sort==value %}selected{% endif %}>{{ label }}</option>{% endfor %}</select></label>
- <details {% if custom_period %}open{% endif %}>
-  <summary class="small">Historical ranking (optional)</summary>
-  <div class="d-flex flex-wrap gap-2 mt-2">
-   <label class="small">Through (UTC)<input type="month" class="form-control form-control-sm" name="through" data-default-through="{{ lookup_default_through }}" value="{{ last }}" min="2003-01"></label>
-  </div><div class="muted-line small mt-1">From the beginning through the selected month. Leave empty for the current all-time ranking.</div>
- </details>
+ <div class="d-flex flex-wrap gap-2">
+  <label class="small">Year<select id="rankYear" class="form-select form-select-sm" {% if not months %}disabled{% endif %}>{% for year in ranking_years %}<option value="{{ year }}" {% if year==selected_year %}selected{% endif %}>{{ year }}</option>{% endfor %}</select></label>
+  <label class="small">Through month (UTC)<select id="rankMonth" name="through" class="form-select form-select-sm" data-default-through="{{ lookup_default_through }}" {% if not months %}disabled{% endif %}>{% for item in months|reverse %}<option value="{{ item.month.strftime('%Y-%m') }}" data-year="{{ item.month.year }}" {% if item.month.strftime('%Y-%m')==last %}selected{% endif %}>{{ item.month.strftime('%B %Y') }}</option>{% endfor %}</select></label>
+ </div>
  <button class="btn btn-sm btn-primary" type="submit">Show rankings</button>
- {% if custom_period %}<a class="btn btn-sm btn-outline-light" href="{{ all_time_link }}">All time</a>{% endif %}
+ {% if custom_period %}<a class="btn btn-sm btn-outline-light" href="{{ all_time_link }}">Latest available month</a>{% endif %}
  <div class="rank-inline-search d-flex flex-wrap gap-3 align-items-end w-100 border-top pt-3">
  <span class="fw-semibold small align-self-center">Find in ranking</span>
  <label class="small">Search by<select class="form-select form-select-sm" id="rankSearchBy"><option value="name">Name</option><option value="rank" {% if position and not q and not target_id %}selected{% endif %}>Rank</option></select></label>

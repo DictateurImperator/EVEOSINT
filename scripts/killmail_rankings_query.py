@@ -30,7 +30,9 @@ def player_character_filter(kind,entity_id):
     """Keep recorded NPC scores, but remove SDE NPCs before ordering/ranking."""
     if kind!='character':
         return sql.SQL('true')
-    return sql.SQL('NOT EXISTS (SELECT 1 FROM public.sde_npccharacters npc WHERE npc.sde_key=({})::text)').format(entity_id)
+    # An uncorrelated subplan can hash the small NPC set once while retaining
+    # ordered scans of the ranking index for the top results.
+    return sql.SQL('({})::text NOT IN (SELECT sde_key FROM public.sde_npccharacters WHERE sde_key IS NOT NULL)').format(entity_id)
 
 
 def _current_rows(cur,kind_id,table,id_column,column,sort,first,last):
