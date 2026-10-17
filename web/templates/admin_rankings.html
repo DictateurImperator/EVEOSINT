@@ -1,15 +1,15 @@
 {% extends "base.html" %}
 {% block content %}
+{% include "killboard_filters_styles.html" %}
 <style>
 .rank-summary{display:flex;gap:1rem;flex-wrap:wrap}.rank-summary>div{flex:1;min-width:160px;padding:1rem;background:rgba(15,23,42,.6);border:1px solid var(--border);border-radius:12px}.rank-number{font-variant-numeric:tabular-nums;white-space:nowrap}.rank-entity{display:flex;align-items:center;gap:.7rem;min-width:220px}.rank-entity img{width:40px;height:40px;border-radius:7px}.rank-table th,.rank-table td{vertical-align:middle;white-space:nowrap}.rank-net-positive{color:#50d8a3}.rank-net-negative{color:#ff7784}.rank-membership{font-size:.78rem}.rank-membership img{width:16px;height:16px;border-radius:3px;vertical-align:middle}.rank-target>td{background:rgba(13,110,253,.2)!important}.rank-lookup{position:absolute;z-index:20;max-height:260px;overflow:auto;min-width:260px}.rank-lookup button{text-align:left;white-space:normal}.rank-chip{display:inline-flex;align-items:center;gap:.4rem;margin:.2rem}.rank-chip button{border:0;background:none;color:inherit}
+.kb-search-result{width:100%;border:0;text-align:left;background:#0b1220}.kb-search-result:hover{background:rgba(13,110,253,.18)}.rank-filter .kb-term{grid-template-columns:auto 30px minmax(0,1fr) auto}.rank-filter-placeholder{display:flex;width:30px;height:30px;align-items:center;justify-content:center;border-radius:5px;background:rgba(255,255,255,.06);font-weight:700}.rank-filter .kb-family-default{font-size:.7rem}.rank-inline-search{border-color:var(--border)!important}
 </style>
 <div class="d-flex justify-content-between flex-wrap gap-2 mb-4"><div><h1 class="h3 mb-1">ISK rankings <span class="badge text-bg-secondary fs-6">Debug</span></h1><div class="muted-line">Who destroyed or lost the most ISK? Compare characters, corporations and alliances from the beginning through a chosen month.</div></div><a href="/admin/jobs" class="btn btn-sm btn-outline-light align-self-start">Admin Jobs</a></div>
 {% if months and not totals_ready %}<div class="alert alert-info">Fast rankings need a one-time totals initialization. Click <strong>Build / refresh rankings</strong> below to reuse the existing monthly results; killmails will not be recalculated.</div>{% endif %}
 {% if error %}<div class="alert alert-warning">{{ error }}</div>{% endif %}
-<nav class="nav nav-tabs mb-3"><a class="nav-link {{ 'active' if view=='ranking' else '' }}" href="{{ ranking_link }}">Ranking</a><a class="nav-link {{ 'active' if view=='search' else '' }}" href="{{ search_link }}">Search</a></nav>
 <section class="content-card p-3 mb-4">
 <form method="get" class="d-flex flex-wrap align-items-end gap-3">
- <input type="hidden" name="view" value="{{ view }}">
  <label class="small">Entity<select class="form-select form-select-sm" name="kind" id="rankingKind">{% for value,label in [('character','Characters'),('corporation','Corporations'),('alliance','Alliances')] %}<option value="{{ value }}" {% if kind==value %}selected{% endif %}>{{ label }}</option>{% endfor %}</select></label>
  <label class="small">Kill credit<select class="form-select form-select-sm" name="mode"><option value="classic" {% if mode=='classic' %}selected{% endif %}>Full kill value</option><option value="weighted" {% if mode=='weighted' %}selected{% endif %}>Damage share</option></select></label>
  <label class="small">Rank by<select class="form-select form-select-sm" name="sort">{% for value,label in [('destroyed','ISK destroyed'),('lost','ISK lost'),('net','Net ISK'),('efficiency','ISK efficiency'),('kills','Kills'),('losses','Losses')] %}<option value="{{ value }}" {% if sort==value %}selected{% endif %}>{{ label }}</option>{% endfor %}</select></label>
@@ -19,19 +19,33 @@
    <label class="small">Through (UTC)<input type="month" class="form-control form-control-sm" name="through" value="{{ last }}" min="2003-01"></label>
   </div><div class="muted-line small mt-1">From the beginning through the selected month. Leave empty for the current all-time ranking.</div>
  </details>
- {% if view=='search' %}
- <label class="small">Search by<select class="form-select form-select-sm" id="rankSearchBy"><option value="name">Name</option><option value="rank" {% if position and not q and not target_id %}selected{% endif %}>Rank</option></select></label>
- <div id="rankNameFields" class="position-relative"><label class="small">Name<input class="form-control form-control-sm" id="rankName" name="q" value="{{ q }}" autocomplete="off" placeholder="Start typing a name"></label><input type="hidden" name="target_id" id="rankTarget" value="{{ target_id }}"><div class="rank-lookup list-group" id="rankNameResults"></div></div>
- <label class="small" id="rankPositionFields">Rank<input class="form-control form-control-sm" type="number" name="position" id="rankPosition" value="{{ position }}" min="1" max="1000000000" placeholder="e.g. 25000"></label>
- {% endif %}
- <button class="btn btn-sm btn-primary">{{ 'Find in ranking' if view=='search' else 'Show rankings' }}</button>
+ <button class="btn btn-sm btn-primary" type="submit">Show rankings</button>
  {% if custom_period %}<a class="btn btn-sm btn-outline-light" href="{{ all_time_link }}">All time</a>{% endif %}
- <details class="w-100" {% if include_terms or exclude_terms %}open{% endif %}>
-  <summary class="small">Membership filters{% if include_terms or exclude_terms %} · active{% endif %}</summary>
-  <div class="muted-line small my-2">Membership as of {{ membership_date }}. Includes match any selected group; exclusions always win. Scores cover the entity's whole career up to the chosen month.</div>
-  <div class="d-flex flex-wrap gap-2 align-items-end"><label class="small">Rule<select class="form-select form-select-sm" id="rankScopeOp"><option value="include">Include members of</option><option value="exclude">Exclude members of</option></select></label><div class="position-relative"><label class="small">Coalition / alliance / corporation<input class="form-control form-control-sm" id="rankScopeName" placeholder="e.g. The Imperium" autocomplete="off"></label><div class="rank-lookup list-group" id="rankScopeResults"></div></div></div>
-  <div class="mt-2" id="rankScopeChips">{% for op,terms in [('include',include_terms),('exclude',exclude_terms)] %}{% for term in terms %}<span class="rank-chip badge {{ 'text-bg-primary' if op=='include' else 'text-bg-danger' }}"><span>{{ '+' if op=='include' else '−' }} {{ term.label }}</span><input type="hidden" name="{{ op }}" value="{{ term.token }}"><button type="button" aria-label="Remove filter" onclick="this.parentElement.remove()">×</button></span>{% endfor %}{% endfor %}</div>
- </details>
+ <div class="rank-inline-search d-flex flex-wrap gap-3 align-items-end w-100 border-top pt-3">
+ <span class="fw-semibold small align-self-center">Find in ranking</span>
+ <label class="small">Search by<select class="form-select form-select-sm" id="rankSearchBy"><option value="name">Name</option><option value="rank" {% if position and not q and not target_id %}selected{% endif %}>Rank</option></select></label>
+ <div id="rankNameFields" class="kb-search-wrap"><label class="small">Name<input class="form-control form-control-sm" id="rankName" name="q" value="{{ q }}" autocomplete="off" placeholder="Start typing a name"></label><input type="hidden" name="target_id" id="rankTarget" value="{{ target_id }}"><div class="kb-search-results" id="rankNameResults"></div></div>
+ <label class="small" id="rankPositionFields">Rank<input class="form-control form-control-sm" type="number" name="position" id="rankPosition" value="{{ position }}" min="1" max="1000000000" placeholder="e.g. 25000"></label>
+ <button class="btn btn-sm btn-outline-primary" type="submit">Find in ranking</button>
+ {% if q or target_id or position %}<a class="btn btn-sm btn-outline-light" href="{{ ranking_link }}">Clear search</a>{% endif %}
+ </div>
+ <div class="kb-filter-shell rank-filter w-100 {{ 'open' if include_terms or exclude_terms else '' }}" id="rankFilter">
+  <button class="kb-filter-toggle" type="button" id="rankFilterToggle" aria-expanded="{{ 'true' if include_terms or exclude_terms else 'false' }}"><span>Filters</span><span class="kb-filter-summary" id="rankFilterSummary">ALL</span></button>
+  <div class="kb-filter-panel">
+   <section class="kb-family">
+    <div class="kb-family-head"><div class="kb-family-title">Entities</div><div class="kb-family-default">Coalitions / alliances / corporations</div></div>
+    <div class="kb-search-wrap"><input class="form-control form-control-sm" type="search" id="rankScopeName" placeholder="Search a coalition, alliance or corporation…" autocomplete="off"><div class="kb-search-results" id="rankScopeResults"></div></div>
+    <div class="kb-term-list" id="rankScopeChips">{% for op,terms in [('include',include_terms),('exclude',exclude_terms)] %}{% for term in terms %}{% set entity_type, entity_id = term.token.split(':') %}<div class="kb-term {{ 'kb-term-minus' if op=='exclude' else '' }}" data-rank-term>
+     <button class="btn btn-sm kb-term-sign {{ 'btn-outline-danger' if op=='exclude' else 'btn-outline-primary' }}" type="button" data-rank-sign aria-label="Toggle include or exclude">{{ '−' if op=='exclude' else '+' }}</button>
+     {% if term.logo_url %}<img src="{{ term.logo_url }}" alt="" loading="lazy">{% else %}<span class="rank-filter-placeholder" aria-hidden="true">C</span>{% endif %}
+     <div class="kb-term-name"><div class="kb-term-name-main">{{ term.label }}</div><div class="kb-term-name-meta">{{ entity_type|capitalize }}</div></div>
+     <input type="hidden" name="{{ op }}" value="{{ term.token }}"><button class="kb-term-remove" type="button" data-rank-remove aria-label="Remove filter">×</button>
+    </div>{% endfor %}{% endfor %}</div>
+   </section>
+   <div class="kb-filter-actions"><button class="btn btn-primary btn-sm" type="submit">Apply filters</button><button class="btn btn-outline-light btn-sm" id="rankFilterClear" type="button">Clear</button><span class="muted-line small">No + term = ALL, then − terms are excluded.</span></div>
+   <div class="muted-line small mt-2">Membership as of {{ membership_date }}. Scores cover the entity's whole career up to the chosen month.</div>
+  </div>
+ </div>
 </form>
 
 </section>
@@ -62,14 +76,7 @@
 </details>
 
 <script>
-(()=>{const $=id=>document.getElementById(id),kind=$('rankingKind');
-function autocomplete(inputId,resultsId,purpose,onPick){const input=$(inputId),results=$(resultsId);if(!input)return;let timer,sequence=0;input.addEventListener('input',()=>{clearTimeout(timer);const current=++sequence;results.replaceChildren();if(input.value.trim().length<2)return;timer=setTimeout(async()=>{try{const url=new URL('/admin/debug/rankings/lookup',location.origin);url.search=new URLSearchParams({kind:kind.value,purpose,q:input.value.trim()});const r=await fetch(url);const data=await r.json();if(!r.ok||current!==sequence)return;for(const item of data.results||[]){const b=document.createElement('button');b.type='button';b.className='list-group-item list-group-item-action small';b.textContent=`${item.name} (${item.entity_type})`;b.onclick=()=>{++sequence;results.replaceChildren();onPick(item);};results.append(b);}}catch(e){results.replaceChildren();}},250);});kind.addEventListener('change',()=>{++sequence;results.replaceChildren();});}
-autocomplete('rankName','rankNameResults','target',item=>{$('rankName').value=item.name;$('rankTarget').value=item.entity_id;});
-if($('rankName'))$('rankName').addEventListener('input',()=>{$('rankTarget').value='';});
-const by=$('rankSearchBy');function toggleSearch(){if(!by)return;const rank=by.value==='rank';$('rankNameFields').hidden=rank;$('rankPositionFields').hidden=!rank;$('rankName').disabled=rank;$('rankTarget').disabled=rank;$('rankPosition').disabled=!rank;}if(by){by.onchange=toggleSearch;toggleSearch();}
-kind.addEventListener('change',()=>{if($('rankTarget'))$('rankTarget').value='';});
-autocomplete('rankScopeName','rankScopeResults','scope',item=>{const op=$('rankScopeOp').value,value=`${item.entity_type}:${item.entity_id}`,container=$('rankScopeChips');if([...container.querySelectorAll('input')].some(i=>i.name===op&&i.value===value))return;const chip=document.createElement('span');chip.className='rank-chip badge '+(op==='include'?'text-bg-primary':'text-bg-danger');const label=document.createElement('span');label.textContent=(op==='include'?'+ ':'− ')+item.name;const input=document.createElement('input');input.type='hidden';input.name=op;input.value=value;const close=document.createElement('button');close.type='button';close.textContent='×';close.setAttribute('aria-label','Remove filter');close.onclick=()=>chip.remove();chip.append(label,input,close);container.append(chip);$('rankScopeName').value='';});
-})();
+{% include "ranking_controls.js" %}
 (()=>{const $=id=>document.getElementById(id);let wasRunning=false;async function poll(){try{const r=await fetch('/admin/debug/rankings/status',{cache:'no-store'});if(!r.ok)throw new Error('Job status unavailable');const data=await r.json(),p=data.progress||{};if($('rankStart'))$('rankStart').disabled=data.running;if($('rankStop'))$('rankStop').disabled=!data.running;$('rankProgress').textContent=[data.running?'Running':(p.phase||'Not started'),data.running?p.phase:'',p.months!==undefined?`Months ${p.processed||0} / ${p.months}`:'',p.current_month?`Current: ${p.current_month}`:'',p.entity_rows!==undefined?`Monthly rows saved: ${Number(p.entity_rows).toLocaleString()}`:''].filter(Boolean).join(' · ');$('rankBar').style.width=(p.months?100*(p.processed||0)/p.months:0)+'%';if(p.error)$('rankError').textContent=p.error;if(wasRunning&&!data.running&&p.phase==='completed')location.reload();wasRunning=data.running;}catch(e){$('rankError').textContent=e.message;}finally{setTimeout(poll,3000);}}for(const action of ['start','stop']){const b=$('rank'+action[0].toUpperCase()+action.slice(1));if(b)b.onclick=async()=>{b.disabled=true;$('rankError').textContent='';try{const r=await fetch('/admin/debug/rankings/'+action,{method:'POST',headers:{'Accept':'application/json'}});const d=await r.json();if(!r.ok)throw new Error(d.error||'Job action failed');if(action==='start')wasRunning=true;}catch(e){$('rankError').textContent=e.message;b.disabled=false;}};}poll();})();
 </script>
 {% endblock %}

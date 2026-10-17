@@ -153,6 +153,14 @@ def lookup(query,kind,purpose='target'):
         return [dict(entity_type=kind,entity_id=r[0],name=r[1]) for r in cur]
 
 
+def scope_logo(token):
+    kind,id=token.split(':')
+    if kind=='coalition':
+        from .coalitions import coalition_logo_url
+        return coalition_logo_url(int(id))
+    return f'https://images.evetech.net/{"alliances" if kind=="alliance" else "corporations"}/{id}/logo?size=64'
+
+
 def scope_labels(tokens):
     if not tokens:
         return {}
@@ -163,9 +171,9 @@ def scope_labels(tokens):
         for kind,table,id_column in [('coalition','coalitions','coalition_id'),('alliance','alliances','alliance_id'),('corporation','corporations','corporation_id')]:
             ids=[int(token.split(':')[1]) for token in tokens if token.startswith(kind+':')]
             if ids:
-                cur.execute(sql.SQL('SELECT {id},name FROM entities.{table} WHERE {id}=ANY(%s)').format(
-                    id=sql.Identifier(id_column),table=sql.Identifier(table)),(ids,))
-                result.update({f'{kind}:{id}':name for id,name in cur})
+                cur.execute(sql.SQL('SELECT {id},name,to_jsonb(e)->>%s FROM entities.{table} e WHERE {id}=ANY(%s)').format(
+                    id=sql.Identifier(id_column),table=sql.Identifier(table)),('short_name' if kind=='coalition' else 'ticker',ids))
+                result.update({f'{kind}:{id}':name+(f' [{ticker}]' if ticker else '') for id,name,ticker in cur})
     return result
 
 

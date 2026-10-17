@@ -101,7 +101,8 @@ This does not measure live server latency or historical snapshot lookup cost.
 
 ## Search, scope and affiliations
 
-The **Search** tab accepts a name (with suggestions) or a rank. It returns five
+The inline **Find in ranking** controls accept a name (with suggestions) or a rank
+directly on the ranking page; there is no separate search tab. It returns five
 neighbours before/after the target where available and highlights the requested
 entity/rank. It works beyond the cached top 1,000; no whole-history KM scan is
 needed. Equal scores are ordered by entity ID for deterministic positions.
@@ -123,3 +124,8 @@ so a cached score does not freeze current memberships. Known character/corporati
 history is used for historical month-end affiliations. Where unavailable, the page
 says so. Existing earned/lost credit still uses affiliations recorded on killmails;
 this display/filter metadata does not redistribute that credit.
+
+The membership picker shares the standard killboard/tool filter styling: rich
+suggestions with logos, entity types and tickers, and selected entity rows with
+per-item +/− toggles and removal. No separate include/exclude dropdown is needed.
+The common stylesheet is included by both the original filter and rankings.

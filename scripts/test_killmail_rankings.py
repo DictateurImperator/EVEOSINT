@@ -66,6 +66,10 @@ class ControlTests(unittest.TestCase):
             self.assertEqual(query.call_args.args[:3],('character','weighted','net'))
             self.assertEqual(query.call_args.args[3:5],(JAN,FEB))
             self.assertIn('<strong>All time</strong>',r.text)
+            self.assertIn('id="rankName"',r.text)
+            self.assertIn('id="rankSearchBy"',r.text)
+            self.assertNotIn('nav nav-tabs',r.text)
+            self.assertIn('data-rank-sign',r.text)
             self.assertLess(r.text.index('class="table rank-table'),r.text.index('Monthly ranking builder'))
             for url in ('?from=&through=', '?page=2'):
                 response=self.client.get('/admin/debug/rankings'+url)
@@ -136,7 +140,7 @@ class ControlTests(unittest.TestCase):
         row=dict(entity_id=3,name='Pilot',destroyed=Decimal(100),lost=Decimal(0),net=Decimal(100),efficiency=100,
                  kills=1,losses=0,unvalued_kills=0,unvalued_losses=0,rank=2500,highlight=True)
         with patch.object(rankings,'catalog',return_value=months),patch.object(rankings,'scope_labels',return_value={'coalition:1':'The Imperium'}),patch.object(rankings,'explore_rows',return_value=dict(rows=[row],offset=2494,position=2500,more=False)) as query:
-            response=self.client.get('/admin/debug/rankings?view=search&target_id=3&q=Pilot&include=coalition:1&exclude=alliance:9&through=2026-01')
+            response=self.client.get('/admin/debug/rankings?target_id=3&q=Pilot&include=coalition:1&exclude=alliance:9&through=2026-01')
             self.assertEqual(response.status_code,200)
             self.assertIn('Around rank 2,500',response.text)
             self.assertIn('The Imperium',response.text)
@@ -447,6 +451,8 @@ class DatabaseTests(unittest.TestCase):
         self.assertEqual(historical[0]['corporation_name'],'Old Corp')
         self.assertEqual(historical[0]['alliance_name'],'Old Alliance')
         self.assertIsNone(historical[1]['corporation_id'])
+        with patch.object(rankings,'db',side_effect=lambda:psycopg2.connect(self.dsn)):
+            self.assertEqual(rankings.scope_labels(['corporation:10','alliance:1000']),{'corporation:10':'Old Corp','alliance:1000':'Old Alliance'})
 
     def test_transaction_rollback_preserves_previous_month(self):
         self.build()

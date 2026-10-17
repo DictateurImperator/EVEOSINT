@@ -27,7 +27,7 @@ def page(request: Request):
     context=app_context(request=request,user=user,title='EVEOSINT - ISK rankings',active_module='admin',active_menu_key='admin.debug')
     params=request.query_params
     kind=params.get('kind','character');mode=params.get('mode','classic');sort=params.get('sort','destroyed')
-    view=params.get('view','ranking')
+    view='ranking'  # Search shares this page; old view=search links remain valid.
     q=params.get('q','').strip()[:100]
     custom_period=bool(params.get('through'))
     months=[];rows=[];first=last=None;error=None;cached=False;elapsed=0;page_number=1;offset=0
@@ -51,7 +51,7 @@ def page(request: Request):
             started=time.monotonic()
             if months[0].get('totals_ready',True):
                 target_id=None;position=offset+1
-                searching=view=='search' and bool(q or params.get('target_id') or params.get('position'))
+                searching=bool(q or params.get('target_id') or params.get('position'))
                 if searching:
                     if params.get('target_id'):
                         target_id=int(params['target_id'])
@@ -98,8 +98,8 @@ def page(request: Request):
         return '/admin/debug/rankings?'+urlencode(dict(base,**changes),doseq=True)
     context.update(months=months,rows=rows,kind=kind,mode=mode,sort=sort,view=view,q=q,
         target_id=params.get('target_id',''),position=params.get('position',''),found_position=found_position,
-        include_terms=[dict(token=v,label=labels.get(v,v)) for v in includes],
-        exclude_terms=[dict(token=v,label=labels.get(v,v)) for v in excludes],
+        include_terms=[dict(token=v,label=labels.get(v,v),logo_url=rankings.scope_logo(v)) for v in includes],
+        exclude_terms=[dict(token=v,label=labels.get(v,v),logo_url=rankings.scope_logo(v)) for v in excludes],
         ranking_link=link(view='ranking'),search_link=link(view='search'),
         all_time_link='/admin/debug/rankings?'+urlencode({k:v for k,v in base.items() if k!='through'},doseq=True),
         last=params.get('through',''),custom_period=custom_period,
@@ -107,8 +107,8 @@ def page(request: Request):
         membership_date=('end of '+last.strftime('%B %Y')) if custom_period and last else 'today',
         totals_ready=bool(months and months[0].get('totals_ready',True)),error=error,can_run='admin.jobs.run' in user.get('permissions',set()),
         selected=selected,missing=missing,cached=cached,elapsed=elapsed,page_number=page_number,offset=offset,
-        previous=link(page=page_number-1) if view=='ranking' and page_number>1 else None,
-        next_page=link(page=page_number+1) if view=='ranking' and more else None,
+        previous=link(page=page_number-1) if not found_position and page_number>1 else None,
+        next_page=link(page=page_number+1) if not found_position and more else None,
         compact_isk=rankings.compact_isk,full_isk=rankings.full_isk,
         coverage_kills=sum(m['killmails'] for m in selected),coverage_valued=sum(m['valued'] for m in selected),
         coverage_zero=sum(m['zero_damage'] for m in selected),dirty=sum(m['dirty'] for m in selected))
