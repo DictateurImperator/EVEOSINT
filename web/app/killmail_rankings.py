@@ -54,6 +54,37 @@ def full_isk(cents):
     return f'{Decimal(cents)/100:,.2f} ISK'
 
 
+def combat_history(kind, entity_id):
+    """One entity's sparse monthly facts, never cumulative snapshots or raw kills."""
+    if kind not in KINDS or not 0 < entity_id < 2**63:
+        raise ValueError('Invalid entity.')
+    fields = ('month', 'destroyed_cents', 'weighted_destroyed_cents', 'lost_cents',
+              'kills', 'losses', 'unvalued_kills', 'unvalued_losses', 'dirty')
+    with db() as conn, conn.cursor() as cur:
+        cur.execute("SET LOCAL statement_timeout='5s'")
+        cur.execute("SELECT to_regclass('analytics.killmail_rankings_monthly')")
+        if cur.fetchone()[0] is None:
+            return dict(ready=False, rows=[], totals=None)
+        cur.execute('SELECT EXISTS(SELECT 1 FROM analytics.killmail_ranking_months)')
+        if not cur.fetchone()[0]:
+            return dict(ready=False, rows=[], totals=None)
+        cur.execute('''SELECT f.month,f.destroyed_cents,f.weighted_destroyed_cents,
+                             f.lost_cents,f.kills,f.losses,f.unvalued_kills,f.unvalued_losses,
+                             m.built_revision<>COALESCE(v.revision,0) AS dirty
+                      FROM analytics.killmail_rankings_monthly f
+                      JOIN analytics.killmail_ranking_months m USING(month)
+                      LEFT JOIN analytics.killmail_ranking_versions v USING(month)
+                      WHERE f.entity_kind=%s AND f.entity_id=%s ORDER BY f.month DESC''',
+                    (KINDS[kind][0], entity_id))
+        rows = [dict(zip(fields, row)) for row in cur]
+    totals = {field: sum(row[field] for row in rows) for field in fields[1:-1]}
+    for row in [*rows, totals]:
+        raw = row['destroyed_cents']
+        row['ratio'] = Decimal(100) * row['weighted_destroyed_cents'] / raw if raw else None
+    totals['dirty'] = any(row['dirty'] for row in rows)
+    return dict(ready=True, rows=rows, totals=totals)
+
+
 def catalog():
     with db() as conn, conn.cursor() as cur:
         cur.execute("SET LOCAL statement_timeout='5s'")

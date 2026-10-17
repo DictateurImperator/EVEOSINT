@@ -46,6 +46,61 @@ class ProgressTests(unittest.TestCase):
             self.assertFalse(report.thread.is_alive())
 
 
+class CombatStatsTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.routes = fixture.f.load('routes_entities')
+
+    def test_profile_stats_menu_and_monthly_table_for_each_entity_kind(self):
+        app=FastAPI();app.include_router(self.routes.router)
+        rows=[dict(month=date(2026,2,1),destroyed_cents=Decimal(100000000000),
+                   weighted_destroyed_cents=Decimal(250000000),lost_cents=Decimal(100),
+                   kills=2,losses=1,unvalued_kills=0,unvalued_losses=0,ratio=Decimal('.25'),dirty=False),
+              dict(month=date(2025,12,1),destroyed_cents=Decimal(0),
+                   weighted_destroyed_cents=Decimal(0),lost_cents=Decimal(10000),
+                   kills=0,losses=1,unvalued_kills=0,unvalued_losses=1,ratio=None,dirty=True)]
+        data=dict(ready=True,rows=rows,totals=dict(rows[0],unvalued_losses=1,dirty=True))
+        user=dict(username='Reader',permissions={'entities.view'})
+        with patch.object(self.routes,'require_login',return_value=user), \
+             patch.object(self.routes,'get_alliance_population_summary',return_value=None), \
+             patch.object(self.routes,'get_corporation_population_summary',return_value=None), \
+             patch.object(rankings,'combat_history',return_value=data) as history,TestClient(app) as client:
+            for kind in rankings.KINDS:
+                with self.subTest(kind=kind),patch.object(self.routes,'get_entity_profile',return_value={
+                        'entity_type':kind,'entity_id':42,'name':'Example <entity>','subtitle':kind}):
+                    response=client.get(f'/{kind}/42?tab=stats')
+                    self.assertEqual(response.status_code,200)
+                    self.assertIn(f'/{kind}/42?tab=stats',response.text)
+                    self.assertIn('Combat stats',response.text)
+                    self.assertIn('Monthly combat history',response.text)
+                    self.assertIn('1.00 B',response.text)
+                    self.assertIn('0.250%',response.text)
+                    self.assertIn('1,000,000,000.00 ISK',response.text)
+                    self.assertIn('Partial ISK totals',response.text)
+                    self.assertIn('awaiting a ranking refresh',response.text)
+                    self.assertIn('Example &lt;entity&gt;',response.text)
+                    self.assertLess(response.text.index('>2026</th>'),response.text.index('>2025</th>'))
+                    history.assert_called_with(kind,42)
+
+    def test_profile_stats_denies_access_without_read_permission(self):
+        app=FastAPI();app.include_router(self.routes.router)
+        with patch.object(self.routes,'require_login',return_value=dict(username='Denied',permissions=set())), \
+             patch.object(rankings,'combat_history') as history,TestClient(app) as client:
+            self.assertEqual(client.get('/character/42?tab=stats',follow_redirects=False).status_code,302)
+            history.assert_not_called()
+
+    def test_profile_stats_empty_and_unbuilt_states(self):
+        app=FastAPI();app.include_router(self.routes.router)
+        with patch.object(self.routes,'require_login',return_value=dict(username='Reader',permissions={'entities.view'})), \
+             patch.object(self.routes,'get_entity_profile',return_value=dict(entity_type='character',entity_id=42,name='Pilot',subtitle='Character')), \
+             TestClient(app) as client:
+            for ready,message in [(False,'once monthly rankings have been built'),(True,'No combat activity recorded')]:
+                with patch.object(rankings,'combat_history',return_value=dict(ready=ready,rows=[],totals=None)):
+                    response=client.get('/character/42?tab=stats')
+                    self.assertEqual(response.status_code,200)
+                    self.assertIn(message,response.text)
+
+
 class ControlTests(unittest.TestCase):
     def setUp(self):
         self.cache_dir=tempfile.TemporaryDirectory(prefix='ranking-cache-test-')
@@ -416,6 +471,30 @@ class DatabaseTests(unittest.TestCase):
             cur.execute('''SELECT destroyed_cents,weighted_destroyed_cents,lost_cents,kills,losses,unvalued_kills,unvalued_losses
                            FROM analytics.killmail_rankings_monthly WHERE entity_kind=%s AND entity_id=%s AND month=%s''',(kind,id,month))
             return cur.fetchone()
+
+    def test_combat_history_reads_monthly_not_cumulative_values_for_all_kinds(self):
+        with patch.object(rankings,'db',side_effect=lambda: psycopg2.connect(self.dsn)):
+            self.assertFalse(rankings.combat_history('character',1)['ready'])
+        self.build(JAN); self.build(FEB)
+        # Distinct entities and sparse rows must remain isolated; no raw KM reads.
+        with patch.object(rankings,'db',side_effect=lambda: psycopg2.connect(self.dsn)):
+            for kind,kind_id,entity_id in [('character',1,1),('corporation',2,10),('alliance',3,1000)]:
+                data=rankings.combat_history(kind,entity_id)
+                self.assertTrue(data['ready'])
+                self.assertEqual(data['totals']['destroyed_cents'],sum(self.facts(kind_id,entity_id,m)[0] for m in (JAN,FEB) if self.facts(kind_id,entity_id,m)))
+                for row in data['rows']:
+                    facts=self.facts(kind_id,entity_id,row['month'])
+                    self.assertEqual(row['destroyed_cents'],facts[0])
+                    self.assertEqual(row['weighted_destroyed_cents'],facts[1])
+                    self.assertEqual(row['ratio'],100*facts[1]/facts[0] if facts[0] else None)
+            pilot=rankings.combat_history('character',1)
+            self.assertEqual([r['month'] for r in pilot['rows']],[FEB,JAN])
+            self.assertEqual(pilot['totals']['destroyed_cents'],Decimal(40000))
+            self.assertEqual(pilot['totals']['ratio'],Decimal('82.5'))
+            losses_only=rankings.combat_history('character',9)
+            self.assertIsNone(losses_only['totals']['ratio'])
+            self.assertEqual(rankings.combat_history('character',999999)['rows'],[])
+        with self.assertRaises(ValueError):rankings.combat_history('coalition',42)
 
     def test_terminal_purge_is_limited_to_generated_rankings(self):
         self.build(JAN)

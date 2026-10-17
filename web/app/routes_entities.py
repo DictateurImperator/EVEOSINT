@@ -5303,12 +5303,19 @@ def entity_profile(request: Request, entity_type: str, entity_id: int):
 
     requested_tab = request.query_params.get("tab", "killboard")
     allowed_tabs = {"killboard", "pilotable-ships"}
+    if entity_type in {"character", "corporation", "alliance"}:
+        allowed_tabs.add("stats")
     if entity_type in {"alliance", "corporation"}:
         allowed_tabs.add("population")
     if entity_type in {"character", "corporation", "alliance", "system"}:
         allowed_tabs.add("history")
     if requested_tab not in allowed_tabs:
         requested_tab = "killboard"
+
+    if requested_tab == "stats":
+        redirect = require_permission_or_redirect(user, "entities.view")
+        if redirect:
+            return redirect
 
     context = app_context(
         request=request,
@@ -5326,6 +5333,8 @@ def entity_profile(request: Request, entity_type: str, entity_id: int):
     alliance_population_summary = None
     corporation_population_summary = None
     corporation_history = None
+    combat_stats = None
+    combat_stats_error = None
 
     try:
         profile_started = perf_counter()
@@ -5334,6 +5343,15 @@ def entity_profile(request: Request, entity_type: str, entity_id: int):
     except EntityError as exc:
         profile_ms = round((perf_counter() - profile_started) * 1000, 1) if "profile_started" in locals() else None
         return _entity_route_error_response(request, exc)
+
+    if requested_tab == "stats" and profile:
+        from . import killmail_rankings
+        context.update(compact_isk=killmail_rankings.compact_isk, full_isk=killmail_rankings.full_isk)
+        try:
+            combat_stats = killmail_rankings.combat_history(entity_type, entity_id)
+        except Exception:
+            logger.exception("Combat stats load failed for %s %s", entity_type, entity_id)
+            combat_stats_error = "Combat stats are temporarily unavailable. Please retry."
 
     if profile and profile.get("entity_type") == "alliance":
         try:
@@ -5416,6 +5434,15 @@ def entity_profile(request: Request, entity_type: str, entity_id: int):
                 "permission_key": "entities.view",
                 "active": requested_tab == "population",
             })
+        profile_menu.insert(1, {
+            "id": None,
+            "menu_key": "stats",
+            "label": "Combat stats",
+            "href": f"{base_url}?tab=stats",
+            "icon": "▥",
+            "permission_key": "entities.view",
+            "active": requested_tab == "stats",
+        })
         if profile.get("entity_type") in {"character", "corporation", "alliance"}:
             profile_menu.append({
                 "id": None,
@@ -5459,6 +5486,8 @@ def entity_profile(request: Request, entity_type: str, entity_id: int):
         "alliance_population_summary": alliance_population_summary,
         "corporation_population_summary": corporation_population_summary,
         "corporation_history": corporation_history,
+        "combat_stats": combat_stats,
+        "combat_stats_error": combat_stats_error,
         "killmail_ship_options": killmail_ship_options,
         "killmail_ship_options_error": killmail_ship_options_error,
         "killmail_page": killmail_page,

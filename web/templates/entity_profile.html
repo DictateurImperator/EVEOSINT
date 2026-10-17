@@ -666,7 +666,9 @@
     {% endif %}
   </section>
 
-  {% if profile.entity_type in ['system', 'constellation', 'region'] and profile_tab == 'killboard' %}
+  {% if profile.entity_type in ['character', 'corporation', 'alliance'] and profile_tab == 'stats' %}
+    {% include "entity_combat_stats.html" %}
+  {% elif profile.entity_type in ['system', 'constellation', 'region'] and profile_tab == 'killboard' %}
   <section class="content-card p-3 p-md-4 mb-4">
     <div class="d-flex justify-content-between align-items-start mb-3">
       <div>

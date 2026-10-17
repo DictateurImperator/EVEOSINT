@@ -1,0 +1,42 @@
+{% macro stats_cells(row) -%}
+  <td class="text-success">{{ '{:,}'.format(row.kills) }}</td>
+  <td class="text-success" title="{{ full_isk(row.destroyed_cents) }}">{{ compact_isk(row.destroyed_cents) }}</td>
+  <td class="text-success" title="{{ full_isk(row.weighted_destroyed_cents) }}">{{ compact_isk(row.weighted_destroyed_cents) }}</td>
+  <td title="True ISK divided by raw ISK, multiplied by 100">{% if row.ratio is not none %}{{ '%.3f'|format(row.ratio) }}%{% else %}—{% endif %}</td>
+  <td class="text-danger">{{ '{:,}'.format(row.losses) }}</td>
+  <td class="text-danger" title="{{ full_isk(row.lost_cents) }}">{{ compact_isk(row.lost_cents) }}</td>
+{%- endmacro %}
+<section class="content-card p-3 p-md-4 mb-4">
+  <h2 class="h5 fw-bold mb-2">Combat stats</h2>
+  <p class="muted-line">Raw ISK credits the full value of each kill once. True ISK credits only the share of damage dealt by this {{ profile.entity_type }}. The ratio is True ISK / Raw ISK. Losses always use their full value.</p>
+  {% if combat_stats_error %}
+    <div class="alert alert-warning" role="alert">{{ combat_stats_error }}</div>
+  {% elif not combat_stats or not combat_stats.ready %}
+    <p class="muted-line">Combat stats will be available once monthly rankings have been built.</p>
+  {% elif not combat_stats.rows %}
+    <p class="muted-line">No combat activity recorded for this entity in the months calculated so far.</p>
+  {% else %}
+    {% set totals = combat_stats.totals %}
+    {% if totals.dirty %}<div class="alert alert-warning">Some months are awaiting a ranking refresh. These are the last calculated values.</div>{% endif %}
+    {% if totals.unvalued_kills or totals.unvalued_losses %}
+      <p class="muted-line">Partial ISK totals: {{ '{:,}'.format(totals.unvalued_kills) }} kills and {{ '{:,}'.format(totals.unvalued_losses) }} losses still have no value. They are included in the counts.</p>
+    {% endif %}
+    <h3 class="h6 mt-4">Monthly history</h3>
+    <p class="muted-line">{{ combat_stats.rows[-1].month.strftime('%B %Y') }} – {{ combat_stats.rows[0].month.strftime('%B %Y') }} · Calculated months only. Months with no activity are omitted. The latest month may be incomplete.</p>
+    <div class="table-responsive">
+      <table class="table align-middle combat-history" aria-label="Monthly combat history">
+        <thead><tr><th scope="col">Month</th><th scope="col">Kills</th><th scope="col">Raw ISK destroyed</th><th scope="col">True ISK destroyed</th><th scope="col">True / raw</th><th scope="col">Losses</th><th scope="col">ISK lost</th></tr></thead>
+        <tbody>
+          <tr class="fw-bold"><th scope="row">All calculated months</th>{{ stats_cells(totals) }}</tr>
+          {% for year in combat_stats.rows|groupby('month.year')|reverse %}
+            <tr class="table-active"><th colspan="7" scope="rowgroup">{{ year.grouper }}</th></tr>
+            {% for row in year.list %}
+              <tr><th scope="row" class="fw-normal">{{ row.month.strftime('%B') }}{% if row.dirty %}<span class="muted-line" title="Awaiting refresh"> *</span>{% endif %}</th>{{ stats_cells(row) }}</tr>
+            {% endfor %}
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% endif %}
+</section>
+<style>.combat-history{font-variant-numeric:tabular-nums;white-space:nowrap}.combat-history td,.combat-history thead th:not(:first-child){text-align:right}</style>
