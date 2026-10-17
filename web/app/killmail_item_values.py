@@ -57,8 +57,10 @@ def _load_prices(conn, day, roots):
     def materials(type_id):
         # The special fuel construction also lives in the shared calculator.
         return recipes.get(type_id,(1,{}))[1] if type_id != 2233 else {3962:1,2867:1,2871:1,2876:1,2872:1}
-    needed = set(roots)
-    pending = list(roots)
+    equivalents = calc.load_equivalents(conn)
+    ordinary = {target for root in roots for target in equivalents.get(root, ())}
+    needed = set(roots) | ordinary
+    pending = list(needed)
     while pending:
         root = pending.pop()
         for material in materials(root):
@@ -96,6 +98,12 @@ def _load_prices(conn, day, roots):
         while pending:
             node = pending.pop()
             group, category, _ = metadata.get(node,(None,None,''))
+            if node in equivalents:
+                for target in equivalents[node]:
+                    if target not in reachable:
+                        reachable.add(target)
+                        pending.append(target)
+                continue
             has_exact = Decimal(str(exact.get(str(node)) or 0)) > 0
             if calc.fixed_price(node,day) is not None or category == 91 or group in (29,4513,4759):
                 continue
@@ -107,6 +115,8 @@ def _load_prices(conn, day, roots):
         quotes = {}
         missing = []
         for type_id in reachable:
+            if type_id in equivalents:
+                continue
             value = Decimal(str(exact.get(str(type_id)) or 0))
             if value > 0:
                 quotes[type_id] = (day,value)
@@ -159,12 +169,12 @@ def _load_prices(conn, day, roots):
                 # exceeds the page budget. Never turn a timeout into a penny quote.
                 conn.rollback()
                 blocked.update(missing)
-    engine=calc.Pricing(metadata,{}, {},valuation_mode='loss-day',recipe_history=history,first_prices=quotes)
+    engine=calc.Pricing(metadata,{}, {},valuation_mode='loss-day',recipe_history=history,first_prices=quotes,abyssal_equivalents=equivalents)
     result={}
     for type_id in roots:
         try:
             value, unknown = engine.price(type_id,day,day)
-            result[type_id]=None if type_id in blocked or unknown else value
+            result[type_id]=None if type_id in blocked or any(t in blocked for t in equivalents.get(type_id, ())) or unknown else value
         except calc.HistoricalRecipeUnavailable:
             result[type_id]=None
     return result

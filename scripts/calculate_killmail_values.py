@@ -3,13 +3,16 @@
 
 if __package__:
     from .pipeline_metrics import MetricEmitter
+    from .abyssal_pricing import load_equivalents, is_abyssal_module, POLICY_VERSION
 else:
     from pipeline_metrics import MetricEmitter
+    from abyssal_pricing import load_equivalents, is_abyssal_module, POLICY_VERSION
 
 import argparse
 import json
 import logging
 import os
+import re
 import shutil
 import signal
 import threading
@@ -35,7 +38,7 @@ else:
 
 START = date(2003, 1, 1)
 LOCK = 79130423
-FORMULA_VERSION = "loss-day-v6-price-dates"
+FORMULA_VERSION = "loss-day-v7-abyssal-equivalents"
 SCHEMA = Path(__file__).with_name("killmail_values_schema.sql")
 LOG = logging.getLogger("killmail_values")
 ONE_CENT = Decimal("0.01")
@@ -313,9 +316,10 @@ class Pricing:
     """Local equivalent of zKill Price/Build, with no network or writes."""
 
     def __init__(self, metadata, recipes, counts, lookup=None, *, clock=None, rules_at=None,
-                 valuation_mode="zkill", recipe_history=None, first_prices=None):
+                 valuation_mode="zkill", recipe_history=None, first_prices=None, abyssal_equivalents=None):
         if valuation_mode not in {"zkill", "loss-day"}:
             raise ValueError("Unknown valuation mode")
+        self.abyssal_equivalents = dict(abyssal_equivalents or {})
         self.metadata = metadata
         self.recipes = recipes
         self.counts = counts
@@ -443,6 +447,16 @@ class Pricing:
 
     def _price(self, type_id, kill_day, market_day, date_only, stack):
         group, category, _name = self.metadata.get(type_id, (None, None, ""))
+        # This local policy ALWAYS wins over any abyssal market/cache quote.
+        if type_id in self.abyssal_equivalents or is_abyssal_module(self.metadata, type_id):
+            equivalents = self.abyssal_equivalents.get(type_id)
+            if not equivalents:
+                raise HistoricalRecipeUnavailable(f'No approved ordinary equivalent for abyssal module {type_id}')
+            quotes = [self.price(ordinary, kill_day, market_day, date_only, stack) for ordinary in equivalents]
+            known = [value for value, missing in quotes if not missing]
+            if not known:
+                raise HistoricalRecipeUnavailable(f'Ordinary equivalent price unavailable for abyssal module {type_id}')
+            return min(known), False
         if category == 91:
             return ONE_CENT, False
         fixed = fixed_price(type_id, kill_day, date_only)
@@ -565,6 +579,41 @@ def pricing_date_sql(valuation_mode="zkill", alias=None):
     raise ValueError("Unknown valuation mode")
 
 
+def valuation_selection(month, recalculate_types=(), alias='k'):
+    if not recalculate_types:
+        return sql.SQL('{}.estimated_value_cents IS NULL').format(sql.Identifier(alias))
+    return sql.SQL("""EXISTS(SELECT 1 FROM rawkm.{items} a
+        WHERE a.killmail_id={k}.killmail_id AND a.killmail_time={k}.killmail_time
+          AND a.item_type_id=ANY({types}))""").format(
+        items=sql.Identifier(relation_name('killmail_items', month)), k=sql.Identifier(alias),
+        types=sql.Literal(list(recalculate_types)))
+
+
+def abyssal_target_months(conn, recalculate_types, report=lambda **kw: None, stopped=None):
+    with conn.cursor() as cur:
+        cur.execute("""SELECT c.relname FROM pg_inherits i JOIN pg_class c ON c.oid=i.inhrelid
+            WHERE i.inhparent='rawkm.killmail_items'::regclass ORDER BY c.relname""")
+        names = [row[0] for row in cur]
+    targets = []
+    for index, name in enumerate(names, 1):
+        if stopped is not None and stopped.is_set():
+            raise StopRequested()
+        match = re.fullmatch(r'killmail_items_(\d{4})_(\d{2})', name)
+        if not match:
+            continue
+        month = date(int(match[1]), int(match[2]), 1)
+        report('finding_abyssal_kills', current_month=month.isoformat(),
+               scan_months_done=index-1, scan_months_total=len(names), affected_months=len(targets))
+        with conn.cursor() as cur:
+            cur.execute(sql.SQL("SELECT max((killmail_time AT TIME ZONE 'UTC')::date) FROM rawkm.{} WHERE item_type_id=ANY(%s)").format(sql.Identifier(name)), (list(recalculate_types),))
+            latest = cur.fetchone()[0]
+        conn.commit()
+        if latest is not None:
+            targets.append((month, latest))
+    report('found_abyssal_kills', scan_months_done=len(names), affected_months=len(targets))
+    return targets
+
+
 def target_months(conn, valuation_mode="zkill"):
     query = sql.SQL(
         """SELECT date_trunc('month',killmail_time)::date,
@@ -578,10 +627,10 @@ def target_months(conn, valuation_mode="zkill"):
         return [(month, price_day) for month, price_day in cur]
 
 
-def needed_prices(conn, month, valuation_mode="zkill"):
+def needed_prices(conn, month, valuation_mode="zkill", recalculate_types=()):
     km = relation_name("killmails", month)
     items = relation_name("killmail_items", month)
-    predicate = sql.SQL("WHERE k.estimated_value_cents IS NULL")
+    predicate = sql.SQL("WHERE {} ").format(valuation_selection(month, recalculate_types))
     query = sql.SQL(
         """SELECT price_day,kill_day,item_type_id FROM (
              SELECT DISTINCT {price_day} price_day,
@@ -643,10 +692,10 @@ def boundary_prices(day, pairs, pricing):
     return rows
 
 
-def update_month(conn, month, price_rows, valuation_mode="zkill"):
+def update_month(conn, month, price_rows, valuation_mode="zkill", recalculate_types=()):
     km = relation_name("killmails", month)
     items = relation_name("killmail_items", month)
-    condition = sql.SQL("AND k.estimated_value_cents IS NULL")
+    condition = sql.SQL("AND {}").format(valuation_selection(month, recalculate_types))
     with conn.cursor() as cur:
         cur.execute(
             """CREATE TEMP TABLE valuation_prices(
@@ -704,8 +753,9 @@ def update_month(conn, month, price_rows, valuation_mode="zkill"):
                 """UPDATE {}.{} k SET estimated_value_cents=s.value_cents
                    FROM valuation_stage s
                    WHERE k.killmail_id=s.killmail_id AND k.killmail_time=s.killmail_time
-                     AND k.estimated_value_cents IS NULL"""
-            ).format(sql.Identifier("rawkm"), sql.Identifier(km))
+                     AND {write_guard} AND k.estimated_value_cents IS DISTINCT FROM s.value_cents"""
+            ).format(sql.Identifier("rawkm"), sql.Identifier(km),
+                     write_guard=sql.SQL("TRUE") if recalculate_types else sql.SQL("k.estimated_value_cents IS NULL"))
         )
         updated = cur.rowcount
         cur.execute("SELECT count(*) FROM valuation_prices WHERE used_fallback")
@@ -721,6 +771,7 @@ def main():
     parser.add_argument("--progress", type=Path, default=Path.home() / "eveosint/data/market/killmail_values_progress.json")
     parser.add_argument("--min-free-gb", type=float, default=20.0)
     parser.add_argument("--schema-only", action="store_true")
+    parser.add_argument("--recalculate-abyssal", action="store_true", help="Reprice only kills containing abyssal modules; preserve all other kill values")
     parser.add_argument("--valuation-mode", choices=("loss-day", "zkill"), default="loss-day",
                         help="Loss-day prices/recipes by default; zkill retains source replay date offsets")
     parser.add_argument("--recipe-version", default="auto",
@@ -737,6 +788,8 @@ def main():
         parser.error("Invalid disk reserve")
     if args.valuation_mode == "zkill" and args.recipe_version == "auto" and not args.list_recipe_versions:
         parser.error("zKill replay requires an explicit --recipe-version")
+    if args.recalculate_abyssal and args.valuation_mode != "loss-day":
+        parser.error("Abyssal repricing uses loss-day prices")
     if args.cache_rules_at and args.valuation_mode != "zkill":
         parser.error("--cache-rules-at is only used with --valuation-mode zkill")
     history = None
@@ -805,10 +858,17 @@ def main():
         if args.schema_only:
             progress("schema_ready")
             return 0
+        progress("loading_abyssal_equivalents")
+        equivalents = load_equivalents(conn) if args.recalculate_abyssal else {}
+        recalculate_types = tuple(equivalents) if args.recalculate_abyssal else ()
+        if args.recalculate_abyssal and not equivalents:
+            raise RuntimeError("No abyssal module definitions found; synchronize the SDE first")
+        state.update(abyssal_policy=POLICY_VERSION, abyssal_module_types=len(equivalents), recalculate_abyssal=args.recalculate_abyssal)
         progress("finding_missing_values")
-        targets = target_months(conn, args.valuation_mode)
+        targets = (abyssal_target_months(conn, recalculate_types, progress, stopped) if args.recalculate_abyssal
+                   else target_months(conn, args.valuation_mode))
         if not targets:
-            progress("completed", months_total=0, message="No killmail has a missing value.")
+            progress("completed", months_total=0, message="No matching killmail needs calculation.")
             return 0
         months = [month for month, _price_day in targets]
         state.update(from_month=months[0].isoformat(), through_month=months[-1].isoformat(), months_total=len(months))
@@ -834,6 +894,9 @@ def main():
             )
         progress("loading_metadata")
         metadata = load_metadata(conn)
+        if not args.recalculate_abyssal:
+            equivalents = load_equivalents(conn)
+        state["abyssal_module_types"] = len(equivalents)
         automatic = args.recipe_version == "auto"
         progress("loading_recipe_snapshot")
         recipes = {} if automatic else load_blueprints(conn, args.recipe_version, history)
@@ -850,7 +913,7 @@ def main():
             counts = load_history_counts(conn)
         pricing = Pricing(metadata, recipes, counts, rules_at=args.cache_rules_at,
                           valuation_mode=args.valuation_mode, recipe_history=history if automatic else None,
-                          first_prices=first_prices)
+                          first_prices=first_prices, abyssal_equivalents=equivalents)
         state["recipe_count"] = len(pricing.recipes)
         LOG.info("VALUATION_RULES formula=%s recipes=%s recipe_count=%s cache_rules_at=%s",
                  FORMULA_VERSION, args.recipe_version, len(pricing.recipes), state["cache_rules_at"])
@@ -886,8 +949,14 @@ def main():
             state.update(current_month=month.isoformat(), month_index=index, month_killmails=total,
                          month_missing=missing, phase="reading_items")
             progress("reading_items")
-            should_write = bool(missing)
-            needed = needed_prices(conn, month, args.valuation_mode) if should_write else {}
+            should_write = bool(missing) or args.recalculate_abyssal
+            needed = needed_prices(conn, month, args.valuation_mode, recalculate_types) if should_write else {}
+            if args.recalculate_abyssal:
+                with conn.cursor() as cur:
+                    cur.execute(sql.SQL("SELECT count(*) FROM rawkm.{} k WHERE {} ").format(
+                        sql.Identifier(relation_name("killmails",month)), valuation_selection(month,recalculate_types)))
+                    missing = cur.fetchone()[0]
+                state["month_missing"] = missing
             # Do not keep a raw-killmail transaction open while historical
             # price snapshots are streamed and reduced in Python.
             conn.commit()
@@ -913,7 +982,12 @@ def main():
                 raise StopRequested()
             progress("writing_values", price_pairs=len(rows))
             try:
-                updated, fallback = update_month(conn, month, rows, args.valuation_mode)
+                updated, fallback = update_month(conn, month, rows, args.valuation_mode, recalculate_types)
+                calculated = updated
+                if args.recalculate_abyssal:
+                    with conn.cursor() as cur:
+                        cur.execute("SELECT count(*) FROM valuation_stage")
+                        calculated = cur.fetchone()[0]
                 conn.commit()
             except Exception:
                 conn.rollback()
@@ -921,7 +995,7 @@ def main():
             state["months_processed"] += 1
             state["killmails_valued"] += updated
             state["fallback_price_pairs"] += fallback
-            state["killmails_unvalued"] += max(0, missing - updated)
+            state["killmails_unvalued"] += max(0, missing - calculated)
             state["unavailable_recipe_price_pairs"] += sum(value is None for _kd, _pd, _t, value, _f in rows)
             if automatic:
                 version = pricing.recipe_version

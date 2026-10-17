@@ -37,7 +37,7 @@ class InventoryValueTests(unittest.TestCase):
 
     def test_calculator_loaded_from_original_script(self):
         calc=values.calculator()
-        self.assertEqual(calc.FORMULA_VERSION,'loss-day-v6-price-dates')
+        self.assertEqual(calc.FORMULA_VERSION,'loss-day-v7-abyssal-equivalents')
         self.assertEqual(calc.cents(Decimal('112.34560')),11235)
 
 
@@ -85,3 +85,12 @@ class ItemPriceDatabaseTests(unittest.TestCase):
         with self.conn.cursor() as cur:
             cur.execute("INSERT INTO market.zkill_recovered_prices(price_date,item_type_id,unit_price_isk,source_url) VALUES('2026-01-01',999999901,3,'https://zkillboard.com/item/999999901/')")
         self.assertEqual(values._load_prices(self.conn,date(2026,1,2),{999999901})[999999901],Decimal(10))
+
+
+    def test_abyssal_inventory_price_uses_t2_even_with_a_positive_abyssal_quote(self):
+        with self.conn.cursor() as cur:
+            cur.execute("INSERT INTO public.sde_groups VALUES('60','{\"categoryID\":7}')")
+            cur.execute("INSERT INTO public.sde_types VALUES('52227','{\"groupID\":60,\"name\":{\"en\":\"Abyssal Damage Control\"},\"metaGroupID\":15,\"techLevel\":1}'),('2048','{\"groupID\":60,\"name\":{\"en\":\"Damage Control II\"},\"metaGroupID\":2,\"techLevel\":2}')")
+            cur.execute("CREATE TABLE public.sde_dynamicitemattributes(data jsonb); INSERT INTO public.sde_dynamicitemattributes VALUES('{\"inputOutputMapping\":[{\"resultingType\":52227,\"applicableTypes\":[2048]}]}')")
+            cur.execute("UPDATE market.zkill_daily_prices SET prices=prices || '{\"52227\":999999999,\"2048\":650000}'::jsonb WHERE price_date='2026-01-01'")
+        self.assertEqual(values._load_prices(self.conn,date(2026,1,1),{52227})[52227],Decimal(650000))

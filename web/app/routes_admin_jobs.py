@@ -5,6 +5,9 @@ from .audit import audit_log
 from .auth import has_permission, require_login, require_permission_or_redirect
 from .jobs import (
     JobError,
+    run_abyssal_repricing,
+    abyssal_repricing_progress,
+    stop_abyssal_repricing,
     run_killmail_day_recovery,
     stop_killmail_day_recovery,
     killmail_day_recovery_progress,
@@ -477,3 +480,27 @@ def admin_stop_day_recovery(request: Request):
     audit_log(request, 'admin_job_stop', user_id=user['id'], username=user['username'],
               target_type='job', target_id='recover_killmail_day', details=message)
     return RedirectResponse('/admin/jobs', status_code=302)
+
+
+@router.post('/admin/jobs/abyssal-repricing/{action}')
+def admin_abyssal_repricing_action(request: Request, action: str):
+    user = require_login(request)
+    redirect = require_permission_or_redirect(user, 'admin.jobs.run')
+    if redirect: return redirect
+    if action not in {'start','stop'}:
+        return JSONResponse({'error':'Unknown action'},status_code=404)
+    try:
+        _ok, message = run_abyssal_repricing() if action=='start' else stop_abyssal_repricing()
+    except JobError as exc:
+        return _error_redirect(exc)
+    audit_log(request,'admin_job_'+action,user_id=user['id'],username=user['username'],
+              target_type='job',target_id='reprice_abyssal_killmails',details=message)
+    return RedirectResponse('/admin/jobs',status_code=302)
+
+
+@router.get('/admin/jobs/abyssal-repricing/progress')
+def admin_abyssal_repricing_status(request: Request):
+    user = require_login(request)
+    if not user: return JSONResponse({'error':'login_required'},status_code=401)
+    if not has_permission(user,'admin.jobs.view'): return JSONResponse({'error':'forbidden'},status_code=403)
+    return JSONResponse(abyssal_repricing_progress(),headers={'Cache-Control':'no-store'})

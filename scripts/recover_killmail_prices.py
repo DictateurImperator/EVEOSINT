@@ -167,6 +167,9 @@ class DiagnosticPricing(values.Pricing):
         self.issues = {}
 
     def price(self, type_id, kill_day, market_day, date_only=False, stack=()):
+        if type_id in self.abyssal_equivalents:
+            # Diagnose/recover the ordinary module, never the ignored abyssal quote.
+            return super().price(type_id, kill_day, market_day, date_only, stack)
         try:
             result = super().price(type_id, kill_day, market_day, date_only, stack)
         except values.HistoricalRecipeUnavailable as exc:
@@ -222,7 +225,8 @@ def diagnose(conn, cfg, stopped, progress, connections=None):
     progress('loading_prices', months_total=len(targets))
     first = values.load_first_prices(conn, through)
     pricing = DiagnosticPricing(values.load_metadata(conn), {}, {}, valuation_mode='loss-day',
-                               recipe_history=values.RecipeHistory(), first_prices=first)
+                               recipe_history=values.RecipeHistory(), first_prices=first,
+                               abyssal_equivalents=values.load_equivalents(conn))
     conn.commit()
     with psycopg2.connect(**cfg, application_name='killmail_price_gap_stream') as reader:
         reader.set_session(readonly=True)

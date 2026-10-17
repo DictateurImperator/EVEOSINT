@@ -95,6 +95,11 @@
           {% with prices_enabled=job.enabled %}
           {% include "admin_prices_progress.html" %}
           {% endwith %}
+        {% elif job.type == "abyssal_repricing" %}
+          <p class="muted-line small">Recalculate every killmail containing an abyssal module using our own T2 equivalent policy, or T1 where no T2 exists. Abyssal zKill quotes are always ignored. Other killmails are preserved. Refreshes initialized rankings afterwards.</p>
+          <form method="post" action="/admin/jobs/abyssal-repricing/start" class="mb-3"><button class="btn btn-primary" type="submit" {% if job.running or not job.enabled %}disabled{% endif %}>Reprice abyssal killmails</button></form>
+          <form method="post" action="/admin/jobs/abyssal-repricing/stop" class="mb-3" data-abyssal-stop {% if not job.running %}hidden{% endif %}><button class="btn btn-outline-danger" type="submit">Stop repricing</button></form>
+          {% include "admin_abyssal_repricing_progress.html" %}
         {% elif job.type == "killmail_day_recovery" %}
           <p class="muted-line small">Recover the missing UTC day, 13 July 2026. Reuses the downloaded zKill files when present; otherwise tries EVE Ref, then zKill's full daily archive. Existing killmails and their ISK values are preserved; July MER losses are matched afterwards. Runs manually only.</p>
           <form method="post" action="/admin/jobs/day-recovery/run" class="mb-3">

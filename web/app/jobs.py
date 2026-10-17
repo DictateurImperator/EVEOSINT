@@ -153,7 +153,7 @@ def _normalize_job(raw_job):
     log_path = raw_job.get("log_path")
     enabled = bool(raw_job.get("enabled", True))
 
-    if job_type not in {"sde", "killmails", "recent_kill_pilots_affiliation", "character_skill_inference", "population_alliances_init", "population_alliances_daily", "sovereignty_esi", "killmail_forensics_setup", "killmail_forensics_analysis", "killmail_archive_refresh", "mer_economy", "first_loss_study", "first_loss_purge", "zkill_prices", "killmail_values", "killmail_price_recovery", "killmail_rankings", "killmail_day_recovery"}:
+    if job_type not in {"sde", "killmails", "recent_kill_pilots_affiliation", "character_skill_inference", "population_alliances_init", "population_alliances_daily", "sovereignty_esi", "killmail_forensics_setup", "killmail_forensics_analysis", "killmail_archive_refresh", "mer_economy", "first_loss_study", "first_loss_purge", "zkill_prices", "killmail_values", "killmail_price_recovery", "killmail_rankings", "killmail_day_recovery", "abyssal_repricing"}:
         raise JobError(f"job_type_invalid:{key}")
 
     if not isinstance(command, list) or not command:
@@ -341,7 +341,16 @@ def load_jobs_config():
             'log_path': str(Path.home() / 'eveosint/data/logs/killmail_day_recovery.log'), 'enabled': True,
         }))
 
+    if not any(job['key'] == 'reprice_abyssal_killmails' for job in jobs):
+        jobs.append(_normalize_job({
+            'key': 'reprice_abyssal_killmails', 'label': 'Killmails · Reprice abyssal modules (T2 / T1)',
+            'type': 'abyssal_repricing',
+            'command': [sys.executable, str(Path(__file__).resolve().parents[2] / 'scripts/reprice_abyssal_killmails.py')],
+            'log_path': str(Path.home() / 'eveosint/data/logs/abyssal_repricing.log'), 'enabled': True,
+        }))
+
     allowed_keys = {
+        'reprice_abyssal_killmails',
         'recover_killmail_day',
         "build_killmail_rankings",
         "recover_killmail_prices",
@@ -1017,4 +1026,39 @@ def stop_killmail_day_recovery():
         os.kill(runtime['pid'], signal.SIGTERM)
     except OSError as exc:
         raise JobError('job_stop_failed:recover_killmail_day') from exc
+    return True, 'stop_requested'
+
+
+def run_abyssal_repricing():
+    job = get_job('reprice_abyssal_killmails')
+    if job['type'] != 'abyssal_repricing':
+        raise JobError('job_type_mismatch:reprice_abyssal_killmails')
+    return _start_process(job, job['command'])
+
+
+def abyssal_repricing_progress():
+    runtime = _read_runtime_status('reprice_abyssal_killmails')
+    path = Path.home() / 'eveosint/data/market/abyssal_repricing_progress.json'
+    try:
+        progress = json.loads(path.read_text())
+        if not isinstance(progress, dict): progress = None
+    except (OSError, ValueError):
+        progress = None
+    if runtime['running'] and (not progress or progress.get('pid') != runtime['pid']):
+        progress = {'phase':'starting'}
+    elif progress and not runtime['running'] and progress.get('phase') not in {'completed','failed','stopped'}:
+        progress = dict(progress,phase='interrupted')
+    return {'running':runtime['running'],'progress':progress}
+
+
+def stop_abyssal_repricing():
+    runtime = _read_runtime_status('reprice_abyssal_killmails')
+    if not runtime['running']: return False, 'not_running'
+    expected = str(Path(__file__).resolve().parents[2] / 'scripts/reprice_abyssal_killmails.py').encode()
+    try:
+        argv = Path(f"/proc/{runtime['pid']}/cmdline").read_bytes().split(b'\0')
+        if expected not in argv[1:]: raise JobError('job_process_mismatch:reprice_abyssal_killmails')
+        os.kill(runtime['pid'],signal.SIGTERM)
+    except OSError as exc:
+        raise JobError('job_stop_failed:reprice_abyssal_killmails') from exc
     return True, 'stop_requested'

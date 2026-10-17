@@ -1,0 +1,30 @@
+<div class="border rounded p-3 small" id="abyssal-repricing-progress" role="status">Checking repricing status…</div>
+<script>
+(() => {
+ const box = document.getElementById('abyssal-repricing-progress');
+ const phases = {starting:'Starting',valuing:'Recalculating abyssal killmails',rankings:'Refreshing rankings',
+   waiting_rankings:'Values recalculated — waiting for the running ranking builder',
+   completed:'Completed',failed:'Failed — see job log',stopped:'Stopped — saved months retained',interrupted:'Interrupted'};
+ async function update() {
+  try {
+   const r = await fetch('/admin/jobs/abyssal-repricing/progress',{cache:'no-store'});
+   if (!r.ok) throw new Error('Status unavailable');
+   const data = await r.json(), p = data.progress || {}, d = p.detail || {}, v = p.valuation || d;
+   const n = x => Number(x || 0).toLocaleString();
+   box.textContent = [phases[p.phase] || 'Not started',d.phase ? d.phase.replaceAll('_',' ') : '',
+     d.current_month ? `Month: ${d.current_month}` : '',
+     d.scan_months_total ? `Partitions checked: ${n(d.scan_months_done)} / ${n(d.scan_months_total)}` : '',
+     v.months_total ? `Valuation months: ${n(v.months_processed)} / ${n(v.months_total)}` : '',
+     `Killmail values changed: ${n(v.killmails_valued)}`,
+     `Not recalculated (missing prices): ${n(v.killmails_unvalued)}`,
+     p.phase==='rankings' ? `Ranking months: ${n(d.processed)} / ${n(d.months)}` : '',
+     p.rankings==='awaiting_initial_build' ? 'Ranking months marked for the first ranking build' : '',p.error || ''].filter(Boolean).join(' · ');
+   const button = document.querySelector('form[action="/admin/jobs/abyssal-repricing/start"] button');
+   if (button) button.disabled = data.running || {{ 'false' if job.enabled else 'true' }};
+   const stop = document.querySelector('[data-abyssal-stop]');if (stop) stop.hidden = !data.running;
+  } catch (e) {box.textContent=e.message;}
+  setTimeout(update,3000);
+ }
+ update();
+})();
+</script>

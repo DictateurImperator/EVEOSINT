@@ -1028,6 +1028,7 @@
         <div><span class="label">Hull (ISK)</span>{{ isk(totals.get('hull')) }}</div>
         <div><span class="label">Total (ISK)</span>{{ isk(totals.get('total')) }}</div>
       </div>
+      <p class="muted-line small mx-3">Abyssal module values use our equivalent T2 price, or T1 when no T2 exists. Ambiguous plates use the cheapest compatible T2; the ORE-only Deep Core Strip Miner uses Strip Miner I. Abyssal zKill quotes are ignored.</p>
       {% if killmail.inventory_value_mismatch %}
       <p class="muted-line small mx-3">The item breakdown uses the available historical prices and differs from the saved estimate of {{ killmail.value_full_label }}.</p>
       {% endif %}
