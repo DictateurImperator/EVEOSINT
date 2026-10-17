@@ -153,7 +153,7 @@ def _normalize_job(raw_job):
     log_path = raw_job.get("log_path")
     enabled = bool(raw_job.get("enabled", True))
 
-    if job_type not in {"sde", "killmails", "recent_kill_pilots_affiliation", "character_skill_inference", "population_alliances_init", "population_alliances_daily", "sovereignty_esi", "killmail_forensics_setup", "killmail_forensics_analysis", "killmail_archive_refresh", "mer_economy", "first_loss_study", "first_loss_purge", "zkill_prices", "killmail_values", "killmail_price_recovery", "killmail_rankings"}:
+    if job_type not in {"sde", "killmails", "recent_kill_pilots_affiliation", "character_skill_inference", "population_alliances_init", "population_alliances_daily", "sovereignty_esi", "killmail_forensics_setup", "killmail_forensics_analysis", "killmail_archive_refresh", "mer_economy", "first_loss_study", "first_loss_purge", "zkill_prices", "killmail_values", "killmail_price_recovery", "killmail_rankings", "killmail_day_recovery"}:
         raise JobError(f"job_type_invalid:{key}")
 
     if not isinstance(command, list) or not command:
@@ -333,7 +333,16 @@ def load_jobs_config():
             "log_path": str(Path.home() / "eveosint/data/logs/killmail_rankings.log"), "enabled": True,
         }))
 
+    if not any(job['key'] == 'recover_killmail_day' for job in jobs):
+        jobs.append(_normalize_job({
+            'key': 'recover_killmail_day', 'label': 'Killmails · Recover 13 July 2026 (one-off)',
+            'type': 'killmail_day_recovery',
+            'command': [sys.executable, str(Path(__file__).resolve().parents[2] / 'scripts/recover_killmail_day.py')],
+            'log_path': str(Path.home() / 'eveosint/data/logs/killmail_day_recovery.log'), 'enabled': True,
+        }))
+
     allowed_keys = {
+        'recover_killmail_day',
         "build_killmail_rankings",
         "recover_killmail_prices",
         "import_zkill_prices",
@@ -971,3 +980,41 @@ def killmail_rankings_progress():
     elif progress and not runtime['running'] and progress.get('phase') not in {'completed', 'failed', 'stopped', 'purged'}:
         progress = dict(progress, phase='interrupted')
     return {'running': runtime['running'], 'progress': progress}
+
+
+def run_killmail_day_recovery():
+    job = get_job('recover_killmail_day')
+    if job['type'] != 'killmail_day_recovery':
+        raise JobError('job_type_mismatch:recover_killmail_day')
+    return _start_process(job, job['command'])
+
+
+def killmail_day_recovery_progress():
+    runtime = _read_runtime_status('recover_killmail_day')
+    path = Path.home() / 'eveosint/data/killmails/day_recovery_progress.json'
+    try:
+        progress = json.loads(path.read_text())
+        if not isinstance(progress, dict):
+            progress = None
+    except (OSError, ValueError):
+        progress = None
+    if runtime['running'] and (not progress or progress.get('pid') != runtime['pid']):
+        progress = {'phase': 'starting'}
+    elif progress and not runtime['running'] and progress.get('phase') not in {'completed', 'failed', 'stopped'}:
+        progress = dict(progress, phase='interrupted')
+    return {'running': runtime['running'], 'progress': progress}
+
+
+def stop_killmail_day_recovery():
+    runtime = _read_runtime_status('recover_killmail_day')
+    if not runtime['running']:
+        return False, 'not_running'
+    expected = str(Path(__file__).resolve().parents[2] / 'scripts/recover_killmail_day.py').encode()
+    try:
+        argv = Path(f"/proc/{runtime['pid']}/cmdline").read_bytes().split(b'\0')
+        if expected not in argv[1:]:
+            raise JobError('job_process_mismatch:recover_killmail_day')
+        os.kill(runtime['pid'], signal.SIGTERM)
+    except OSError as exc:
+        raise JobError('job_stop_failed:recover_killmail_day') from exc
+    return True, 'stop_requested'

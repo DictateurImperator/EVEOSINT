@@ -1,0 +1,27 @@
+<div class="border rounded p-3 small" id="day-recovery-progress" role="status">Checking recovery status…</div>
+<script>
+(() => {
+ const box = document.getElementById('day-recovery-progress');
+ const stages = {starting:'Starting', checking_source:'Checking archive source', downloading:'Downloading archive',
+   validating:'Validating every killmail', importing:'Importing missing killmails', matching_mer:'Matching July MER losses',
+   completed:'Completed', failed:'Failed — see job log', stopped:'Stopped — saved batches retained', interrupted:'Interrupted — rerun to resume'};
+ async function update() {
+  try {
+   const r = await fetch('/admin/jobs/day-recovery/progress', {cache:'no-store'});
+   if (!r.ok) throw new Error('Status unavailable');
+   const data = await r.json(), p = data.progress || {};
+   const num = n => Number(n || 0).toLocaleString();
+   box.textContent = [stages[p.phase] || 'Not started', p.source || '', p.cached ? 'Using downloaded archive' : '',
+     `Killmails processed: ${num(p.processed)} / ${num(p.total)}`, `Added: ${num(p.added)}`,
+     `Already present: ${num(p.skipped)}`, p.bytes_downloaded ? `Archive: ${num(p.bytes_downloaded)} bytes` : '',
+     p.mer_matched !== undefined ? `MER matches: ${num(p.mer_matched)}` : '', p.error || ''].filter(Boolean).join(' · ');
+   const button = document.querySelector('form[action="/admin/jobs/day-recovery/run"] button');
+   const stop = document.querySelector('[data-day-stop]');
+   if (stop) stop.hidden = !data.running;
+   if (button) button.disabled = data.running || {{ 'false' if job.enabled else 'true' }};
+  } catch (e) { box.textContent = e.message; }
+  setTimeout(update, 3000);
+ }
+ update();
+})();
+</script>

@@ -95,6 +95,15 @@
           {% with prices_enabled=job.enabled %}
           {% include "admin_prices_progress.html" %}
           {% endwith %}
+        {% elif job.type == "killmail_day_recovery" %}
+          <p class="muted-line small">Recover the missing UTC day, 13 July 2026. Reuses the downloaded zKill files when present; otherwise tries EVE Ref, then zKill's full daily archive. Existing killmails and their ISK values are preserved; July MER losses are matched afterwards. Runs manually only.</p>
+          <form method="post" action="/admin/jobs/day-recovery/run" class="mb-3">
+            <button class="btn btn-primary" type="submit" {% if job.running or not job.enabled %}disabled{% endif %}>Recover 13 July 2026</button>
+          </form>
+          <form method="post" action="/admin/jobs/day-recovery/stop" class="mb-3" data-day-stop {% if not job.running %}hidden{% endif %}>
+            <button class="btn btn-outline-danger" type="submit">Stop recovery</button>
+          </form>
+          {% include "admin_day_recovery_progress.html" %}
         {% elif job.type == "killmail_rankings" %}
           <p class="muted-line small">Sparse monthly ISK totals for characters, corporations and alliances. Rebuilds changed months.</p>
           <a class="btn btn-sm btn-primary" href="/admin/debug/rankings">Open rankings and build controls</a>

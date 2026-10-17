@@ -5,6 +5,9 @@ from .audit import audit_log
 from .auth import has_permission, require_login, require_permission_or_redirect
 from .jobs import (
     JobError,
+    run_killmail_day_recovery,
+    stop_killmail_day_recovery,
+    killmail_day_recovery_progress,
     list_jobs_with_logs,
     read_job_log,
     read_killmail_archive_refresh_progress,
@@ -434,3 +437,43 @@ def admin_jobs_killmail_archive_errors(request: Request):
         return PlainTextResponse("Archive refresh log unavailable.", status_code=404)
     return PlainTextResponse("Last 20 error blocks from the full archive refresh log (all runs).\n\n" + content,
                              headers={"Cache-Control": "no-store"})
+
+
+@router.post('/admin/jobs/day-recovery/run')
+def admin_run_day_recovery(request: Request):
+    user = require_login(request)
+    redirect = require_permission_or_redirect(user, 'admin.jobs.run')
+    if redirect:
+        return redirect
+    try:
+        ok, message = run_killmail_day_recovery()
+    except JobError as exc:
+        return _error_redirect(exc)
+    audit_log(request, 'admin_job_run', user_id=user['id'], username=user['username'],
+              target_type='job', target_id='recover_killmail_day', details=message)
+    return RedirectResponse('/admin/jobs?success=job_started' if ok else '/admin/jobs?error=job_failed', status_code=302)
+
+
+@router.get('/admin/jobs/day-recovery/progress')
+def admin_day_recovery_progress(request: Request):
+    user = require_login(request)
+    if not user:
+        return JSONResponse({'error': 'login_required'}, status_code=401)
+    if not has_permission(user, 'admin.jobs.view'):
+        return JSONResponse({'error': 'forbidden'}, status_code=403)
+    return JSONResponse(killmail_day_recovery_progress(), headers={'Cache-Control':'no-store'})
+
+
+@router.post('/admin/jobs/day-recovery/stop')
+def admin_stop_day_recovery(request: Request):
+    user = require_login(request)
+    redirect = require_permission_or_redirect(user, 'admin.jobs.run')
+    if redirect:
+        return redirect
+    try:
+        _ok, message = stop_killmail_day_recovery()
+    except JobError as exc:
+        return _error_redirect(exc)
+    audit_log(request, 'admin_job_stop', user_id=user['id'], username=user['username'],
+              target_type='job', target_id='recover_killmail_day', details=message)
+    return RedirectResponse('/admin/jobs', status_code=302)
