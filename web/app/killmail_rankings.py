@@ -4,24 +4,33 @@ from datetime import date
 from decimal import Decimal
 import re
 import threading
-import time
+import importlib
+from functools import lru_cache
+from pathlib import Path
+import sys
+import types
 
-from psycopg2 import sql
+from . import config
 from .db import db
 
-KINDS = {'character': (1,'characters','character_id'), 'corporation': (2,'corporations','corporation_id'),
-         'alliance': (3,'alliances','alliance_id')}
-SORTS = {'destroyed','lost','net','efficiency','kills','losses'}
-PAGE_SIZE = 50
-TOP_LIMIT = 1000
-_CACHE = OrderedDict()
-_LOCK = threading.Lock()
-_BUILDING = set()
-_SLOTS = threading.BoundedSemaphore(2)
+@lru_cache(maxsize=1)
+def engine():
+    package=types.ModuleType('eveosint_ranking_scripts')
+    package.__path__=[str(Path(__file__).resolve().parents[2]/'scripts')]
+    sys.modules.setdefault(package.__name__,package)
+    return importlib.import_module(package.__name__+'.killmail_rankings_query')
 
 
-class RankingsBusy(Exception):
-    pass
+KINDS=engine().KINDS
+SORTS=engine().SORTS
+PAGE_SIZE=50
+TOP_LIMIT=engine().TOP_LIMIT
+CACHE_DIR=Path.home()/'eveosint/data/cache/killmail_rankings'
+_CACHE=OrderedDict()
+_LOCK=threading.Lock()
+_BUILDING=set()
+_SLOTS=threading.BoundedSemaphore(2)
+RankingsBusy=engine().RankingsBusy
 
 
 def month_input(value):
@@ -51,71 +60,140 @@ def catalog():
         cur.execute("SELECT to_regclass('analytics.killmail_ranking_months')")
         if cur.fetchone()[0] is None:
             return []
+        cur.execute("SELECT to_regclass('analytics.killmail_ranking_current_state')")
+        totals_ready=False
+        if cur.fetchone()[0] is not None:
+            cur.execute('SELECT ready FROM analytics.killmail_ranking_current_state WHERE singleton')
+            state=cur.fetchone()
+            totals_ready=bool(state and state[0])
         cur.execute('''SELECT m.month,m.built_at,m.killmails,m.valued,m.zero_damage,m.entity_rows,
                               m.built_revision<>COALESCE(v.revision,0) AS dirty
                        FROM analytics.killmail_ranking_months m
                        LEFT JOIN analytics.killmail_ranking_versions v USING(month) ORDER BY m.month''')
-        return [dict(zip(('month','built_at','killmails','valued','zero_damage','entity_rows','dirty'),r)) for r in cur]
+        return [dict(zip(('month','built_at','killmails','valued','zero_damage','entity_rows','dirty'),r),totals_ready=totals_ready) for r in cur]
 
 
 def _query(kind, mode, sort, first, last):
-    kind_id, table, id_column = KINDS[kind]
-    destroyed = 'weighted_destroyed_cents' if mode=='weighted' else 'destroyed_cents'
-    # Both identifiers originate exclusively in the allowlists above.
-    with db() as conn, conn.cursor() as cur:
-        cur.execute("SET LOCAL statement_timeout='25s'")
-        cur.execute("SET LOCAL work_mem='32MB'")
-        cur.execute('SET LOCAL max_parallel_workers_per_gather=2')
-        totals = sql.SQL("""SELECT entity_id,{destroyed} AS destroyed,lost_cents AS lost,
-                       kills,losses,unvalued_kills,unvalued_losses
-                       FROM analytics.killmail_rankings_monthly
-                       WHERE entity_kind=%s AND month BETWEEN %s AND %s""") if first==last else sql.SQL("""
-            SELECT entity_id,sum({destroyed}) AS destroyed,sum(lost_cents) AS lost,
-                   sum(kills) AS kills,sum(losses) AS losses,
-                   sum(unvalued_kills) AS unvalued_kills,sum(unvalued_losses) AS unvalued_losses
-            FROM analytics.killmail_rankings_monthly
-            WHERE entity_kind=%s AND month BETWEEN %s AND %s GROUP BY entity_id""")
-        cur.execute(sql.SQL('''WITH totals AS ({totals}), scored AS (
-            SELECT *,destroyed-lost AS net,
-                   CASE WHEN destroyed+lost>0 THEN 100*destroyed/(destroyed+lost) END AS efficiency
-            FROM totals
-        ), top_rows AS (
-            SELECT * FROM scored ORDER BY {sort} DESC NULLS LAST,entity_id LIMIT %s
-        ) SELECT r.*,e.name FROM top_rows r LEFT JOIN entities.{table} e ON e.{id_column}=r.entity_id
-          ORDER BY r.{sort} DESC NULLS LAST,r.entity_id''').format(
-              totals=totals.format(destroyed=sql.Identifier(destroyed)), sort=sql.Identifier(sort),
-              table=sql.Identifier(table),id_column=sql.Identifier(id_column)),
-              (kind_id,first,last,TOP_LIMIT))
-        names = [c.name for c in cur.description]
-        return [dict(zip(names,r)) for r in cur]
+    with db() as conn:
+        return engine().query(conn,kind,mode,sort,first,last)
 
 
 def ranking_rows(kind, mode, sort, first, last, months):
     if kind not in KINDS or mode not in ('classic','weighted') or sort not in SORTS:
         raise ValueError('Invalid ranking filter.')
-    # Every committed rebuild invalidates all affected cached periods immediately.
-    version = tuple((m['month'],m['built_at']) for m in months if first<=m['month']<=last)
-    key = (kind,mode,sort,first,last,version)
-    now = time.monotonic()
+    version=tuple((m['month'],m['built_at']) for m in months if first<=m['month']<=last)
+    cfg=getattr(config,'DB_CONFIG',{})
+    scope=tuple(cfg.get(k,'') for k in ('db_host','db_port','db_name'))
+    key=engine().cache_key(kind,mode,sort,first,last,version,scope)
     with _LOCK:
-        cached = _CACHE.get(key)
-        if cached and now-cached[0]<600:
+        if key in _CACHE:
             _CACHE.move_to_end(key)
-            return cached[1], True
+            return _CACHE[key],True
         if key in _BUILDING:
             raise RankingsBusy('This period is being calculated. Retry in a moment.')
         if not _SLOTS.acquire(blocking=False):
             raise RankingsBusy('Two ranking calculations are running. Retry in a moment.')
         _BUILDING.add(key)
     try:
-        rows = _query(kind,mode,sort,first,last)
+        rows=engine().load_cache(CACHE_DIR,key)
+        cached=rows is not None
+        if rows is None:
+            with engine().cache_lock(CACHE_DIR,key):
+                rows=engine().load_cache(CACHE_DIR,key)
+                cached=rows is not None
+                if rows is None:
+                    rows=_query(kind,mode,sort,first,last)
+                    engine().save_cache(CACHE_DIR,key,rows)
         with _LOCK:
-            _CACHE[key] = (time.monotonic(),rows)
+            _CACHE[key]=rows
             _CACHE.move_to_end(key)
             while len(_CACHE)>16:
                 _CACHE.popitem(last=False)
-        return rows, False
+        return rows,cached
     finally:
         with _LOCK:
             _BUILDING.discard(key)
+        _SLOTS.release()
+
+
+@lru_cache(maxsize=1)
+def explorer():
+    return importlib.import_module(engine().__package__+'.killmail_ranking_explorer')
+
+
+def parse_scope(values):
+    result=[]
+    if len(values)>20:
+        raise ValueError('Choose at most 20 membership filters per list.')
+    for value in values:
+        if not re.fullmatch(r'(coalition|alliance|corporation):[1-9][0-9]{0,17}',value):
+            raise ValueError('Invalid membership filter.')
+        if value not in result:
+            result.append(value)
+    return result
+
+
+def lookup(query,kind,purpose='target'):
+    query=str(query or '').strip()[:100]
+    if len(query)<2:
+        return []
+    if purpose=='scope':
+        from .coalitions import search_member_entities
+        return [item for item in search_member_entities(query,limit=20)
+                if kind!='alliance' or item['entity_type'] in ('coalition','alliance')]
+    from psycopg2 import sql
+    _kind_id,table,id_column=KINDS[kind]
+    with db() as conn,conn.cursor() as cur:
+        cur.execute("SET LOCAL statement_timeout='5s'")
+        cur.execute(sql.SQL('''SELECT {id},name FROM entities.{table}
+            WHERE name ILIKE %s OR {id}=%s
+            ORDER BY (lower(name)=lower(%s)) DESC,lower(name),{id} LIMIT 12''').format(
+                id=sql.Identifier(id_column),table=sql.Identifier(table)),
+                ('%'+query+'%',int(query) if query.isdigit() else -1,query))
+        return [dict(entity_type=kind,entity_id=r[0],name=r[1]) for r in cur]
+
+
+def scope_labels(tokens):
+    if not tokens:
+        return {}
+    from psycopg2 import sql
+    result={}
+    with db() as conn,conn.cursor() as cur:
+        cur.execute("SET LOCAL statement_timeout='5s'")
+        for kind,table,id_column in [('coalition','coalitions','coalition_id'),('alliance','alliances','alliance_id'),('corporation','corporations','corporation_id')]:
+            ids=[int(token.split(':')[1]) for token in tokens if token.startswith(kind+':')]
+            if ids:
+                cur.execute(sql.SQL('SELECT {id},name FROM entities.{table} WHERE {id}=ANY(%s)').format(
+                    id=sql.Identifier(id_column),table=sql.Identifier(table)),(ids,))
+                result.update({f'{kind}:{id}':name for id,name in cur})
+    return result
+
+
+def _explore_rows(kind,mode,sort,first,last,**options):
+    from datetime import datetime,UTC,timedelta
+    with db() as conn:
+        rules={}
+        if any(token.startswith('coalition:') for token in (*options.get('includes',()),*options.get('excludes',()))):
+            from .map_data import _fight_heat_load_coalition_rules
+            with conn.cursor() as cur:
+                cur.execute("SET LOCAL statement_timeout='5s'")
+                rules=_fight_heat_load_coalition_rules(cur)
+            conn.commit()
+        day=(explorer().month_end(last)-timedelta(days=1)).date() if options.get('as_of') else datetime.now(UTC).date()
+        return explorer().explore(conn,engine(),kind,mode,sort,first,last,rules=rules,scope_day=day,**options)
+
+
+def enrich_rows(kind,rows,as_of=None):
+    if not rows or kind=='alliance':
+        return rows
+    with db() as conn:
+        return explorer().enrich(conn,kind,rows,as_of)
+
+
+def explore_rows(kind,mode,sort,first,last,**options):
+    if not _SLOTS.acquire(blocking=False):
+        raise RankingsBusy('Two ranking calculations are running. Retry in a moment.')
+    try:
+        return _explore_rows(kind,mode,sort,first,last,**options)
+    finally:
         _SLOTS.release()

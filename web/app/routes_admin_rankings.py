@@ -19,69 +19,116 @@ LOG = logging.getLogger(__name__)
 
 @router.get('/admin/debug/rankings', response_class=HTMLResponse)
 def page(request: Request):
-    user = require_login(request)
-    redirect = require_permission_or_redirect(user,'admin.jobs.view')
+    import time
+    user=require_login(request)
+    redirect=require_permission_or_redirect(user,'admin.jobs.view')
     if redirect:
         return redirect
-    context = app_context(request=request,user=user,title='EVEOSINT - ISK rankings',
-                          active_module='admin',active_menu_key='admin.debug')
-    params = request.query_params
-    kind = params.get('kind','character')
-    mode = params.get('mode','classic')
-    sort = params.get('sort','destroyed')
-    custom_period = bool(params.get('from') or params.get('through'))
-    error = None
-    months = []
-    rows = []
-    first = last = None
-    cached = False
-    elapsed = 0
-    page_number = 1
+    context=app_context(request=request,user=user,title='EVEOSINT - ISK rankings',active_module='admin',active_menu_key='admin.debug')
+    params=request.query_params
+    kind=params.get('kind','character');mode=params.get('mode','classic');sort=params.get('sort','destroyed')
+    view=params.get('view','ranking')
+    q=params.get('q','').strip()[:100]
+    custom_period=bool(params.get('through'))
+    months=[];rows=[];first=last=None;error=None;cached=False;elapsed=0;page_number=1;offset=0
+    includes=[];excludes=[];labels={};more=False;found_position=None
     try:
-        if kind not in rankings.KINDS or mode not in ('classic','weighted') or sort not in rankings.SORTS:
+        if kind not in rankings.KINDS or mode not in ('classic','weighted') or sort not in rankings.SORTS or view not in ('ranking','search'):
             raise ValueError('Invalid ranking filter.')
-        page_number = int(params.get('page','1'))
-        if not 1<=page_number<=rankings.TOP_LIMIT//rankings.PAGE_SIZE:
-            raise ValueError('Page must be between 1 and 20.')
-        months = rankings.catalog()
+        page_number=int(params.get('page','1'))
+        if not 1<=page_number<=20000000:
+            raise ValueError('Invalid page.')
+        offset=(page_number-1)*rankings.PAGE_SIZE
+        includes=rankings.parse_scope(params.getlist('include'))
+        excludes=rankings.parse_scope(params.getlist('exclude'))
+        labels=rankings.scope_labels(includes+excludes)
+        months=rankings.catalog()
         if months:
-            first = rankings.month_input(params.get('from') or months[0]['month'].strftime('%Y-%m'))
-            last = rankings.month_input(params.get('through') or months[-1]['month'].strftime('%Y-%m'))
+            first=months[0]['month']
+            last=rankings.month_input(params.get('through') or months[-1]['month'].strftime('%Y-%m'))
             if first>last:
-                raise ValueError('From must precede through.')
-            import time
-            start = time.monotonic()
-            rows,cached = rankings.ranking_rows(kind,mode,sort,first,last,months)
-            elapsed = time.monotonic()-start
+                raise ValueError(f'Choose a month on or after {first:%Y-%m}, the first available month.')
+            started=time.monotonic()
+            if months[0].get('totals_ready',True):
+                target_id=None;position=offset+1
+                searching=view=='search' and bool(q or params.get('target_id') or params.get('position'))
+                if searching:
+                    if params.get('target_id'):
+                        target_id=int(params['target_id'])
+                        if not 0<target_id<2**63:
+                            raise ValueError('Invalid entity.')
+                    elif q:
+                        matches=rankings.lookup(q,kind)
+                        exact=[r for r in matches if str(r['name']).casefold()==q.casefold()]
+                        chosen=exact or matches
+                        if len(chosen)!=1:
+                            raise ValueError('Select a name from the suggestions to identify the entity.')
+                        target_id=int(chosen[0]['entity_id'])
+                    else:
+                        position=int(params['position'])
+                        if not 1<=position<=1000000000:
+                            raise ValueError('Choose a positive rank.')
+                if searching or includes or excludes or page_number>20:
+                    result=rankings.explore_rows(kind,mode,sort,first,last,as_of=last if custom_period else None,
+                        includes=includes,excludes=excludes,position=position,target_id=target_id,around=searching)
+                    rows=result['rows'];offset=result['offset'];more=result['more'];found_position=result['position'] if searching else None
+                else:
+                    all_rows,cached=rankings.ranking_rows(kind,mode,sort,first,last,months)
+                    rows=[dict(r,rank=offset+i+1) for i,r in enumerate(all_rows[offset:offset+rankings.PAGE_SIZE])]
+                    more=offset+rankings.PAGE_SIZE<len(all_rows) or len(all_rows)==rankings.TOP_LIMIT and page_number==20
+                rows=rankings.enrich_rows(kind,rows,last if custom_period else None)
+            elapsed=time.monotonic()-started
     except (ValueError,rankings.RankingsBusy) as exc:
-        error = str(exc)
+        error=str(exc)
     except QueryCanceled:
-        error = 'This period exceeded the 25-second query limit. Choose fewer months.'
+        error='This historical ranking exceeded the query time limit. Try a more recent month.'
     except Exception:
         LOG.exception('Ranking page failed')
-        error = 'Rankings unavailable. See the application log.'
-    selected = [m for m in months if first and last and first<=m['month']<=last]
-    missing = 0
-    if first and last:
-        missing = max(0,(last.year-first.year)*12+last.month-first.month+1-len(selected))
-    base = dict(kind=kind,mode=mode,sort=sort)
-    if custom_period and first and last:
-        base.update({'from':first.strftime('%Y-%m'),'through':last.strftime('%Y-%m')})
-    def link(number):
-        return '/admin/debug/rankings?'+urlencode(dict(base,page=number))
-    offset = (page_number-1)*rankings.PAGE_SIZE
-    context.update(months=months,rows=rows[offset:offset+rankings.PAGE_SIZE],kind=kind,mode=mode,sort=sort,
-        first=params.get('from',''),last=params.get('through',''),custom_period=custom_period,
-        period_from=first.strftime('%Y-%m') if first else '',
-        period_through=last.strftime('%Y-%m') if last else '',
-        error=error,can_run='admin.jobs.run' in user.get('permissions',set()),
+        error='Rankings unavailable. See the application log.'
+    selected=[m for m in months if first and last and first<=m['month']<=last]
+    missing=max(0,(last.year-first.year)*12+last.month-first.month+1-len(selected)) if first and last else 0
+    base=dict(kind=kind,mode=mode,sort=sort)
+    if custom_period:
+        base['through']=params.get('through','')
+    if includes:
+        base['include']=includes
+    if excludes:
+        base['exclude']=excludes
+    def link(**changes):
+        return '/admin/debug/rankings?'+urlencode(dict(base,**changes),doseq=True)
+    context.update(months=months,rows=rows,kind=kind,mode=mode,sort=sort,view=view,q=q,
+        target_id=params.get('target_id',''),position=params.get('position',''),found_position=found_position,
+        include_terms=[dict(token=v,label=labels.get(v,v)) for v in includes],
+        exclude_terms=[dict(token=v,label=labels.get(v,v)) for v in excludes],
+        ranking_link=link(view='ranking'),search_link=link(view='search'),
+        all_time_link='/admin/debug/rankings?'+urlencode({k:v for k,v in base.items() if k!='through'},doseq=True),
+        last=params.get('through',''),custom_period=custom_period,
+        period_from=first.strftime('%Y-%m') if first else '',period_through=last.strftime('%Y-%m') if last else '',
+        membership_date=('end of '+last.strftime('%B %Y')) if custom_period and last else 'today',
+        totals_ready=bool(months and months[0].get('totals_ready',True)),error=error,can_run='admin.jobs.run' in user.get('permissions',set()),
         selected=selected,missing=missing,cached=cached,elapsed=elapsed,page_number=page_number,offset=offset,
-        previous=link(page_number-1) if page_number>1 else None,
-        next_page=link(page_number+1) if offset+rankings.PAGE_SIZE<len(rows) else None,
+        previous=link(page=page_number-1) if view=='ranking' and page_number>1 else None,
+        next_page=link(page=page_number+1) if view=='ranking' and more else None,
         compact_isk=rankings.compact_isk,full_isk=rankings.full_isk,
         coverage_kills=sum(m['killmails'] for m in selected),coverage_valued=sum(m['valued'] for m in selected),
         coverage_zero=sum(m['zero_damage'] for m in selected),dirty=sum(m['dirty'] for m in selected))
     return templates.TemplateResponse(request=request,name='admin_rankings.html',context=context)
+
+
+@router.get('/admin/debug/rankings/lookup')
+def lookup(request: Request):
+    user=require_login(request)
+    if 'admin.jobs.view' not in user.get('permissions',set()):
+        return JSONResponse({'error':'Access denied.'},status_code=403)
+    kind=request.query_params.get('kind','character')
+    purpose=request.query_params.get('purpose','target')
+    if kind not in rankings.KINDS or purpose not in ('target','scope'):
+        return JSONResponse({'error':'Invalid lookup.'},status_code=400)
+    try:
+        return {'results':rankings.lookup(request.query_params.get('q',''),kind,purpose)}
+    except Exception:
+        LOG.exception('Ranking lookup failed')
+        return JSONResponse({'error':'Search unavailable.'},status_code=503)
 
 
 @router.get('/admin/debug/rankings/status')

@@ -39,6 +39,95 @@ def source_months(conn):
                       if (m := re.fullmatch(r'killmails_(\d{4})_(\d{2})', name)))
 
 
+METRICS=('destroyed_cents','weighted_destroyed_cents','lost_cents','kills','losses','unvalued_kills','unvalued_losses')
+
+
+def ensure_current(conn,report=lambda **kwargs:None):
+    """One-time backfill from existing monthly facts; source killmails are not read."""
+    with conn.cursor() as cur:
+        cur.execute('SELECT ready FROM analytics.killmail_ranking_current_state WHERE singleton')
+        if cur.fetchone()[0]:
+            return
+        cur.execute("SET LOCAL work_mem='32MB'")
+        cur.execute('SET LOCAL max_parallel_workers_per_gather=2')
+        report(phase='initializing_cumulative_snapshots')
+        columns=sql.SQL(',').join(sql.SQL('sum({c}) OVER w AS {alias}').format(
+            c=sql.Identifier(name),alias=sql.Identifier('cumulative_'+name)) for name in METRICS)
+        cur.execute(sql.SQL("""CREATE TEMP TABLE ranking_cumulative_stage ON COMMIT DROP AS
+            SELECT month,entity_kind,entity_id,{columns} FROM analytics.killmail_rankings_monthly
+            WINDOW w AS (PARTITION BY entity_kind,entity_id ORDER BY month ROWS UNBOUNDED PRECEDING)""").format(columns=columns))
+        assignments=sql.SQL(',').join(sql.SQL('{c}=s.{c}').format(c=sql.Identifier('cumulative_'+name)) for name in METRICS)
+        cur.execute(sql.SQL("""UPDATE analytics.killmail_rankings_monthly m SET {assignments}
+            FROM ranking_cumulative_stage s
+            WHERE m.month=s.month AND m.entity_kind=s.entity_kind AND m.entity_id=s.entity_id""").format(assignments=assignments))
+        cur.execute('DELETE FROM analytics.killmail_rankings_current')
+        fields=sql.SQL(',').join(sql.Identifier('cumulative_'+name) for name in METRICS)
+        cur.execute(sql.SQL("""INSERT INTO analytics.killmail_rankings_current
+            SELECT DISTINCT ON (entity_kind,entity_id) entity_kind,entity_id,{fields},month
+            FROM analytics.killmail_rankings_monthly ORDER BY entity_kind,entity_id,month DESC""").format(fields=fields))
+        cur.execute('UPDATE analytics.killmail_ranking_current_state SET ready=true WHERE singleton')
+        cur.execute('ANALYZE analytics.killmail_rankings_current')
+
+
+def update_current(cur,month):
+    # Existing months contribute only (new - old), including corrected old killmails.
+    cur.execute("""CREATE TEMP TABLE ranking_delta ON COMMIT DROP AS
+        SELECT kind AS entity_kind,id AS entity_id,sum(destroyed) AS destroyed_cents,
+               sum(weighted) AS weighted_destroyed_cents,sum(lost) AS lost_cents,
+               sum(kills)::bigint AS kills,sum(losses)::bigint AS losses,
+               sum(unvalued_kills)::bigint AS unvalued_kills,sum(unvalued_losses)::bigint AS unvalued_losses
+        FROM (SELECT * FROM ranking_stage
+              UNION ALL SELECT entity_kind,entity_id,-destroyed_cents,-weighted_destroyed_cents,-lost_cents,
+                       -kills,-losses,-unvalued_kills,-unvalued_losses
+              FROM analytics.killmail_rankings_monthly WHERE month=%s) d
+        GROUP BY kind,id""",(month,))
+    cur.execute('ANALYZE ranking_delta')
+    assignments=sql.SQL(',').join(sql.SQL('{c}=c.{c}+d.{c}').format(c=sql.Identifier(name)) for name in METRICS)
+    changed=sql.SQL(' OR ').join(sql.SQL('d.{}<>0').format(sql.Identifier(name)) for name in METRICS)
+    cur.execute(sql.SQL("""UPDATE analytics.killmail_rankings_current c SET {assignments}
+        FROM ranking_delta d WHERE c.entity_kind=d.entity_kind AND c.entity_id=d.entity_id AND ({changed})""").format(
+        assignments=assignments,changed=changed))
+    cur.execute("""INSERT INTO analytics.killmail_rankings_current
+        SELECT d.*,%s FROM ranking_delta d WHERE NOT EXISTS
+          (SELECT 1 FROM analytics.killmail_rankings_current c
+           WHERE c.entity_kind=d.entity_kind AND c.entity_id=d.entity_id) AND (d.kills>0 OR d.losses>0)""",(month,))
+    cur.execute("""DELETE FROM analytics.killmail_rankings_current c USING ranking_delta d
+                   WHERE c.entity_kind=d.entity_kind AND c.entity_id=d.entity_id AND c.kills=0 AND c.losses=0""")
+
+
+def write_month_snapshots(cur,month):
+    # Propagate corrected old activity to later ACTIVE snapshots only.
+    assignments=sql.SQL(',').join(sql.SQL('{c}=m.{c}+d.{delta}').format(
+        c=sql.Identifier('cumulative_'+name),delta=sql.Identifier(name)) for name in METRICS)
+    changed=sql.SQL(' OR ').join(sql.SQL('d.{}<>0').format(sql.Identifier(name)) for name in METRICS)
+    cur.execute(sql.SQL("""UPDATE analytics.killmail_rankings_monthly m SET {assignments}
+        FROM ranking_delta d WHERE m.entity_kind=d.entity_kind AND m.entity_id=d.entity_id
+          AND m.month>%s AND ({changed})""").format(assignments=assignments,changed=changed),(month,))
+    # Insert this month's snapshot from the last preceding active month.
+    aliases=dict(zip(METRICS,('destroyed','weighted','lost','kills','losses','unvalued_kills','unvalued_losses')))
+    columns=sql.SQL(',').join(sql.Identifier('cumulative_'+name) for name in METRICS)
+    values=sql.SQL(',').join(sql.SQL('COALESCE(p.{c},0)+s.{v}').format(
+        c=sql.Identifier('cumulative_'+name),v=sql.Identifier(aliases[name])) for name in METRICS)
+    cur.execute(sql.SQL("""INSERT INTO analytics.killmail_rankings_monthly
+        (month,entity_kind,entity_id,destroyed_cents,weighted_destroyed_cents,lost_cents,
+         kills,losses,unvalued_kills,unvalued_losses,{columns})
+        SELECT %s,s.kind,s.id,s.destroyed,s.weighted,s.lost,s.kills,s.losses,
+               s.unvalued_kills,s.unvalued_losses,{values}
+        FROM ranking_stage s LEFT JOIN LATERAL (
+            SELECT {columns} FROM analytics.killmail_rankings_monthly m
+            WHERE m.entity_kind=s.kind AND m.entity_id=s.id AND m.month<%s
+            ORDER BY month DESC LIMIT 1
+        ) p ON true""").format(columns=columns,values=values),(month,month))
+    rows=cur.rowcount
+    cur.execute("""UPDATE analytics.killmail_rankings_current c SET last_month=m.month
+        FROM ranking_delta d CROSS JOIN LATERAL (
+            SELECT max(month) AS month FROM analytics.killmail_rankings_monthly p
+            WHERE p.entity_kind=d.entity_kind AND p.entity_id=d.entity_id
+        ) m WHERE c.entity_kind=d.entity_kind AND c.entity_id=d.entity_id
+            AND c.last_month IS DISTINCT FROM m.month""")
+    return rows
+
+
 def build_month(conn, month, report=lambda **kwargs: None):
     """Caller starts REPEATABLE READ, commits only after this returns successfully."""
     suffix = month.strftime('%Y_%m')
@@ -94,14 +183,13 @@ def build_month(conn, month, report=lambda **kwargs: None):
                 FROM ranking_kills k
                 CROSS JOIN LATERAL (VALUES (1,k.victim_character_id),(2,k.victim_corporation_id),(3,k.victim_alliance_id)) e(kind,id)
                 WHERE e.id>0 GROUP BY e.kind,e.id
-            ) SELECT kind,id,sum(destroyed) AS destroyed,sum(weighted) AS weighted,sum(lost) AS lost,
+            ) SELECT kind,id,sum(destroyed) AS destroyed,sum(weighted)::numeric(38,8) AS weighted,sum(lost) AS lost,
                      sum(kills)::bigint AS kills,sum(losses)::bigint AS losses,
                      sum(unvalued_kills)::bigint AS unvalued_kills,sum(unvalued_losses)::bigint AS unvalued_losses
               FROM facts GROUP BY kind,id''')
+        update_current(cur,month)
         cur.execute('DELETE FROM analytics.killmail_rankings_monthly WHERE month=%s', (month,))
-        cur.execute('''INSERT INTO analytics.killmail_rankings_monthly
-            SELECT %s,kind,id,destroyed,weighted,lost,kills,losses,unvalued_kills,unvalued_losses FROM ranking_stage''', (month,))
-        rows = cur.rowcount
+        rows = write_month_snapshots(cur,month)
         cur.execute('''INSERT INTO analytics.killmail_ranking_months
             (month,built_revision,built_at,killmails,valued,zero_damage,entity_rows)
             VALUES(%s,%s,clock_timestamp(),%s,%s,%s,%s) ON CONFLICT(month) DO UPDATE SET
@@ -159,7 +247,13 @@ def main():
                 if not cur.fetchone()[0]:
                     LOG.info('Rankings await manual initialization')
                     return
+            cur.execute("SET LOCAL lock_timeout='10s'")
             cur.execute(SCHEMA.read_text())
+        conn.commit()
+        if shutil.disk_usage(args.progress.parent).free < args.min_free_gb*1024**3:
+            raise RuntimeError('Disk reserve reached; initialization not started')
+        conn.set_session(isolation_level='REPEATABLE READ')
+        ensure_current(conn,report)
         conn.commit()
         months = source_months(conn)
         with conn.cursor() as cur:
@@ -185,6 +279,12 @@ def main():
             conn.commit()
             LOG.info('MONTH_DONE month=%s %s', month, json.dumps(result))
             report(processed=state['processed']+1,entity_rows=state['entity_rows']+result['entity_rows'])
+        if not stopped:
+            report(phase='analyzing_totals')
+            with conn.cursor() as cur:
+                cur.execute('ANALYZE analytics.killmail_rankings_current')
+                cur.execute('ANALYZE analytics.killmail_rankings_monthly')
+            conn.commit()
         report(phase='stopped' if stopped else 'completed')
     except Exception:
         if conn is not None:

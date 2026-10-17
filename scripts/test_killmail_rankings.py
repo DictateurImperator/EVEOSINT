@@ -26,6 +26,12 @@ FEB = date(2026,2,1)
 
 class ControlTests(unittest.TestCase):
     def setUp(self):
+        self.cache_dir=tempfile.TemporaryDirectory(prefix='ranking-cache-test-')
+        self.addCleanup(self.cache_dir.cleanup)
+        cache_patch=patch.object(rankings,'CACHE_DIR',Path(self.cache_dir.name))
+        cache_patch.start()
+        self.addCleanup(cache_patch.stop)
+        rankings._CACHE.clear()
         app = FastAPI()
         app.include_router(routes.router)
         self.client = TestClient(app)
@@ -33,6 +39,9 @@ class ControlTests(unittest.TestCase):
         self.auth = patch.object(routes,'require_login',return_value=self.user)
         self.auth.start()
         self.addCleanup(self.auth.stop)
+        enrich_patch=patch.object(rankings,'enrich_rows',side_effect=lambda kind,rows,as_of=None: rows)
+        enrich_patch.start()
+        self.addCleanup(enrich_patch.stop)
 
     def test_uninitialized_page_never_starts_work(self):
         with patch.object(rankings,'catalog',return_value=[]),patch.object(routes,'run_killmail_rankings') as launch:
@@ -64,8 +73,8 @@ class ControlTests(unittest.TestCase):
                 self.assertEqual(query.call_args.args[3:5],(JAN,FEB))
                 self.assertIn('<strong>All time</strong>',response.text)
             response=self.client.get('/admin/debug/rankings?from=2026-02&through=2026-02')
-            self.assertEqual(query.call_args.args[3:5],(FEB,FEB))
-            self.assertIn('<strong>Selected period</strong>',response.text)
+            self.assertEqual(query.call_args.args[3:5],(JAN,FEB))
+            self.assertIn('<strong>From the beginning</strong>',response.text)
 
 
     def test_controls_permissions_and_no_side_effect_on_status(self):
@@ -99,13 +108,60 @@ class ControlTests(unittest.TestCase):
     def test_cache_reuses_period_and_invalidates_rebuild(self):
         rankings._CACHE.clear()
         months=[dict(month=JAN,built_at='v1')]
-        with patch.object(rankings,'_query',return_value=[{'id':1}]) as query:
+        with patch.object(rankings,'_query',return_value=[dict(entity_id=1,destroyed=Decimal(100),lost=Decimal(0),net=Decimal(100),efficiency=Decimal(100),kills=1,losses=0,unvalued_kills=0,unvalued_losses=0,name='One')]) as query:
             self.assertFalse(rankings.ranking_rows('character','classic','destroyed',JAN,FEB,months)[1])
             self.assertTrue(rankings.ranking_rows('character','classic','destroyed',JAN,FEB,months)[1])
             self.assertEqual(query.call_count,1)
             months[0]['built_at']='v2'
             self.assertFalse(rankings.ranking_rows('character','classic','destroyed',JAN,FEB,months)[1])
             self.assertEqual(query.call_count,2)
+
+    def test_disk_cache_survives_process_cache_reset_and_data_version_invalidates(self):
+        row=dict(entity_id=1,destroyed=Decimal('123.25'),lost=Decimal(10),net=Decimal('113.25'),
+                 efficiency=Decimal('92.492'),kills=1,losses=1,unvalued_kills=0,unvalued_losses=0,name='One')
+        months=[dict(month=JAN,built_at='version-1')]
+        with patch.object(rankings,'_query',return_value=[row]) as query:
+            self.assertFalse(rankings.ranking_rows('character','classic','destroyed',JAN,FEB,months)[1])
+            rankings._CACHE.clear()
+            result,cached=rankings.ranking_rows('character','classic','destroyed',JAN,FEB,months)
+            self.assertTrue(cached)
+            self.assertEqual(result,[row])
+            self.assertEqual(query.call_count,1)
+            months[0]['built_at']='version-2'
+            self.assertFalse(rankings.ranking_rows('character','classic','destroyed',JAN,FEB,months)[1])
+            self.assertEqual(query.call_count,2)
+
+    def test_search_route_passes_target_and_filters_to_the_same_ranking(self):
+        months=[dict(month=JAN,built_at='v',killmails=1,valued=1,zero_damage=0,entity_rows=1,dirty=False)]
+        row=dict(entity_id=3,name='Pilot',destroyed=Decimal(100),lost=Decimal(0),net=Decimal(100),efficiency=100,
+                 kills=1,losses=0,unvalued_kills=0,unvalued_losses=0,rank=2500,highlight=True)
+        with patch.object(rankings,'catalog',return_value=months),patch.object(rankings,'scope_labels',return_value={'coalition:1':'The Imperium'}),patch.object(rankings,'explore_rows',return_value=dict(rows=[row],offset=2494,position=2500,more=False)) as query:
+            response=self.client.get('/admin/debug/rankings?view=search&target_id=3&q=Pilot&include=coalition:1&exclude=alliance:9&through=2026-01')
+            self.assertEqual(response.status_code,200)
+            self.assertIn('Around rank 2,500',response.text)
+            self.assertIn('The Imperium',response.text)
+            self.assertEqual(query.call_args.kwargs['target_id'],3)
+            self.assertEqual(query.call_args.kwargs['as_of'],JAN)
+            self.assertEqual(query.call_args.kwargs['includes'],['coalition:1'])
+            self.assertEqual(query.call_args.kwargs['excludes'],['alliance:9'])
+
+    def test_shared_lock_blocks_duplicate_work_and_file_cache_is_bounded(self):
+        engine=rankings.engine()
+        with engine.cache_lock(rankings.CACHE_DIR,'a'*64):
+            with self.assertRaises(engine.RankingsBusy):
+                with engine.cache_lock(rankings.CACHE_DIR,'a'*64):
+                    self.fail('Duplicate query acquired a held lock')
+        for i in range(70):
+            engine.save_cache(rankings.CACHE_DIR,f'{i:064x}',[])
+        self.assertEqual(len(list(rankings.CACHE_DIR.glob('*.json'))),engine.CACHE_LIMIT)
+
+    def test_upgrade_notice_skips_the_old_expensive_query(self):
+        months=[dict(month=JAN,built_at='old',killmails=1,valued=1,zero_damage=0,entity_rows=1,dirty=False,totals_ready=False)]
+        with patch.object(rankings,'catalog',return_value=months),patch.object(rankings,'ranking_rows') as query:
+            response=self.client.get('/admin/debug/rankings')
+            self.assertEqual(response.status_code,200)
+            self.assertIn('one-time totals initialization',response.text)
+            query.assert_not_called()
 
     def test_month_is_utc_and_validated(self):
         self.assertEqual(month_of('2026-02-01T00:30:00+02:00'),JAN)
@@ -140,6 +196,22 @@ class DatabaseTests(unittest.TestCase):
                 CREATE TABLE entities.corporations(corporation_id bigint PRIMARY KEY,name text);
                 CREATE TABLE entities.alliances(alliance_id bigint PRIMARY KEY,name text);
                 INSERT INTO entities.characters VALUES(1,'Pilot One'),(2,'Pilot Two');
+                INSERT INTO entities.corporations VALUES(10,'Old Corp'),(11,'New Corp'),(30,'Corp Thirty'),(90,'Victim Corp');
+                INSERT INTO entities.alliances VALUES(1000,'Old Alliance'),(1001,'New Alliance'),(3000,'Alliance Thirty'),(900,'Victim Alliance');
+                CREATE TABLE entities.character_current_affiliation(character_id bigint PRIMARY KEY,corporation_id bigint,alliance_id bigint);
+                INSERT INTO entities.character_current_affiliation VALUES(1,11,1001),(2,10,1000),(3,30,3000),(9,90,900);
+                CREATE TABLE entities.corporation_current_affiliation(corporation_id bigint PRIMARY KEY,alliance_id bigint);
+                INSERT INTO entities.corporation_current_affiliation VALUES(10,1000),(11,1001),(30,3000),(90,900);
+                CREATE TABLE entities.character_corporation_history(character_id bigint,record_id bigint,corporation_id bigint,
+                    start_date timestamptz,end_date timestamptz,is_deleted boolean DEFAULT false);
+                INSERT INTO entities.character_corporation_history VALUES
+                    (1,1,10,'2025-01-01','2026-02-01',false),(1,2,11,'2026-02-01',NULL,false),
+                    (2,1,10,'2025-01-01',NULL,false),(3,1,30,'2025-01-01',NULL,false);
+                CREATE TABLE entities.corporation_alliance_history(corporation_id bigint,record_id bigint,alliance_id bigint,
+                    start_date timestamptz,end_date timestamptz,is_deleted boolean DEFAULT false);
+                INSERT INTO entities.corporation_alliance_history VALUES
+                    (10,1,1000,'2025-01-01',NULL,false),(11,1,1001,'2025-01-01',NULL,false),
+                    (30,1,3000,'2025-01-01',NULL,false),(90,1,900,'2025-01-01',NULL,false);
                 INSERT INTO rawkm.killmails VALUES
                   (100,'2026-01-02 12:00+00',10000,9,90,900),
                   (101,'2026-01-03 12:00+00',20000,1,10,1000),
@@ -157,6 +229,7 @@ class DatabaseTests(unittest.TestCase):
                   (100,'2026-02-02 12:00+00',1,11,1001,100);
             ''')
             cur.execute(builder.SCHEMA.read_text())
+        builder.ensure_current(self.conn)
         self.conn.commit()
         self.conn.set_session(isolation_level='REPEATABLE READ')
 
@@ -240,6 +313,140 @@ class DatabaseTests(unittest.TestCase):
             self.assertEqual((one['destroyed'],one['lost'],one['kills']),(40000,20000,3))
             weighted=rankings._query('character','weighted','destroyed',JAN,FEB)
             self.assertEqual(next(r for r in weighted if r['entity_id']==1)['destroyed'],33000)
+
+    def test_sparse_snapshots_carry_forward_and_old_correction_updates_later_totals(self):
+        self.build();self.build(FEB)
+        with self.conn.cursor() as cur:
+            cur.execute("SELECT cumulative_destroyed_cents FROM analytics.killmail_rankings_monthly WHERE entity_kind=1 AND entity_id=1 ORDER BY month")
+            self.assertEqual([r[0] for r in cur], [10000,40000])
+            cur.execute("SELECT xmin::text FROM analytics.killmail_rankings_current WHERE entity_kind=1 AND entity_id=3")
+            before=cur.fetchone()[0]
+        self.conn.commit()
+        self.build(FEB)
+        with self.conn.cursor() as cur:
+            cur.execute("SELECT xmin::text FROM analytics.killmail_rankings_current WHERE entity_kind=1 AND entity_id=3")
+            self.assertEqual(cur.fetchone()[0],before)
+            cur.execute("SELECT count(*) FROM analytics.killmail_rankings_monthly WHERE entity_kind=1 AND entity_id=3")
+            self.assertEqual(cur.fetchone()[0],1)
+            cur.execute("UPDATE rawkm.killmails SET estimated_value_cents=15000 WHERE killmail_id=100 AND killmail_time<'2026-02-01'")
+        self.conn.commit();self.build()
+        with self.conn.cursor() as cur:
+            cur.execute("SELECT destroyed_cents,cumulative_destroyed_cents FROM analytics.killmail_rankings_monthly WHERE entity_kind=1 AND entity_id=1 AND month=%s",(FEB,))
+            self.assertEqual(cur.fetchone(),(30000,45000))
+            cur.execute("SELECT destroyed_cents,last_month FROM analytics.killmail_rankings_current WHERE entity_kind=1 AND entity_id=1")
+            self.assertEqual(cur.fetchone(),(45000,FEB))
+
+    def test_fractional_damage_credit_does_not_drift_on_repeated_rebuilds(self):
+        with self.conn.cursor() as cur:
+            cur.execute("INSERT INTO rawkm.killmails VALUES(104,'2026-01-06 12:00+00',1,4,40,4000)")
+            cur.execute("INSERT INTO rawkm.killmail_attackers VALUES(104,'2026-01-06 12:00+00',1,10,1000,1),(104,'2026-01-06 12:00+00',2,10,1000,2)")
+        self.conn.commit()
+        self.build();self.build(FEB)
+        for _ in range(5):
+            self.build()
+            with self.conn.cursor() as cur:
+                cur.execute("SELECT weighted_destroyed_cents FROM analytics.killmail_rankings_current WHERE entity_kind=1 AND entity_id=1")
+                self.assertEqual(cur.fetchone()[0],Decimal('33000.33333333'))
+            self.conn.commit()
+
+    def test_current_and_historical_rankings_equal_monthly_facts_for_every_sort(self):
+        self.build();self.build(FEB)
+        self.conn.commit()
+        engine=rankings.engine()
+        for last in (JAN,FEB):
+            for kind in rankings.KINDS:
+                for mode in ('classic','weighted'):
+                    for sort in rankings.SORTS:
+                        with patch.object(rankings,'db',side_effect=lambda:psycopg2.connect(self.dsn)):
+                            actual=rankings._query(kind,mode,sort,JAN,last)
+                            with patch.object(engine,'_current_rows',return_value=None):
+                                expected=rankings._query(kind,mode,sort,JAN,last)
+                        self.assertEqual(actual,expected,(kind,mode,sort,last))
+
+    def test_future_only_entities_are_absent_from_the_historical_ranking(self):
+        with self.conn.cursor() as cur:
+            cur.execute("INSERT INTO rawkm.killmail_attackers VALUES(100,'2026-02-02 12:00+00',50,500,5000,100)")
+        self.conn.commit();self.build();self.build(FEB)
+        with patch.object(rankings,'db',side_effect=lambda:psycopg2.connect(self.dsn)):
+            past=rankings._query('character','classic','destroyed',JAN,JAN)
+            present=rankings._query('character','classic','destroyed',JAN,FEB)
+        self.assertNotIn(50,[r['entity_id'] for r in past])
+        self.assertIn(50,[r['entity_id'] for r in present])
+
+    def test_backfill_uses_existing_months_without_new_raw_imports(self):
+        self.build();self.build(FEB)
+        with self.conn.cursor() as cur:
+            cur.execute('UPDATE analytics.killmail_ranking_current_state SET ready=false')
+            cur.execute('DELETE FROM analytics.killmail_rankings_current')
+            cur.execute('UPDATE analytics.killmail_rankings_monthly SET cumulative_destroyed_cents=NULL')
+        self.conn.commit()
+        builder.ensure_current(self.conn)
+        self.conn.commit()
+        with self.conn.cursor() as cur:
+            cur.execute("SELECT destroyed_cents FROM analytics.killmail_rankings_current WHERE entity_kind=1 AND entity_id=1")
+            self.assertEqual(cur.fetchone()[0],40000)
+            cur.execute("SELECT cumulative_destroyed_cents FROM analytics.killmail_rankings_monthly WHERE entity_kind=1 AND entity_id=1 ORDER BY month")
+            self.assertEqual([r[0] for r in cur],[10000,40000])
+            cur.execute('SELECT count(*) FROM rawkm.killmails')
+            self.assertEqual(cur.fetchone()[0],5)
+
+    def test_removing_activity_deletes_empty_snapshots_and_current_entities(self):
+        self.build();self.build(FEB)
+        with self.conn.cursor() as cur:
+            cur.execute("DELETE FROM rawkm.killmails WHERE killmail_time<'2026-02-01'")
+        self.conn.commit();self.build()
+        with self.conn.cursor() as cur:
+            cur.execute('SELECT count(*) FROM analytics.killmail_rankings_monthly WHERE month=%s',(JAN,))
+            self.assertEqual(cur.fetchone()[0],0)
+            cur.execute('SELECT count(*) FROM analytics.killmail_rankings_current')
+            self.assertEqual(cur.fetchone()[0],6)
+            cur.execute("SELECT destroyed_cents FROM analytics.killmail_rankings_current WHERE entity_kind=1 AND entity_id=1")
+            self.assertEqual(cur.fetchone()[0],30000)
+
+    def test_search_name_target_and_rank_show_neighbours_beyond_top_1000(self):
+        self.build();self.build(FEB)
+        with self.conn.cursor() as cur:
+            cur.execute("""INSERT INTO analytics.killmail_rankings_current(entity_kind,entity_id,destroyed_cents,kills,last_month)
+                           SELECT 1,id,1000000-id,1,'2026-02-01' FROM generate_series(1000,2199) id""")
+        self.conn.commit()
+        engine=rankings.explorer()
+        with psycopg2.connect(self.dsn) as conn:
+            result=engine.explore(conn,rankings.engine(),'character','classic','destroyed',JAN,FEB,target_id=2100,around=True)
+        self.assertEqual(result['position'],1101)
+        self.assertEqual(len(result['rows']),11)
+        self.assertEqual(result['rows'][5]['entity_id'],2100)
+        self.assertTrue(result['rows'][5]['highlight'])
+        with psycopg2.connect(self.dsn) as conn:
+            by_rank=engine.explore(conn,rankings.engine(),'character','classic','destroyed',JAN,FEB,position=1101,around=True)
+        self.assertEqual([r['entity_id'] for r in result['rows']],[r['entity_id'] for r in by_rank['rows']])
+
+    def test_membership_filters_use_current_or_month_end_and_exclusions_win(self):
+        from datetime import date
+        self.build();self.build(FEB)
+        engine=rankings.explorer()
+        def query(**options):
+            with psycopg2.connect(self.dsn) as conn:
+                return engine.explore(conn,rankings.engine(),'character','classic','destroyed',JAN,FEB,scope_day=date(2026,1,31),**options)['rows']
+        self.assertEqual([r['entity_id'] for r in query(includes=['alliance:1000'])],[2])
+        historical=query(includes=['alliance:1000'],as_of=JAN)
+        self.assertEqual({r['entity_id'] for r in historical},{1,2})
+        rules={1:[dict(operation='exclude',member_type='corporation',member_id=30,valid_from=None,valid_to=None),
+                  dict(operation='include',member_type='alliance',member_id=1000,valid_from=None,valid_to=None)]}
+        self.assertEqual([r['entity_id'] for r in query(includes=['coalition:1'],rules=rules)],[2])
+        self.assertEqual(query(includes=['coalition:1'],excludes=['corporation:10'],rules=rules),[])
+        with self.assertRaises(ValueError):
+            query(includes=['alliance:1000'],target_id=1,around=True)
+
+    def test_affiliations_display_historical_data_without_current_fallback(self):
+        rows=[dict(entity_id=1),dict(entity_id=9)]
+        with psycopg2.connect(self.dsn) as conn:
+            current=rankings.explorer().enrich(conn,'character',rows)
+        self.assertEqual(current[0]['corporation_name'],'New Corp')
+        with psycopg2.connect(self.dsn) as conn:
+            historical=rankings.explorer().enrich(conn,'character',rows,JAN)
+        self.assertEqual(historical[0]['corporation_name'],'Old Corp')
+        self.assertEqual(historical[0]['alliance_name'],'Old Alliance')
+        self.assertIsNone(historical[1]['corporation_id'])
 
     def test_transaction_rollback_preserves_previous_month(self):
         self.build()
