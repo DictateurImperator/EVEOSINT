@@ -968,6 +968,6 @@ def killmail_rankings_progress():
         runtime = dict(runtime, running=True, pid=pipeline_pid)
     if runtime['running'] and (not progress or progress.get('pid') != runtime['pid']):
         progress = {'phase': 'starting'}
-    elif progress and not runtime['running'] and progress.get('phase') not in {'completed', 'failed', 'stopped'}:
+    elif progress and not runtime['running'] and progress.get('phase') not in {'completed', 'failed', 'stopped', 'purged'}:
         progress = dict(progress, phase='interrupted')
     return {'running': runtime['running'], 'progress': progress}

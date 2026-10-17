@@ -24,6 +24,28 @@ JAN = date(2026,1,1)
 FEB = date(2026,2,1)
 
 
+class ProgressTests(unittest.TestCase):
+    def test_heartbeat_preserves_committed_counts_and_phase_start(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'progress.json'
+            state = dict(phase='starting', processed=0, months=227, entity_rows=0)
+            report = builder.ProgressReporter(path, state)
+            report(phase='reading_killmails', current_month='2008-01')
+            before = json.loads(path.read_text())
+            report()  # Heartbeat during SQL, with no completed month yet.
+            after = json.loads(path.read_text())
+            self.assertEqual(after['processed'], 0)
+            self.assertEqual(after['phase_started_at'], before['phase_started_at'])
+            self.assertGreaterEqual(after['updated_at'], before['updated_at'])
+            report(phase='writing_rankings')
+            self.assertEqual(json.loads(path.read_text())['entity_rows'], 0)
+            report(processed=1, entity_rows=1234)
+            self.assertEqual(json.loads(path.read_text())['processed'], 1)
+            report.start()
+            report.close()
+            self.assertFalse(report.thread.is_alive())
+
+
 class ControlTests(unittest.TestCase):
     def setUp(self):
         self.cache_dir=tempfile.TemporaryDirectory(prefix='ranking-cache-test-')
@@ -253,6 +275,32 @@ class DatabaseTests(unittest.TestCase):
             cur.execute('''SELECT destroyed_cents,weighted_destroyed_cents,lost_cents,kills,losses,unvalued_kills,unvalued_losses
                            FROM analytics.killmail_rankings_monthly WHERE entity_kind=%s AND entity_id=%s AND month=%s''',(kind,id,month))
             return cur.fetchone()
+
+    def test_terminal_purge_is_limited_to_generated_rankings(self):
+        self.build(JAN)
+        self.build(FEB)
+        with self.conn.cursor() as cur:
+            cur.execute('SELECT count(*) FROM rawkm.killmails')
+            before = cur.fetchone()[0]
+            script = Path(builder.__file__).with_name('purge_killmail_rankings.sh').read_text()
+            reset = script.split("<<'SQL'\n", 1)[1].split('\nSQL', 1)[0]
+            # Exercise the exact SQL shipped in the terminal script, in this disposable DB.
+            cur.execute(reset)
+            for table in ('killmail_rankings_monthly', 'killmail_rankings_current',
+                          'killmail_ranking_months', 'killmail_ranking_versions'):
+                cur.execute('SELECT count(*) FROM analytics.' + table)
+                self.assertEqual(cur.fetchone()[0], 0)
+            cur.execute('SELECT ready FROM analytics.killmail_ranking_current_state')
+            self.assertEqual(cur.fetchone()[0], False)
+            cur.execute('SELECT count(*) FROM rawkm.killmails')
+            self.assertEqual(cur.fetchone()[0], before)
+        self.conn.commit()
+        builder.ensure_current(self.conn)
+        self.conn.commit()
+        self.build(JAN)
+        with self.conn.cursor() as cur:
+            cur.execute('SELECT count(*) FROM analytics.killmail_rankings_monthly')
+            self.assertGreater(cur.fetchone()[0], 0)
 
     def test_credit_dedup_damage_npc_losses_and_no_empty_rows(self):
         result=self.build()

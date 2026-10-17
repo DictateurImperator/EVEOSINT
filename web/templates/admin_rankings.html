@@ -71,12 +71,12 @@
  <summary class="fw-semibold">Monthly ranking builder</summary>
  <div class="mt-3">
  <div class="d-flex justify-content-between gap-2 flex-wrap"><div><p class="muted-line small mb-2">Existing monthly results are reused to initialize cumulative totals. New runs rebuild only missing or changed months and update the affected totals. Completed months remain available when stopped.</p></div><div class="d-flex gap-2 align-items-start">{% if can_run %}<button class="btn btn-sm btn-primary" id="rankStart">Build / refresh rankings</button><button class="btn btn-sm btn-outline-danger" id="rankStop" disabled>Stop</button>{% endif %}<a class="btn btn-sm btn-outline-light" href="/admin/jobs/build_killmail_rankings/log">Job log</a></div></div>
- <div id="rankProgress" class="muted-line small" aria-live="polite">Checking job status…</div><div class="progress mt-2" style="height:6px"><div id="rankBar" class="progress-bar" style="width:0%"></div></div><div id="rankError" class="text-danger small mt-2" role="alert"></div>
+ <div id="rankDetail" class="small mb-2"></div><div id="rankProgress" class="muted-line small" aria-live="polite">Checking job status…</div><div class="progress mt-2" style="height:6px"><div id="rankBar" class="progress-bar" style="width:0%"></div></div><div id="rankError" class="text-danger small mt-2" role="alert"></div>
  </div>
 </details>
 
 <script>
 {% include "ranking_controls.js" %}
-(()=>{const $=id=>document.getElementById(id);let wasRunning=false;async function poll(){try{const r=await fetch('/admin/debug/rankings/status',{cache:'no-store'});if(!r.ok)throw new Error('Job status unavailable');const data=await r.json(),p=data.progress||{};if($('rankStart'))$('rankStart').disabled=data.running;if($('rankStop'))$('rankStop').disabled=!data.running;$('rankProgress').textContent=[data.running?'Running':(p.phase||'Not started'),data.running?p.phase:'',p.months!==undefined?`Months ${p.processed||0} / ${p.months}`:'',p.current_month?`Current: ${p.current_month}`:'',p.entity_rows!==undefined?`Monthly rows saved: ${Number(p.entity_rows).toLocaleString()}`:''].filter(Boolean).join(' · ');$('rankBar').style.width=(p.months?100*(p.processed||0)/p.months:0)+'%';if(p.error)$('rankError').textContent=p.error;if(wasRunning&&!data.running&&p.phase==='completed')location.reload();wasRunning=data.running;}catch(e){$('rankError').textContent=e.message;}finally{setTimeout(poll,3000);}}for(const action of ['start','stop']){const b=$('rank'+action[0].toUpperCase()+action.slice(1));if(b)b.onclick=async()=>{b.disabled=true;$('rankError').textContent='';try{const r=await fetch('/admin/debug/rankings/'+action,{method:'POST',headers:{'Accept':'application/json'}});const d=await r.json();if(!r.ok)throw new Error(d.error||'Job action failed');if(action==='start')wasRunning=true;}catch(e){$('rankError').textContent=e.message;b.disabled=false;}};}poll();})();
+{% include "ranking_job_progress.js" %}
 </script>
 {% endblock %}

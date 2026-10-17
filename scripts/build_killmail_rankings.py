@@ -7,6 +7,7 @@ import os
 import re
 import shutil
 import signal
+import threading
 from datetime import date, datetime, UTC
 from pathlib import Path
 
@@ -16,6 +17,42 @@ from psycopg2 import sql
 LOCK = 79130425
 LOG = logging.getLogger('killmail_rankings')
 SCHEMA = Path(__file__).with_name('killmail_rankings_schema.sql')
+
+
+class ProgressReporter:
+    """Publish a heartbeat during SQL work; only committed months count as saved."""
+    def __init__(self, path, state):
+        self.path, self.state = path, state
+        self.lock = threading.Lock()
+        self.done = threading.Event()
+        self.thread = threading.Thread(target=self._heartbeat, daemon=True)
+
+    def __call__(self, **values):
+        with self.lock:
+            now = datetime.now(UTC).isoformat()
+            if values.get('phase', self.state.get('phase')) != self.state.get('phase'):
+                self.state['phase_started_at'] = now
+                LOG.info('PHASE %s month=%s', values['phase'], values.get('current_month', self.state.get('current_month', '')))
+            self.state.update(values, updated_at=now)
+            temp = self.path.with_suffix('.tmp')
+            temp.write_text(json.dumps(self.state))
+            temp.replace(self.path)
+
+    def _heartbeat(self):
+        while not self.done.wait(2):
+            try:
+                self()
+            except OSError:
+                LOG.exception('Unable to publish ranking heartbeat')
+
+    def start(self):
+        self()
+        self.thread.start()
+
+    def close(self):
+        self.done.set()
+        if self.thread.is_alive():
+            self.thread.join()
 
 
 def parse_month(value):
@@ -138,7 +175,7 @@ def build_month(conn, month, report=lambda **kwargs: None):
         cur.execute('SELECT revision FROM analytics.killmail_ranking_versions WHERE month=%s', (month,))
         row = cur.fetchone()
         revision = row[0] if row else 0
-        report(phase='reading_killmails', current_month=month.strftime('%Y-%m'))
+        report(phase='reading_killmails', current_month=month.strftime('%Y-%m'), killmails=None, valued=None)
         cur.execute(sql.SQL('''CREATE TEMP TABLE ranking_kills ON COMMIT DROP AS
             SELECT killmail_id,killmail_time,estimated_value_cents AS cents,
                    victim_character_id,victim_corporation_id,victim_alliance_id
@@ -212,13 +249,10 @@ def main():
     if args.from_month and args.through_month and args.from_month>args.through_month:
         parser.error('From must precede through')
     logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
-    state = dict(pid=os.getpid(), phase='starting', processed=0, months=0, entity_rows=0)
+    now = datetime.now(UTC).isoformat()
+    state = dict(pid=os.getpid(), phase='starting', processed=0, months=0, entity_rows=0, started_at=now, phase_started_at=now)
     args.progress.parent.mkdir(parents=True, exist_ok=True)
-    def report(**values):
-        state.update(values, updated_at=datetime.now(UTC).isoformat())
-        temp = args.progress.with_suffix('.tmp')
-        temp.write_text(json.dumps(state))
-        temp.replace(args.progress)
+    report = ProgressReporter(args.progress, state)
     conn = None
     stopped = False
     def stop(*_args):
@@ -253,6 +287,7 @@ def main():
         if shutil.disk_usage(args.progress.parent).free < args.min_free_gb*1024**3:
             raise RuntimeError('Disk reserve reached; initialization not started')
         conn.set_session(isolation_level='REPEATABLE READ')
+        report.start()
         ensure_current(conn,report)
         conn.commit()
         months = source_months(conn)
@@ -296,6 +331,7 @@ def main():
             LOG.exception('Rankings failed')
             raise
     finally:
+        report.close()
         if conn is not None:
             conn.close()
 
