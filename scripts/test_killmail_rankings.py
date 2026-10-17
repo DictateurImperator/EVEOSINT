@@ -90,7 +90,7 @@ class ControlTests(unittest.TestCase):
             self.assertIn('<strong>All time</strong>',r.text)
             self.assertIn('id="rankName"',r.text)
             self.assertIn('id="rankSearchBy"',r.text)
-            self.assertNotIn('nav nav-tabs',r.text)
+            self.assertIn('aria-label="Ranking entity type"',r.text)
             self.assertIn('data-rank-sign',r.text)
             self.assertLess(r.text.index('class="table rank-table'),r.text.index('Monthly ranking builder'))
             for url in ('?from=&through=', '?page=2'):
@@ -102,6 +102,29 @@ class ControlTests(unittest.TestCase):
             self.assertEqual(query.call_args.args[3:5],(JAN,FEB))
             self.assertIn('<strong>From the beginning</strong>',response.text)
 
+
+    def test_entity_tabs_keep_settings_but_reset_the_searched_entity_and_page(self):
+        import html
+        import re
+        from urllib.parse import urlparse,parse_qs
+        months=[dict(month=JAN,built_at='v',killmails=1,valued=1,zero_damage=0,entity_rows=1,dirty=False)]
+        with patch.object(rankings,'catalog',return_value=months),patch.object(rankings,'scope_labels',return_value={}),patch.object(rankings,'explore_rows',return_value=dict(rows=[],offset=0,position=1,more=False)):
+            for kind in ['character','corporation','alliance']:
+                response=self.client.get('/admin/debug/rankings',params=dict(kind=kind,mode='weighted',sort='lost',through='2026-01',include='universe:0',exclude='alliance:999',q='Pilot',target_id=42,page=2))
+                self.assertEqual(response.status_code,200)
+                links=re.findall(r'<a class="nav-link[^"]*" href="([^"]*)" data-rank-kind="([^"]*)"([^>]*)>',response.text)
+                self.assertEqual([tab[1] for tab in links],['character','corporation','alliance'])
+                for href,tab_kind,attrs in links:
+                    params=parse_qs(urlparse(html.unescape(href)).query)
+                    self.assertEqual(params['kind'],[tab_kind])
+                    self.assertEqual(params['mode'],['weighted'])
+                    self.assertEqual(params['sort'],['lost'])
+                    self.assertEqual(params['through'],['2026-01'])
+                    self.assertEqual(params['include'],['universe:0'])
+                    self.assertEqual(params['exclude'],['alliance:999'])
+                    self.assertFalse(set(params)&{'q','target_id','position','page'})
+                    self.assertEqual('aria-current="page"' in attrs,tab_kind==kind)
+                self.assertNotIn('data-rank-kind="coalition"',response.text)
 
     def test_controls_permissions_and_no_side_effect_on_status(self):
         with patch.object(routes,'killmail_rankings_progress',return_value={'running':False,'progress':None}),patch.object(routes,'run_killmail_rankings') as launch:

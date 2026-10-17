@@ -1,5 +1,10 @@
 (()=>{
   const $=id=>document.getElementById(id),kind=$('rankingKind');
+  document.querySelectorAll('[data-rank-kind]').forEach(tab=>tab.addEventListener('click',()=>{
+    const params=new URLSearchParams(new FormData(kind.form));
+    for(const name of ['q','target_id','position','page'])params.delete(name);
+    params.set('kind',tab.dataset.rankKind);tab.href='/admin/debug/rankings?'+params.toString();
+  }));
   const typeLabel=kind=>({universe:'Universe',coalition:'Coalition',alliance:'Alliance',corporation:'Corporation',character:'Character'}[kind]||kind);
   function logo(item){
     if(item.entity_type==='universe'||Number(item.entity_id)===0)return null;

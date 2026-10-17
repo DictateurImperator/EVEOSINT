@@ -9,8 +9,11 @@
 {% if months and not totals_ready %}<div class="alert alert-info">Fast rankings need a one-time totals initialization. Click <strong>Build / refresh rankings</strong> below to reuse the existing monthly results; killmails will not be recalculated.</div>{% endif %}
 {% if error %}<div class="alert alert-warning">{{ error }}</div>{% endif %}
 <section class="content-card p-3 mb-4">
+<nav class="nav nav-tabs mb-3" aria-label="Ranking entity type">
+ {% for tab in entity_tabs %}<a class="nav-link {{ 'active' if tab.active else '' }}" href="{{ tab.url }}" data-rank-kind="{{ tab.kind }}" {% if tab.active %}aria-current="page"{% endif %}>{{ tab.label }}</a>{% endfor %}
+</nav>
 <form method="get" class="d-flex flex-wrap align-items-end gap-3">
- <label class="small">Entity<select class="form-select form-select-sm" name="kind" id="rankingKind">{% for value,label in [('character','Characters'),('corporation','Corporations'),('alliance','Alliances')] %}<option value="{{ value }}" {% if kind==value %}selected{% endif %}>{{ label }}</option>{% endfor %}</select></label>
+ <input type="hidden" name="kind" id="rankingKind" value="{{ kind }}">
  <label class="small">Kill credit<select class="form-select form-select-sm" name="mode"><option value="classic" {% if mode=='classic' %}selected{% endif %}>Full kill value</option><option value="weighted" {% if mode=='weighted' %}selected{% endif %}>Damage share</option></select></label>
  <label class="small">Rank by<select class="form-select form-select-sm" name="sort">{% for value,label in [('destroyed','ISK destroyed'),('lost','ISK lost'),('net','Net ISK'),('efficiency','ISK efficiency'),('kills','Kills'),('losses','Losses')] %}<option value="{{ value }}" {% if sort==value %}selected{% endif %}>{{ label }}</option>{% endfor %}</select></label>
  <details {% if custom_period %}open{% endif %}>

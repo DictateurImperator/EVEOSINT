@@ -108,6 +108,8 @@ def page(request: Request):
         include_terms=[dict(token=v,label=labels.get(v,v),logo_url=rankings.scope_logo(v)) for v in includes],
         exclude_terms=[dict(token=v,label=labels.get(v,v),logo_url=rankings.scope_logo(v)) for v in excludes],
         ranking_link=link(view='ranking'),search_link=link(view='search'),
+        entity_tabs=[dict(kind=k,label=label,url=link(kind=k),active=kind==k)
+                     for k,label in [('character','Characters'),('corporation','Corporations'),('alliance','Alliances')]],
         all_time_link='/admin/debug/rankings?'+urlencode({k:v for k,v in base.items() if k!='through'},doseq=True),
         last=params.get('through',''),custom_period=custom_period,
         period_from=first.strftime('%Y-%m') if first else '',period_through=last.strftime('%Y-%m') if last else '',
