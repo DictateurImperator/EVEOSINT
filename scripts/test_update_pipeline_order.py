@@ -43,8 +43,9 @@ class DailyPipelineTests(unittest.TestCase):
         steps = pipeline.weekly_steps()
         self.assertEqual(result, 0)
         self.assertEqual(executed, [step['id'] for step in steps])
-        self.assertEqual(executed[-3:], ['killmail_missing_prices', 'killmail_missing_values', 'killmail_price_recovery'])
-        self.assertEqual(steps[-3]['command'][-2:], ['--refresh-days', '0'])
+        self.assertEqual(executed[-4:], ['killmail_missing_prices', 'killmail_missing_values', 'killmail_price_recovery', 'killmail_rankings'])
+        self.assertEqual(steps[-4]['command'][-2:], ['--refresh-days', '0'])
+        self.assertEqual(steps[-1]['command'][-1], '--incremental-only')
         self.assertEqual(len(steps[1]['command']), 2)  # All imported history; no date limits.
         self.assertEqual(state['scheduled_time'], '14:30')
 

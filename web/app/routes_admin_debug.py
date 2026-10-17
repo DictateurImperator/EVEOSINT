@@ -371,28 +371,7 @@ def admin_debug(request: Request):
     redirect = require_permission_or_redirect(user, "admin.jobs.view")
     if redirect:
         return redirect
-    context = app_context(
-        request=request,
-        user=user,
-        title="EVEOSINT - Debug",
-        active_module="admin",
-        active_menu_key="admin.debug",
-    )
-    inspection = _sovereignty_debug_inspection(
-        request.query_params.get("system_id")
-    )
-    esi_snapshot = _esi_snapshot_inspection(
-        request.query_params.get("esi_system_id")
-    )
-    context.update({
-        "sovereignty_debug": get_sovereignty_debug_status(),
-        "esi_snapshot": esi_snapshot,
-        "sovereignty_inspection": inspection,
-        "can_run": "admin.jobs.run" in user.get("permissions", set()),
-        "error": request.query_params.get("error"),
-        "success": request.query_params.get("success"),
-    })
-    return templates.TemplateResponse(request=request, name="admin_debug.html", context=context)
+    return RedirectResponse(url="/admin/debug/rankings", status_code=302)
 
 
 @router.get("/admin/debug/api/status")

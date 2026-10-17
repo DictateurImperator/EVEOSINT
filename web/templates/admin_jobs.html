@@ -95,6 +95,9 @@
           {% with prices_enabled=job.enabled %}
           {% include "admin_prices_progress.html" %}
           {% endwith %}
+        {% elif job.type == "killmail_rankings" %}
+          <p class="muted-line small">Sparse monthly ISK totals for characters, corporations and alliances. Rebuilds changed months.</p>
+          <a class="btn btn-sm btn-primary" href="/admin/debug/rankings">Open rankings and build controls</a>
         {% elif job.type == "killmail_price_recovery" %}
           {% with recovery_enabled=job.enabled %}
           {% include "admin_killmail_price_recovery_progress.html" %}

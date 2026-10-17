@@ -269,6 +269,22 @@ class DatabaseTests(unittest.TestCase):
         self.conn.rollback()
         self.conn.close()
 
+    def test_valuation_marks_a_ranking_month_only_when_values_change(self):
+        from scripts import build_killmail_rankings as rankings
+        with self.conn.cursor() as cur:
+            cur.execute(rankings.SCHEMA.read_text())
+            cur.execute("INSERT INTO rawkm.killmails VALUES(1,'2026-01-01 12:00+00',1,NULL)")
+        prices=[(date(2026,1,1),date(2026,1,1),1,Decimal('100'),False)]
+        self.assertEqual(values.update_month(self.conn,date(2026,1,1),prices,'loss-day')[0],1)
+        with self.conn.cursor() as cur:
+            cur.execute("SELECT month,revision FROM analytics.killmail_ranking_versions")
+            self.assertEqual(cur.fetchone(),(date(2026,1,1),1))
+            cur.execute("DROP TABLE valuation_stage; DROP TABLE valuation_prices")
+        self.assertEqual(values.update_month(self.conn,date(2026,1,1),prices,'loss-day')[0],0)
+        with self.conn.cursor() as cur:
+            cur.execute("SELECT revision FROM analytics.killmail_ranking_versions")
+            self.assertEqual(cur.fetchone()[0],1)
+
     def test_first_positive_quotes_can_follow_the_entire_target_kill_month(self):
         with self.conn.cursor() as cur:
             cur.execute("""CREATE SCHEMA market;

@@ -19,6 +19,11 @@ from datetime import UTC, date, datetime
 from email.utils import parsedate_to_datetime
 from pathlib import Path
 
+if __package__:
+    from .killmail_ranking_state import mark_months_dirty, month_of
+else:
+    from killmail_ranking_state import mark_months_dirty, month_of
+
 import requests
 
 BASE_URL = "https://data.everef.net/killmails"
@@ -198,6 +203,8 @@ def import_batch(conn, importer, payloads, archive_day, months, state, state_pat
             """, (*key, archive_day))
         existing.add(key)
         added += 1
+    if added:
+        mark_months_dirty(conn, [month_of(stamp) for stamp in stamps])
     conn.commit()
     return added
 

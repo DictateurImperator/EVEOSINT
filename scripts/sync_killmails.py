@@ -10,6 +10,11 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
+if __package__:
+    from .killmail_ranking_state import mark_months_dirty, month_of
+else:
+    from killmail_ranking_state import mark_months_dirty, month_of
+
 import psycopg2
 import requests
 
@@ -704,6 +709,7 @@ def process_day(day_iso):
         )
 
         imported = 0
+        ranking_months = set()
 
         for jf in json_files:
             with open(
@@ -718,13 +724,16 @@ def process_day(day_iso):
             )
 
             imported += 1
+            ranking_months.add(month_of(payload["killmail_time"]))
 
             if (
                 imported %
                 COMMIT_BATCH_SIZE
                 == 0
             ):
+                mark_months_dirty(conn, ranking_months)
                 conn.commit()
+                ranking_months.clear()
 
                 logger.info(
                     f"{d} committed "
@@ -732,6 +741,7 @@ def process_day(day_iso):
                     f"{len(json_files)}"
                 )
 
+        mark_months_dirty(conn, ranking_months)
         conn.commit()
 
         logger.info(f"{d} final commit")

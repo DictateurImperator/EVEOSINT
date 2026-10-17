@@ -13,6 +13,11 @@ from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal, ROUND_CEILING, ROUND_HALF_UP
 from pathlib import Path
 
+if __package__:
+    from .killmail_ranking_state import mark_months_dirty, month_of
+else:
+    from killmail_ranking_state import mark_months_dirty, month_of
+
 import psycopg2
 from psycopg2 import sql
 from psycopg2.errors import QueryCanceled
@@ -700,6 +705,8 @@ def update_month(conn, month, price_rows, valuation_mode="zkill"):
         updated = cur.rowcount
         cur.execute("SELECT count(*) FROM valuation_prices WHERE used_fallback")
         fallback_pairs = int(cur.fetchone()[0])
+    if updated:
+        mark_months_dirty(conn, [month])
     return int(updated), fallback_pairs
 
 

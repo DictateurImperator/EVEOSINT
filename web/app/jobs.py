@@ -153,7 +153,7 @@ def _normalize_job(raw_job):
     log_path = raw_job.get("log_path")
     enabled = bool(raw_job.get("enabled", True))
 
-    if job_type not in {"sde", "killmails", "recent_kill_pilots_affiliation", "character_skill_inference", "population_alliances_init", "population_alliances_daily", "sovereignty_esi", "killmail_forensics_setup", "killmail_forensics_analysis", "killmail_archive_refresh", "mer_economy", "first_loss_study", "first_loss_purge", "zkill_prices", "killmail_values", "killmail_price_recovery"}:
+    if job_type not in {"sde", "killmails", "recent_kill_pilots_affiliation", "character_skill_inference", "population_alliances_init", "population_alliances_daily", "sovereignty_esi", "killmail_forensics_setup", "killmail_forensics_analysis", "killmail_archive_refresh", "mer_economy", "first_loss_study", "first_loss_purge", "zkill_prices", "killmail_values", "killmail_price_recovery", "killmail_rankings"}:
         raise JobError(f"job_type_invalid:{key}")
 
     if not isinstance(command, list) or not command:
@@ -325,7 +325,16 @@ def load_jobs_config():
             "log_path": str(Path.home() / "eveosint/data/logs/killmail_price_recovery.log"), "enabled": True,
         }))
 
+    if not any(job["key"] == "build_killmail_rankings" for job in jobs):
+        jobs.append(_normalize_job({
+            "key": "build_killmail_rankings", "label": "Killmails · Monthly ISK rankings (Debug)",
+            "type": "killmail_rankings",
+            "command": [sys.executable, str(Path(__file__).resolve().parents[2] / "scripts/build_killmail_rankings.py")],
+            "log_path": str(Path.home() / "eveosint/data/logs/killmail_rankings.log"), "enabled": True,
+        }))
+
     allowed_keys = {
+        "build_killmail_rankings",
         "recover_killmail_prices",
         "import_zkill_prices",
         "calculate_killmail_values",
@@ -896,6 +905,67 @@ def killmail_price_recovery_progress():
             progress = None
     except (OSError, ValueError):
         progress = None
+    if runtime['running'] and (not progress or progress.get('pid') != runtime['pid']):
+        progress = {'phase': 'starting'}
+    elif progress and not runtime['running'] and progress.get('phase') not in {'completed', 'failed', 'stopped'}:
+        progress = dict(progress, phase='interrupted')
+    return {'running': runtime['running'], 'progress': progress}
+
+
+def run_killmail_rankings():
+    job = get_job('build_killmail_rankings')
+    if job['type'] != 'killmail_rankings':
+        raise JobError('job_type_mismatch:build_killmail_rankings')
+    if killmail_rankings_progress()['running']:
+        raise JobError('job_already_running:build_killmail_rankings')
+    return _start_process(job, list(job['command']))
+
+
+def _ranking_progress_pid(progress):
+    # The daily pipeline runs the same script without an Admin Jobs PID file.
+    try:
+        pid = int((progress or {}).get('pid', 0))
+        if pid <= 1 or not _is_pid_running(pid):
+            return None
+        expected = Path(__file__).resolve().parents[2] / 'scripts/build_killmail_rankings.py'
+        arguments = Path(f'/proc/{pid}/cmdline').read_bytes().split(b'\0')
+        return pid if os.fsencode(expected) in arguments else None
+    except (OSError, TypeError, ValueError):
+        return None
+
+
+def stop_killmail_rankings():
+    job = get_job('build_killmail_rankings')
+    running, pid = _cleanup_stale_pid(job['key'])
+    if not running:
+        progress = killmail_rankings_progress()
+        pid = _ranking_progress_pid(progress.get('progress'))
+        if pid is None:
+            return True, 'already_stopped'
+    try:
+        arguments = Path(f'/proc/{pid}/cmdline').read_bytes().split(b'\0')
+        if os.fsencode(job['command'][1]) not in arguments:
+            raise JobError('job_process_mismatch:build_killmail_rankings')
+        os.kill(pid, signal.SIGTERM)
+    except ProcessLookupError:
+        return True, 'already_stopped'
+    except OSError as exc:
+        raise JobError('job_stop_failed:build_killmail_rankings') from exc
+    return True, 'stop_requested'
+
+
+def killmail_rankings_progress():
+    runtime = _read_runtime_status('build_killmail_rankings')
+    path = Path.home() / 'eveosint/data/market/killmail_rankings_progress.json'
+    try:
+        progress = json.loads(path.read_text())
+        if not isinstance(progress, dict):
+            progress = None
+    except (OSError, ValueError):
+        progress = None
+    pipeline_pid = _ranking_progress_pid(progress)
+    if not runtime['running'] and pipeline_pid:
+        runtime = dict(runtime, running=True, pid=pipeline_pid)
     if runtime['running'] and (not progress or progress.get('pid') != runtime['pid']):
         progress = {'phase': 'starting'}
     elif progress and not runtime['running'] and progress.get('phase') not in {'completed', 'failed', 'stopped'}:

@@ -562,6 +562,12 @@ def weekly_steps():
             "market",
             [py, str(SCRIPT_DIR / "recover_killmail_prices.py")],
         ),
+        step(
+            "killmail_rankings",
+            "Killmails · Refresh monthly ISK rankings",
+            "rankings",
+            [py, str(SCRIPT_DIR / "build_killmail_rankings.py"), "--incremental-only"],
+        ),
     ]
 
 
