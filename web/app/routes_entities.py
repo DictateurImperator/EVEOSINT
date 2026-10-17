@@ -51,7 +51,7 @@ from .killmail_filters import (
     search_killboard_filters,
 )
 from .layout import app_context
-from .map_data import MapDataError, get_constellation_map, get_eve_2d_fight_heat, get_eve_2d_influence, get_eve_2d_map, get_location_preview, get_region_map, get_system_map, get_universe_map
+from .map_data import MapDataError, get_constellation_map, get_eve_2d_fight_heat, get_eve_2d_influence, get_eve_2d_map, get_location_preview, get_killmail_location_previews, get_region_map, get_system_map, get_universe_map
 from .main_objects import templates
 from .population_intelligence import (
     get_alliance_population_history,
@@ -2634,6 +2634,7 @@ def kill_profile(request: Request, killmail_id: int):
         "error": error,
         "killmail_id": killmail_id,
         "killmail": killmail,
+        "location_previews": get_killmail_location_previews(killmail.get("location")) if killmail else {},
     })
     return templates.TemplateResponse(
         request=request,

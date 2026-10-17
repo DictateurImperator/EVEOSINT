@@ -2,6 +2,8 @@ import colorsys
 import math
 from datetime import date, datetime, timedelta, timezone
 from functools import lru_cache
+from time import monotonic
+import logging
 
 from .db import db
 from .dotlan_region_layouts import DOTLAN_MAP_BOUNDS, DOTLAN_PAGE_HEIGHT, DOTLAN_PAGE_WIDTH, REGION_LAYOUTS
@@ -2181,6 +2183,26 @@ def get_location_preview(entity_type, entity_id):
 
     raise MapDataError("preview_type_invalid")
 
+
+
+@lru_cache(maxsize=256)
+def _killmail_location_preview(kind, entity_id, epoch):
+    return get_location_preview(kind, entity_id)
+
+
+def get_killmail_location_previews(location):
+    """Reuse profile/map topology, keeping repeated kills in one system inexpensive."""
+    previews = {}
+    for kind in ('system', 'constellation', 'region'):
+        ref = (location or {}).get(kind)
+        if not ref or not ref.get('entity_id'):
+            continue
+        entity_id = int(ref['entity_id'])
+        try:
+            previews[f'{kind}:{entity_id}'] = _killmail_location_preview(kind,entity_id,int(monotonic()//300))
+        except Exception:
+            logging.getLogger(__name__).warning('Killmail location preview unavailable: %s %s',kind,entity_id,exc_info=True)
+    return previews
 
 def _raw_position(data):
     pos = (data or {}).get("position") or {}

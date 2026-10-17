@@ -15,6 +15,37 @@
 <span class="inventory-price" title="{{ amount.title if amount else 'Price unavailable' }}">{{ amount.label if amount else '—' }}</span>
 {%- endmacro %}
 
+{% macro location_map(kind, ref) -%}
+{% if ref %}
+{% set preview = (location_previews|default({})).get(kind ~ ':' ~ ref.entity_id) %}
+<a class="killmail-map-thumb" href="/map/{{ kind }}/{{ ref.entity_id }}" aria-label="Open {{ kind }} map: {{ ref.name }}" title="Open {{ ref.name }} map">
+  {% if preview %}
+  <svg viewBox="0 0 100 100" role="img" aria-label="{{ ref.name }} map miniature">
+    {% if preview.kind == 'system' %}
+    <circle class="thumb-orbit" cx="50" cy="50" r="20"/>
+    <circle class="thumb-orbit" cx="50" cy="50" r="34"/>
+    <circle class="thumb-orbit" cx="50" cy="50" r="46"/>
+    {% endif %}
+    {% for edge in preview.edges %}
+    <line class="thumb-edge" x1="{{ edge.x1 }}" y1="{{ edge.y1 }}" x2="{{ edge.x2 }}" y2="{{ edge.y2 }}"/>
+    {% endfor %}
+    {% for node in preview.nodes %}
+    <circle class="thumb-node{% if node.kind|default('') == 'star' %} thumb-star{% elif node.kind|default('') == 'gate' %} thumb-gate{% endif %}{% if preview.kind != 'system' and node.id == killmail.solar_system_id %} thumb-focus{% endif %}"
+            cx="{{ node.x }}" cy="{{ node.y }}" r="{{ 5 if node.kind|default('') == 'star' else 2 if preview.kind == 'region' else 3.2 }}"/>
+    {% endfor %}
+    {% if preview.kind != 'system' %}
+    {% for node in preview.nodes if node.id == killmail.solar_system_id %}
+    <circle class="thumb-marker" cx="{{ node.x }}" cy="{{ node.y }}" r="6"/>
+    {% endfor %}
+    {% endif %}
+  </svg>
+  {% else %}
+  <span class="thumb-unavailable" aria-label="Map preview unavailable">◇</span>
+  {% endif %}
+</a>
+{% endif %}
+{%- endmacro %}
+
 <style>
   .killmail-page {
     min-height: calc(100vh - 110px);
@@ -265,6 +296,17 @@
     object-fit: contain;
     background: rgba(0, 0, 0, 0.34);
   }
+
+  .killmail-map-thumb { display: block; width: 36px; height: 36px; border: 1px solid #49616a; border-radius: 2px; background: #07121b; }
+  .killmail-map-thumb svg { width: 100%; height: 100%; display: block; }
+  .killmail-map-thumb:hover, .killmail-map-thumb:focus-visible { border-color: #e3bd73; outline: 1px solid #e3bd73; }
+  .killmail-map-thumb .thumb-orbit { fill: none; stroke: #355061; stroke-width: 1.5; }
+  .killmail-map-thumb .thumb-edge { stroke: #658b9f; stroke-width: 1.6; }
+  .killmail-map-thumb .thumb-node { fill: #a2c7db; }
+  .killmail-map-thumb .thumb-star, .killmail-map-thumb .thumb-focus { fill: #f6cb73; }
+  .killmail-map-thumb .thumb-gate { fill: #7ad2c5; }
+  .killmail-map-thumb .thumb-marker { fill: none; stroke: #f6cb73; stroke-width: 1.8; }
+  .thumb-unavailable { display: grid; place-items: center; width: 100%; height: 100%; color: #57717f; }
 
   .victim-entity .kind {
     color: #738a93;
@@ -870,18 +912,18 @@
               <div><div class="kind">{% if killmail.is_structure %}Structure{% else %}Ship{% endif %}</div><div class="name">{% if killmail.victim_ship %}<a href="{{ killmail.victim_ship.url }}">{{ killmail.victim_ship.name }}</a>{% else %}Unknown{% endif %}</div></div>
             </div>
             <div class="victim-entity">
-              <div></div>
+              <div>{{ location_map('system', killmail.location.system if killmail.location else none) }}</div>
               <div><div class="kind">System</div><div class="name">{% if killmail.location and killmail.location.system %}<a href="{{ killmail.location.system.url }}">{{ killmail.location.system.name }}</a>{% else %}Unknown{% endif %}</div></div>
             </div>
             {% if killmail.location and killmail.location.constellation %}
             <div class="victim-entity">
-              <div></div>
+              <div>{{ location_map('constellation', killmail.location.constellation) }}</div>
               <div><div class="kind">Constellation</div><div class="name"><a href="{{ killmail.location.constellation.url }}">{{ killmail.location.constellation.name }}</a></div></div>
             </div>
             {% endif %}
             {% if killmail.location and killmail.location.region %}
             <div class="victim-entity">
-              <div></div>
+              <div>{{ location_map('region', killmail.location.region) }}</div>
               <div><div class="kind">Region</div><div class="name"><a href="{{ killmail.location.region.url }}">{{ killmail.location.region.name }}</a></div></div>
             </div>
             {% endif %}
