@@ -34,7 +34,7 @@ def affiliations(kind,alias,as_of):
             alliance=sql.SQL('COALESCE(ca.alliance_id,aa.alliance_id)')
     else:
         joins+=sql.SQL(''' LEFT JOIN LATERAL (
-            SELECT alliance_id FROM entities.corporation_alliance_history h
+            SELECT alliance_id,true AS affiliation_known FROM entities.corporation_alliance_history h
             WHERE h.corporation_id={} AND NOT h.is_deleted
               AND h.start_date<%s AND (h.end_date IS NULL OR h.end_date>=%s)
             ORDER BY h.start_date DESC,h.record_id DESC LIMIT 1) aa ON true''').format(corporation)
@@ -65,6 +65,10 @@ def scope_predicate(kind,includes,excludes,rules,day):
         return sql.SQL(' '+operator+' ').join(sql.SQL('({})').format(item[0]) for item in items),[p for item in items for p in item[1]]
     def term(token,stack=frozenset()):
         entity_type,id=token.split(':');id=int(id)
+        if entity_type=='universe' and id==0:
+            return sql.SQL('true'),[]
+        if entity_type=='alliance' and id==0:
+            return (sql.SQL('false'),[]) if kind=='alliance' else (sql.SQL('alliance_known AND COALESCE(alliance_id,0)=0'),[])
         if entity_type in ('corporation','alliance'):
             return sql.SQL('COALESCE({}=%s,false)').format(sql.Identifier(entity_type+'_id')),[id]
         if id in stack:
@@ -107,8 +111,10 @@ def explore(conn,engine,kind,mode,sort,first,last,*,as_of=None,includes=(),exclu
     predicate=sql.SQL('true')
     if includes or excludes:
         joins,corp,alliance,join_params=affiliations(kind,'f',as_of)
-        scope_join=sql.SQL('''scoped AS (SELECT f.*,{corp} AS corporation_id,{alliance} AS alliance_id
-                             FROM facts f {joins}),''').format(corp=corp,alliance=alliance,joins=joins)
+        known = ('true' if kind=='alliance' else 'COALESCE(aa.affiliation_known,false)' if as_of is not None
+                 else 'ca.corporation_id IS NOT NULL' if kind=='character' else 'aa.corporation_id IS NOT NULL')
+        scope_join=sql.SQL('''scoped AS (SELECT f.*,{corp} AS corporation_id,{alliance} AS alliance_id,{known} AS alliance_known
+                             FROM facts f {joins}),''').format(corp=corp,alliance=alliance,joins=joins,known=sql.SQL(known))
         params.extend(join_params)
         predicate,scope_params=scope_predicate(kind,includes,excludes,rules or {},scope_day)
         params.extend(scope_params)

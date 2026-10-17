@@ -126,7 +126,7 @@ def parse_scope(values):
     if len(values)>20:
         raise ValueError('Choose at most 20 membership filters per list.')
     for value in values:
-        if not re.fullmatch(r'(coalition|alliance|corporation):[1-9][0-9]{0,17}',value):
+        if value not in ('universe:0','alliance:0') and not re.fullmatch(r'(coalition|alliance|corporation):[1-9][0-9]{0,17}',value):
             raise ValueError('Invalid membership filter.')
         if value not in result:
             result.append(value)
@@ -139,7 +139,11 @@ def lookup(query,kind,purpose='target'):
         return []
     if purpose=='scope':
         from .coalitions import search_member_entities
-        return [item for item in search_member_entities(query,limit=20)
+        special=[dict(entity_type='universe',entity_id=0,name='Universe',logo_url=None)]
+        if kind!='alliance':
+            special.append(dict(entity_type='alliance',entity_id=0,name='No alliance',logo_url=None))
+        matches=[item for item in special if query.casefold() in item['name'].casefold()]
+        return matches+[item for item in search_member_entities(query,limit=20)
                 if kind!='alliance' or item['entity_type'] in ('coalition','alliance')]
     from psycopg2 import sql
     _kind_id,table,id_column=KINDS[kind]
@@ -154,6 +158,8 @@ def lookup(query,kind,purpose='target'):
 
 
 def scope_logo(token):
+    if token in ('universe:0','alliance:0'):
+        return None
     kind,id=token.split(':')
     if kind=='coalition':
         from .coalitions import coalition_logo_url
@@ -165,7 +171,10 @@ def scope_labels(tokens):
     if not tokens:
         return {}
     from psycopg2 import sql
-    result={}
+    result={token:label for token,label in [('universe:0','Universe'),('alliance:0','No alliance')] if token in tokens}
+    tokens=[token for token in tokens if token not in result]
+    if not tokens:
+        return result
     with db() as conn,conn.cursor() as cur:
         cur.execute("SET LOCAL statement_timeout='5s'")
         for kind,table,id_column in [('coalition','coalitions','coalition_id'),('alliance','alliances','alliance_id'),('corporation','corporations','corporation_id')]:

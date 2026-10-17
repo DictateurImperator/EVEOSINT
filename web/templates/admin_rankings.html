@@ -33,11 +33,12 @@
   <button class="kb-filter-toggle" type="button" id="rankFilterToggle" aria-expanded="{{ 'true' if include_terms or exclude_terms else 'false' }}"><span>Filters</span><span class="kb-filter-summary" id="rankFilterSummary">ALL</span></button>
   <div class="kb-filter-panel">
    <section class="kb-family">
-    <div class="kb-family-head"><div class="kb-family-title">Entities</div><div class="kb-family-default">Coalitions / alliances / corporations</div></div>
+    <div class="kb-family-head"><div class="kb-family-title">Entities</div><div class="kb-family-default">Universe / coalitions / alliances / corporations</div></div>
+    <div class="d-flex gap-2 mb-2"><button class="btn btn-outline-secondary btn-sm" type="button" id="rankAddUniverse">Universe</button><button class="btn btn-outline-secondary btn-sm" type="button" id="rankAddNoAlliance">No alliance</button></div>
     <div class="kb-search-wrap"><input class="form-control form-control-sm" type="search" id="rankScopeName" placeholder="Search a coalition, alliance or corporation…" autocomplete="off"><div class="kb-search-results" id="rankScopeResults"></div></div>
     <div class="kb-term-list" id="rankScopeChips">{% for op,terms in [('include',include_terms),('exclude',exclude_terms)] %}{% for term in terms %}{% set entity_type, entity_id = term.token.split(':') %}<div class="kb-term {{ 'kb-term-minus' if op=='exclude' else '' }}" data-rank-term>
      <button class="btn btn-sm kb-term-sign {{ 'btn-outline-danger' if op=='exclude' else 'btn-outline-primary' }}" type="button" data-rank-sign aria-label="Toggle include or exclude">{{ '−' if op=='exclude' else '+' }}</button>
-     {% if term.logo_url %}<img src="{{ term.logo_url }}" alt="" loading="lazy">{% else %}<span class="rank-filter-placeholder" aria-hidden="true">C</span>{% endif %}
+     {% if term.logo_url %}<img src="{{ term.logo_url }}" alt="" loading="lazy">{% else %}<span class="rank-filter-placeholder" aria-hidden="true">{{ '∞' if entity_type=='universe' else '∅' if entity_id=='0' else 'C' }}</span>{% endif %}
      <div class="kb-term-name"><div class="kb-term-name-main">{{ term.label }}</div><div class="kb-term-name-meta">{{ entity_type|capitalize }}</div></div>
      <input type="hidden" name="{{ op }}" value="{{ term.token }}"><button class="kb-term-remove" type="button" data-rank-remove aria-label="Remove filter">×</button>
     </div>{% endfor %}{% endfor %}</div>

@@ -189,6 +189,23 @@ class ControlTests(unittest.TestCase):
             self.assertIn('one-time totals initialization',response.text)
             query.assert_not_called()
 
+    def test_special_scope_tokens_and_labels_do_not_need_entity_lookup(self):
+        self.assertEqual(rankings.parse_scope(['universe:0','alliance:0','universe:0']),['universe:0','alliance:0'])
+        self.assertEqual(rankings.scope_labels(['universe:0','alliance:0']),{'universe:0':'Universe','alliance:0':'No alliance'})
+        self.assertIsNone(rankings.scope_logo('universe:0'))
+        self.assertIsNone(rankings.scope_logo('alliance:0'))
+        for token in ('universe:1','corporation:0','coalition:0','alliance:-1'):
+            with self.assertRaises(ValueError):rankings.parse_scope([token])
+
+    def test_explicit_universe_reuses_the_fast_ranking_query(self):
+        with patch.object(rankings,'catalog',return_value=[dict(month=JAN,built_at='version',killmails=1,valued=1,zero_damage=0,entity_rows=1,dirty=False)]), \
+             patch.object(rankings,'ranking_rows',return_value=([],True)) as fast, \
+             patch.object(rankings,'explore_rows') as scoped:
+            response=self.client.get('/admin/debug/rankings?include=universe:0')
+        self.assertEqual(response.status_code,200)
+        self.assertIn('Universe',response.text)
+        fast.assert_called_once();scoped.assert_not_called()
+
     def test_month_is_utc_and_validated(self):
         self.assertEqual(month_of('2026-02-01T00:30:00+02:00'),JAN)
         for value in ['2026-99','2002-01','2026-1','2026-01;SELECT 1']:
@@ -488,6 +505,32 @@ class DatabaseTests(unittest.TestCase):
         self.assertEqual(query(includes=['coalition:1'],excludes=['corporation:10'],rules=rules),[])
         with self.assertRaises(ValueError):
             query(includes=['alliance:1000'],target_id=1,around=True)
+
+    def test_universe_and_no_alliance_filters_at_current_and_historical_dates(self):
+        from datetime import date
+        self.build();self.build(FEB)
+        with self.conn.cursor() as cur:
+            cur.execute('UPDATE entities.character_current_affiliation SET alliance_id=0 WHERE character_id=2')
+            cur.execute('UPDATE entities.corporation_current_affiliation SET alliance_id=NULL WHERE corporation_id=10')
+            cur.execute('UPDATE entities.corporation_alliance_history SET alliance_id=NULL WHERE corporation_id=10')
+            cur.execute("INSERT INTO analytics.killmail_rankings_current(entity_kind,entity_id,destroyed_cents,kills,last_month) VALUES(1,55,50,1,'2026-02-01')")
+        self.conn.commit()
+        def ids(kind='character',**options):
+            with psycopg2.connect(self.dsn) as conn:
+                rows=rankings.explorer().explore(conn,rankings.engine(),kind,'classic','destroyed',JAN,FEB,
+                    scope_day=date(2026,1,31),**options)['rows']
+            return {row['entity_id'] for row in rows}
+        everyone=ids()
+        self.assertIn(55,everyone)
+        self.assertEqual(ids(includes=['universe:0']),everyone)
+        self.assertEqual(ids(includes=['universe:0'],excludes=['corporation:30']),everyone-{3})
+        self.assertEqual(ids(includes=['alliance:0']),{2})
+        self.assertEqual(ids(includes=['universe:0'],excludes=['alliance:0']),everyone-{2})
+        self.assertEqual(ids(includes=['alliance:0'],as_of=JAN),{1,2})
+        self.assertEqual(ids(kind='corporation',includes=['alliance:0']),{10})
+        self.assertEqual(ids(kind='corporation',includes=['alliance:0'],as_of=JAN),{10})
+        self.assertEqual(ids(kind='alliance',includes=['alliance:0']),set())
+        self.assertEqual(ids(excludes=['universe:0']),set())
 
     def test_affiliations_display_historical_data_without_current_fallback(self):
         rows=[dict(entity_id=1),dict(entity_id=9)]

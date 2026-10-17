@@ -68,9 +68,11 @@ def page(request: Request):
                         position=int(params['position'])
                         if not 1<=position<=1000000000:
                             raise ValueError('Choose a positive rank.')
-                if searching or includes or excludes or page_number>20:
+                # An explicit Universe inclusion keeps the fast unfiltered ranking path.
+                effective_includes=[] if 'universe:0' in includes else includes
+                if searching or effective_includes or excludes or page_number>20:
                     result=rankings.explore_rows(kind,mode,sort,first,last,as_of=last if custom_period else None,
-                        includes=includes,excludes=excludes,position=position,target_id=target_id,around=searching)
+                        includes=effective_includes,excludes=excludes,position=position,target_id=target_id,around=searching)
                     rows=result['rows'];offset=result['offset'];more=result['more'];found_position=result['position'] if searching else None
                 else:
                     all_rows,cached=rankings.ranking_rows(kind,mode,sort,first,last,months)

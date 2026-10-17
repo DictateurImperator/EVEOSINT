@@ -1,12 +1,13 @@
 (()=>{
   const $=id=>document.getElementById(id),kind=$('rankingKind');
-  const typeLabel=kind=>({coalition:'Coalition',alliance:'Alliance',corporation:'Corporation',character:'Character'}[kind]||kind);
+  const typeLabel=kind=>({universe:'Universe',coalition:'Coalition',alliance:'Alliance',corporation:'Corporation',character:'Character'}[kind]||kind);
   function logo(item){
+    if(item.entity_type==='universe'||Number(item.entity_id)===0)return null;
     if(item.logo_url)return item.logo_url;
     if(['character','corporation','alliance'].includes(item.entity_type))return `https://images.evetech.net/${item.entity_type==='character'?'characters':item.entity_type==='corporation'?'corporations':'alliances'}/${item.entity_id}/${item.entity_type==='character'?'portrait':'logo'}?size=64`;
     return null;
   }
-  function icon(item){const url=logo(item);if(url){const img=document.createElement('img');img.src=url;img.alt='';img.loading='lazy';return img;}const span=document.createElement('span');span.className='rank-filter-placeholder';span.textContent=typeLabel(item.entity_type)[0];return span;}
+  function icon(item){const url=logo(item);if(url){const img=document.createElement('img');img.src=url;img.alt='';img.loading='lazy';return img;}const span=document.createElement('span');span.className='rank-filter-placeholder';span.textContent=item.entity_type==='universe'?'∞':Number(item.entity_id)===0?'∅':typeLabel(item.entity_type)[0];return span;}
   function autocomplete(inputId,resultsId,purpose,onPick){
     const input=$(inputId),results=$(resultsId);if(!input)return;
     let timer,sequence=0;
@@ -54,7 +55,7 @@
   container.querySelectorAll('[data-rank-term]').forEach(bindTerm);summary();
   $('rankFilterToggle').onclick=()=>{const open=$('rankFilter').classList.toggle('open');$('rankFilterToggle').setAttribute('aria-expanded',String(open));};
   $('rankFilterClear').onclick=()=>{container.replaceChildren();summary();};
-  autocomplete('rankScopeName','rankScopeResults','scope',item=>{
+  function addScope(item){
     const value=`${item.entity_type}:${item.entity_id}`;
     const existing=[...container.querySelectorAll('input')].find(input=>input.value===value);
     if(existing){existing.parentElement.querySelector('[data-rank-sign]').focus();$('rankScopeName').value='';return;}
@@ -65,5 +66,10 @@
     const input=document.createElement('input');input.type='hidden';input.name='include';input.value=value;
     const remove=document.createElement('button');remove.type='button';remove.className='kb-term-remove';remove.dataset.rankRemove='';remove.textContent='×';remove.setAttribute('aria-label','Remove filter');
     term.append(sign,icon(item),text,input,remove);container.append(term);bindTerm(term);$('rankScopeName').value='';
-  });
+  }
+  autocomplete('rankScopeName','rankScopeResults','scope',addScope);
+  $('rankAddUniverse').onclick=()=>addScope({entity_type:'universe',entity_id:0,name:'Universe'});
+  $('rankAddNoAlliance').onclick=()=>addScope({entity_type:'alliance',entity_id:0,name:'No alliance'});
+  function updateSpecialButtons(){$('rankAddNoAlliance').hidden=kind.value==='alliance';}
+  kind.addEventListener('change',updateSpecialButtons);updateSpecialButtons();
 })();
