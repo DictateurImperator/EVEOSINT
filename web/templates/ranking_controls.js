@@ -70,10 +70,9 @@
     month.addEventListener('change',cancel);
     document.addEventListener('click',event=>{if(!input.parentElement.contains(event.target))cancel();});
   }
-  autocomplete('rankName','rankNameResults','target',item=>{$('rankName').value=item.name;$('rankTarget').value=item.entity_id;});
-  $('rankName').addEventListener('input',()=>{$('rankTarget').value='';});
-  const by=$('rankSearchBy');function toggleSearch(){const rank=by.value==='rank';$('rankNameFields').hidden=rank;$('rankPositionFields').hidden=!rank;$('rankName').disabled=rank;$('rankTarget').disabled=rank;$('rankPosition').disabled=!rank;}
-  by.onchange=toggleSearch;toggleSearch();
+  autocomplete('rankName','rankNameResults','target',item=>{$('rankName').value=item.name;$('rankTarget').value=item.entity_id;$('rankPosition').value='';});
+  $('rankName').addEventListener('input',()=>{$('rankTarget').value='';$('rankPosition').value='';});
+  $('rankPosition').addEventListener('input',()=>{$('rankName').value='';$('rankTarget').value='';});
   kind.addEventListener('change',()=>{$('rankTarget').value='';});
   const container=$('rankScopeChips');
   function summary(){const positive=container.querySelectorAll('input[name="include"]').length,negative=container.querySelectorAll('input[name="exclude"]').length;$('rankFilterSummary').textContent=positive||negative?`+ ${positive} / − ${negative}`:'ALL';}

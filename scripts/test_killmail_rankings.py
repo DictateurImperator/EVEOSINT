@@ -89,7 +89,7 @@ class ControlTests(unittest.TestCase):
             self.assertEqual(query.call_args.args[3:5],(JAN,FEB))
             self.assertIn('<strong>All time</strong>',r.text)
             self.assertIn('id="rankName"',r.text)
-            self.assertIn('id="rankSearchBy"',r.text)
+            self.assertIn('>Go to rank</button>',r.text)
             self.assertIn('aria-label="Ranking entity type"',r.text)
             self.assertIn('data-rank-sign',r.text)
             self.assertLess(r.text.index('class="table rank-table'),r.text.index('Monthly ranking builder'))
@@ -259,6 +259,18 @@ class ControlTests(unittest.TestCase):
             self.assertEqual(query.call_args.kwargs['as_of'],JAN)
             self.assertEqual(query.call_args.kwargs['includes'],['coalition:1'])
             self.assertEqual(query.call_args.kwargs['excludes'],['alliance:9'])
+
+    def test_rank_button_ignores_name_and_displays_the_last_available_position(self):
+        months=[dict(month=JAN,built_at='v',killmails=1,valued=1,zero_damage=0,entity_rows=1,dirty=False)]
+        result=dict(rows=[],offset=1,position=7,more=False,clamped=True,total=7)
+        with patch.object(rankings,'catalog',return_value=months),patch.object(rankings,'explore_rows',return_value=result) as query:
+            response=self.client.get('/admin/debug/rankings?search_by=rank&position=999999999999999&q=Old+Name&target_id=42')
+            self.assertEqual(response.status_code,200)
+            self.assertIsNone(query.call_args.kwargs['target_id'])
+            self.assertEqual(query.call_args.kwargs['position'],999999999999999)
+            self.assertIn('Showing the last available rank: 7',response.text)
+            self.assertIn('id="rankPosition" value="7"',response.text)
+            self.assertNotIn('value="Old Name"',response.text)
 
     def test_shared_lock_blocks_duplicate_work_and_file_cache_is_bounded(self):
         engine=rankings.engine()
@@ -649,6 +661,28 @@ class DatabaseTests(unittest.TestCase):
         with psycopg2.connect(self.dsn) as conn:
             by_rank=engine.explore(conn,rankings.engine(),'character','classic','destroyed',JAN,FEB,position=1101,around=True)
         self.assertEqual([r['entity_id'] for r in result['rows']],[r['entity_id'] for r in by_rank['rows']])
+
+    def test_rank_jump_clamps_to_last_player_with_the_same_scope_and_date(self):
+        self.build();self.build(FEB)
+        def jump(**options):
+            with psycopg2.connect(self.dsn) as conn:
+                return rankings.explorer().explore(conn,rankings.engine(),'character','weighted','destroyed',JAN,FEB,around=True,**options)
+        last=jump(position=10**30)
+        self.assertTrue(last['clamped'])
+        self.assertEqual(last['position'],last['total'])
+        self.assertEqual(last['rows'][-1]['rank'],last['total'])
+        self.assertTrue(last['rows'][-1]['highlight'])
+        self.assertEqual(last['total'],4)
+        filtered=jump(position=1000,includes=['alliance:1000'],as_of=JAN)
+        self.assertEqual(filtered['total'],2)
+        self.assertEqual(filtered['position'],2)
+        empty=jump(position=1000,includes=['alliance:99999'])
+        self.assertEqual(empty['rows'],[])
+        self.assertEqual(empty['total'],0)
+        self.assertFalse(empty['clamped'])
+        first=jump(position=1)
+        self.assertEqual(first['position'],1)
+        self.assertFalse(first['clamped'])
 
     def test_membership_filters_use_current_or_month_end_and_exclusions_win(self):
         from datetime import date, datetime, UTC

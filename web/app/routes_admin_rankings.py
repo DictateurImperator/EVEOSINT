@@ -29,13 +29,19 @@ def page(request: Request):
     params=request.query_params
     kind=params.get('kind','character');mode=params.get('mode','classic');sort=params.get('sort','destroyed')
     view='ranking'  # Search shares this page; old view=search links remain valid.
-    q=params.get('q','').strip()[:100]
+    search_by=params.get('search_by','')
+    q='' if search_by=='rank' else params.get('q','').strip()[:100]
+    target_param='' if search_by=='rank' else params.get('target_id','')
+    position_param='' if search_by=='name' else params.get('position','')[:100]
+    ranking_notice=None
     custom_period=bool(params.get('through'))
     months=[];rows=[];first=last=None;error=None;cached=False;elapsed=0;page_number=1;offset=0
     includes=[];excludes=[];labels={};more=False;found_position=None;affiliation_month=None;lookup_default_through=''
     try:
         if kind not in rankings.KINDS or mode not in ('classic','weighted') or sort not in rankings.SORTS or view not in ('ranking','search'):
             raise ValueError('Invalid ranking filter.')
+        if search_by not in ('','name','rank'):
+            raise ValueError('Invalid search mode.')
         page_number=int(params.get('page','1'))
         if not 1<=page_number<=20000000:
             raise ValueError('Invalid page.')
@@ -58,10 +64,10 @@ def page(request: Request):
             started=time.monotonic()
             if months[0].get('totals_ready',True):
                 target_id=None;position=offset+1
-                searching=bool(q or params.get('target_id') or params.get('position'))
+                searching=bool(q or target_param or position_param)
                 if searching:
-                    if params.get('target_id'):
-                        target_id=int(params['target_id'])
+                    if target_param:
+                        target_id=int(target_param)
                         if not 0<target_id<2**63:
                             raise ValueError('Invalid entity.')
                     elif q:
@@ -72,8 +78,8 @@ def page(request: Request):
                             raise ValueError('Select a name from the suggestions to identify the entity.')
                         target_id=int(chosen[0]['entity_id'])
                     else:
-                        position=int(params['position'])
-                        if not 1<=position<=1000000000:
+                        position=int(position_param)
+                        if position<1:
                             raise ValueError('Choose a positive rank.')
                 # An explicit Universe inclusion keeps the fast unfiltered ranking path.
                 effective_includes=[] if 'universe:0' in includes else includes
@@ -81,6 +87,8 @@ def page(request: Request):
                     result=rankings.explore_rows(kind,mode,sort,first,last,as_of=affiliation_month,
                         includes=effective_includes,excludes=excludes,position=position,target_id=target_id,around=searching)
                     rows=result['rows'];offset=result['offset'];more=result['more'];found_position=result['position'] if searching else None
+                    if result.get('clamped'):
+                        ranking_notice=f"Requested rank {int(position_param):,} exceeds the available ranking. Showing the last available rank: {found_position:,}."
                 else:
                     all_rows,cached=rankings.ranking_rows(kind,mode,sort,first,last,months)
                     rows=[dict(r,rank=offset+i+1) for i,r in enumerate(all_rows[offset:offset+rankings.PAGE_SIZE])]
@@ -106,7 +114,8 @@ def page(request: Request):
     def link(**changes):
         return '/admin/debug/rankings?'+urlencode(dict(base,**changes),doseq=True)
     context.update(months=months,rows=rows,kind=kind,mode=mode,sort=sort,view=view,q=q,
-        target_id=params.get('target_id',''),position=params.get('position',''),found_position=found_position,
+        target_id=target_param,position=found_position if position_param and found_position else position_param,found_position=found_position,
+        ranking_notice=ranking_notice,
         include_terms=[dict(token=v,label=labels.get(v,v),logo_url=rankings.scope_logo(v)) for v in includes],
         exclude_terms=[dict(token=v,label=labels.get(v,v),logo_url=rankings.scope_logo(v)) for v in excludes],
         ranking_link=link(view='ranking'),search_link=link(view='search'),

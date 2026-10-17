@@ -24,10 +24,10 @@
  {% if custom_period %}<a class="btn btn-sm btn-outline-light" href="{{ all_time_link }}">Latest available month</a>{% endif %}
  <div class="rank-inline-search d-flex flex-wrap gap-3 align-items-end w-100 border-top pt-3">
  <span class="fw-semibold small align-self-center">Find in ranking</span>
- <label class="small">Search by<select class="form-select form-select-sm" id="rankSearchBy"><option value="name">Name</option><option value="rank" {% if position and not q and not target_id %}selected{% endif %}>Rank</option></select></label>
  <div id="rankNameFields" class="kb-search-wrap"><label class="small">Name<input class="form-control form-control-sm" id="rankName" name="q" value="{{ q }}" autocomplete="off" placeholder="Start typing a name"></label><input type="hidden" name="target_id" id="rankTarget" value="{{ target_id }}"><div class="kb-search-results" id="rankNameResults" style="min-width:min(360px,80vw)" aria-live="polite"></div></div>
- <label class="small" id="rankPositionFields">Rank<input class="form-control form-control-sm" type="number" name="position" id="rankPosition" value="{{ position }}" min="1" max="1000000000" placeholder="e.g. 25000"></label>
- <button class="btn btn-sm btn-outline-primary" type="submit">Find in ranking</button>
+ <button class="btn btn-sm btn-outline-primary" type="submit" name="search_by" value="name">Find name</button>
+ <label class="small" id="rankPositionFields">Rank<input class="form-control form-control-sm" type="number" name="position" id="rankPosition" value="{{ position }}" min="1" placeholder="e.g. 1000"></label>
+ <button class="btn btn-sm btn-outline-primary" type="submit" name="search_by" value="rank">Go to rank</button>
  {% if q or target_id or position %}<a class="btn btn-sm btn-outline-light" href="{{ ranking_link }}">Clear search</a>{% endif %}
  </div>
  <div class="kb-filter-shell rank-filter w-100 {{ 'open' if include_terms or exclude_terms else '' }}" id="rankFilter">
@@ -53,6 +53,7 @@
 </section>
 {% if not months %}<section class="content-card p-4 text-center"><h2 class="h5">Rankings have not been built yet</h2><p class="muted-line mb-0">Open the monthly ranking builder below. No killmail is changed by this job.</p></section>{% else %}
 {% if missing or coverage_valued<coverage_kills %}<div class="alert alert-warning py-2 small">Partial results: missing months and unvalued killmails are excluded from ISK totals. Kill/loss counts include unvalued killmails.</div>{% endif %}
+{% if ranking_notice %}<div class="alert alert-info py-2 small" role="status">{{ ranking_notice }}</div>{% endif %}
 <section class="content-card p-3"><div class="d-flex justify-content-between gap-2 mb-2"><span class="muted-line small">{{ 'Damage-weighted' if mode=='weighted' else 'Full-value' }} credit · Hover over an ISK amount for its full value.</span><span class="muted-line small">{{ 'Cached' if cached else 'Calculated' }} · {{ '%.2f'|format(elapsed) }} s</span></div>
 <div class="mb-3">{% if found_position %}<span class="badge text-bg-primary me-2">Around rank {{ '{:,}'.format(found_position) }}</span>{% endif %}<strong>{{ 'From the beginning' if custom_period else 'All time' }}</strong><span class="muted-line small ms-2">{{ period_from }} → {{ period_through }} · UTC</span></div>
 <div class="muted-line small mb-2">Corporations and alliances as of {{ membership_date }}{% if custom_period %} (UTC){% endif %}.</div>

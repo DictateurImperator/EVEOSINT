@@ -94,6 +94,8 @@ def explore(conn,engine,kind,mode,sort,first,last,*,as_of=None,includes=(),exclu
     destroyed='weighted_destroyed_cents' if mode=='weighted' else 'destroyed_cents'
     fields={'destroyed':destroyed,'lost':'lost_cents','kills':'kills','losses':'losses',
             'unvalued_kills':'unvalued_kills','unvalued_losses':'unvalued_losses'}
+    requested_position=position
+    total=None
     params=[]
     with conn.cursor() as cur:
         cur.execute("SET LOCAL statement_timeout='5s'")
@@ -137,6 +139,10 @@ def explore(conn,engine,kind,mode,sort,first,last,*,as_of=None,includes=(),exclu
         cur.execute("SET LOCAL statement_timeout='25s'")
         cur.execute("SET LOCAL work_mem='32MB'")
         cur.execute('SET LOCAL max_parallel_workers_per_gather=2')
+        if around and not target_id:
+            cur.execute(base+sql.SQL('SELECT count(*) FROM candidates'),params)
+            total=int(cur.fetchone()[0])
+            position=min(max(1,position),total) if total else 0
         if target_id:
             cur.execute(base+sql.SQL('SELECT score FROM candidates WHERE entity_id=%s'),(*params,target_id))
             target=cur.fetchone()
@@ -157,7 +163,9 @@ def explore(conn,engine,kind,mode,sort,first,last,*,as_of=None,includes=(),exclu
             (*params,start-1,11 if around else limit+1))
         names=[c.name for c in cur.description]
         result=[dict(zip(names,r),rank=start+i,highlight=(r[0]==target_id or start+i==position)) for i,r in enumerate(cur)]
-    if not result and around:
+    if not result and around and total!=0:
         raise ValueError('This rank is outside the selected ranking.')
     more=False if around else len(result)>limit
-    return dict(rows=result if around else result[:limit],position=position,offset=start-1,more=more)
+    return dict(rows=result if around else result[:limit],position=position,offset=start-1,more=more,
+                total=total,requested_position=requested_position,
+                clamped=total is not None and total>0 and requested_position>total)
