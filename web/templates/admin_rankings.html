@@ -24,7 +24,7 @@
  <div class="rank-inline-search d-flex flex-wrap gap-3 align-items-end w-100 border-top pt-3">
  <span class="fw-semibold small align-self-center">Find in ranking</span>
  <label class="small">Search by<select class="form-select form-select-sm" id="rankSearchBy"><option value="name">Name</option><option value="rank" {% if position and not q and not target_id %}selected{% endif %}>Rank</option></select></label>
- <div id="rankNameFields" class="kb-search-wrap"><label class="small">Name<input class="form-control form-control-sm" id="rankName" name="q" value="{{ q }}" autocomplete="off" placeholder="Start typing a name"></label><input type="hidden" name="target_id" id="rankTarget" value="{{ target_id }}"><div class="kb-search-results" id="rankNameResults"></div></div>
+ <div id="rankNameFields" class="kb-search-wrap"><label class="small">Name<input class="form-control form-control-sm" id="rankName" name="q" value="{{ q }}" autocomplete="off" placeholder="Start typing a name"></label><input type="hidden" name="target_id" id="rankTarget" value="{{ target_id }}"><div class="kb-search-results" id="rankNameResults" style="min-width:min(360px,80vw)" aria-live="polite"></div></div>
  <label class="small" id="rankPositionFields">Rank<input class="form-control form-control-sm" type="number" name="position" id="rankPosition" value="{{ position }}" min="1" max="1000000000" placeholder="e.g. 25000"></label>
  <button class="btn btn-sm btn-outline-primary" type="submit">Find in ranking</button>
  {% if q or target_id or position %}<a class="btn btn-sm btn-outline-light" href="{{ ranking_link }}">Clear search</a>{% endif %}

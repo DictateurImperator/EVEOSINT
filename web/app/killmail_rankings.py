@@ -149,12 +149,27 @@ def lookup(query,kind,purpose='target'):
     _kind_id,table,id_column=KINDS[kind]
     with db() as conn,conn.cursor() as cur:
         cur.execute("SET LOCAL statement_timeout='5s'")
-        cur.execute(sql.SQL('''SELECT {id},name FROM entities.{table}
-            WHERE name ILIKE %s OR {id}=%s
-            ORDER BY (lower(name)=lower(%s)) DESC,lower(name),{id} LIMIT 12''').format(
-                id=sql.Identifier(id_column),table=sql.Identifier(table)),
-                ('%'+query+'%',int(query) if query.isdigit() else -1,query))
-        return [dict(entity_type=kind,entity_id=r[0],name=r[1]) for r in cur]
+        # Match the expression used by the existing trigram indexes. A raw
+        # name ILIKE forces a scan of millions of characters on each keystroke.
+        needle=query.lower().replace('\\','\\\\').replace('%','\\%').replace('_','\\_')
+        entity_id=int(query) if query.isascii() and query.isdigit() and len(query)<=18 else None
+        rows=[]
+        if entity_id is not None:
+            cur.execute(sql.SQL('SELECT {id},name FROM entities.{table} WHERE {id}=%s').format(
+                id=sql.Identifier(id_column),table=sql.Identifier(table)),(entity_id,))
+            rows=list(cur)
+        if not rows:
+            statement=sql.SQL('''SELECT {id},name FROM entities.{table}
+                WHERE lower(COALESCE(name,'')) LIKE %s
+                ORDER BY (lower(name)=%s) DESC,lower(name),{id} LIMIT 12''').format(
+                    id=sql.Identifier(id_column),table=sql.Identifier(table))
+            cur.execute(statement,(needle+'%',query.lower()))
+            rows=list(cur)
+            if not rows and len(query)>=3:
+                cur.execute(statement,('%'+needle+'%',query.lower()))
+                rows=list(cur)
+        results=[dict(entity_type=kind,entity_id=r[0],name=r[1]) for r in rows]
+        return explorer().enrich(conn,kind,results)
 
 
 def scope_logo(token):

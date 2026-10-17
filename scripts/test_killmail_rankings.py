@@ -319,6 +319,23 @@ class DatabaseTests(unittest.TestCase):
             cur.execute('SELECT count(*) FROM analytics.killmail_rankings_monthly')
             self.assertGreater(cur.fetchone()[0], 0)
 
+    def test_name_autocomplete_prefix_exact_context_and_literal_wildcards(self):
+        with self.conn.cursor() as cur:
+            cur.execute("INSERT INTO entities.characters VALUES (4,'Pilot'),(5,'100% Pilot'),(6,'Under_score'),(7,'UnderXscore')")
+        self.conn.commit()
+        with patch.object(rankings,'db',return_value=self.conn):
+            matches=rankings.lookup('pi','character')
+            self.assertEqual([r['name'] for r in matches],['Pilot','Pilot One','Pilot Two'])
+            one=next(r for r in matches if r['entity_id']==1)
+            self.assertEqual((one['corporation_name'],one['alliance_name']),('New Corp','New Alliance'))
+            self.assertEqual(rankings.lookup('PILOT','character')[0]['name'],'Pilot')
+            self.assertEqual(rankings.lookup('One','character')[0]['name'],'Pilot One')
+            self.assertEqual(rankings.lookup('100%','character')[0]['name'],'100% Pilot')
+            self.assertEqual([r['name'] for r in rankings.lookup('Under_','character')],['Under_score'])
+            self.assertEqual(rankings.lookup('999999999999999999999999','character'),[])
+            self.assertEqual(rankings.lookup('old','corporation')[0]['alliance_name'],'Old Alliance')
+            self.assertEqual(rankings.lookup('new','alliance')[0]['name'],'New Alliance')
+
     def test_credit_dedup_damage_npc_losses_and_no_empty_rows(self):
         result=self.build()
         self.assertEqual(self.facts(1,1),(10000,3000,20000,2,1,1,0))
