@@ -11,6 +11,10 @@
 {% endif %}
 {%- endmacro %}
 
+{% macro isk(amount) -%}
+<span class="inventory-price" title="{{ amount.title if amount else 'Price unavailable' }}">{{ amount.label if amount else '—' }}</span>
+{%- endmacro %}
+
 <style>
   .killmail-page {
     min-height: calc(100vh - 110px);
@@ -80,6 +84,9 @@
     letter-spacing: 0.05em;
     cursor: pointer;
   }
+
+  .eft-copy-button { white-space: nowrap; }
+  .eft-copy-status:empty { display: none; }
 
   .eft-copy-button:hover {
     color: #ffffff;
@@ -187,158 +194,55 @@
 
   .victim-fit-layout {
     display: grid;
-    grid-template-columns: 560px minmax(180px, 1fr);
-    gap: 0.75rem;
-    padding: 0.75rem;
+    grid-template-columns: minmax(320px, 1fr) minmax(175px, .43fr);
+    gap: .85rem;
+    padding: .85rem;
     align-items: start;
   }
-
   .fit-only-card {
-    width: 560px;
-    height: 545px;
-    background: #000;
+    width: 100%;
+    max-width: 640px;
+    aspect-ratio: 1;
     position: relative;
     overflow: hidden;
-    border-radius: 12px;
-    border: 1px solid rgba(125, 155, 165, 0.18);
+    border: 1px solid #30454d;
+    border-radius: 4px;
+    background: radial-gradient(ellipse at 46% 41%, #213e49 0, #101e25 46%, #060d11 72%);
+    container-type: inline-size;
   }
-
-  #Fitting_Panel {
-    position: relative;
-    height: 398px;
-    width: 398px;
-    z-index: 3;
-    margin: 0 auto;
-    transform: scale(1.18);
-    transform-origin: top center;
+  #Fitting_Panel { width: 100%; height: 100%; position: absolute; inset: 0; isolation: isolate; }
+  .fitting-ring { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; z-index: 1; }
+  .fitting-ring .rim { fill: none; stroke: #49616b; stroke-width: 2; }
+  .fitting-ring .rim-shadow { fill: none; stroke: #03090d; stroke-width: 8; }
+  .fitting-ring .track { fill: none; stroke: #192c34; stroke-width: 39; }
+  .fitting-ring .ticks { fill: none; stroke: #96b5bd; stroke-width: 4; stroke-dasharray: 1 6; opacity: .37; }
+  .fitting-ring text { fill: #96afb8; font: 8px sans-serif; letter-spacing: 2px; }
+  #bigship { position: absolute; inset: 13%; border-radius: 50%; overflow: hidden; z-index: 0; }
+  #bigship img { width: 100%; height: 100%; object-fit: contain; border: 0; border-radius: 50%; transform: scale(1.06); }
+  .fit-slot {
+    position: absolute; width: 7.5%; aspect-ratio: 1;
+    transform: translate(-50%, -50%) rotate(var(--turn));
+    background: linear-gradient(135deg, #45565b, #101b20 38%, #19272c 80%, #63818b);
+    border: 1px solid #81959b; border-radius: 2px; z-index: 3;
+    box-shadow: inset 0 0 0 2px #0a1319, 0 2px 8px #000a;
   }
-
-  #mask {
-    position: absolute;
-    left: 0;
-    top: 0;
-    width: 398px;
-    height: 398px;
-    z-index: -1;
-  }
-
-  #mask img {
-    position: absolute;
-    left: 0;
-    top: 0;
-    width: 398px;
-    height: 398px;
-    border: 0;
-    opacity: 0.84;
-  }
-
-  #bigship {
-    position: absolute;
-    left: 72px;
-    top: 71px;
-    width: 256px;
-    height: 256px;
-    z-index: -2;
-  }
-
-  #bigship img {
-    height: 256px;
-    width: 256px;
-    object-fit: contain;
-    border: 0;
-    image-rendering: auto;
-    transform: translateZ(0);
-  }
-
-  .eveosint-fit-circle-slot {
-    position: absolute;
-    width: 28px;
-    height: 28px;
-    z-index: 4;
-    border-radius: 50%;
-    box-sizing: border-box;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    border: 2px solid rgba(225, 235, 235, 0.70);
-    box-shadow:
-      inset 0 0 5px rgba(0, 0, 0, 0.82),
-      0 0 5px rgba(0, 0, 0, 0.85);
-    overflow: visible;
-  }
-
-  .eveosint-fit-circle-slot.slot-looted,
-  .eveosint-fit-charge-slot.slot-looted {
-    background: rgba(42, 128, 66, 0.62);
-  }
-
-  .eveosint-fit-circle-slot.slot-destroyed,
-  .eveosint-fit-charge-slot.slot-destroyed {
-    background: rgba(145, 38, 38, 0.62);
-  }
-
-  .eveosint-fit-circle-slot.slot-empty {
-    background: rgba(108, 116, 120, 0.72);
-  }
-
-  .eveosint-fit-circle-slot > a {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    width: 21px;
-    height: 21px;
-    position: relative;
-    z-index: 2;
-  }
-
-  .eveosint-fit-circle-slot .zkill-fit-item {
-    width: 21px !important;
-    height: 21px !important;
-    border: 0;
-    border-radius: 0;
-    display: block;
-    object-fit: contain;
-    image-rendering: auto;
-    transform: translateZ(0);
-  }
-
-  .eveosint-fit-charge-slot {
-    position: absolute;
-    width: 13px;
-    height: 13px;
-    z-index: 5;
-    border-radius: 50%;
-    box-sizing: border-box;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    border: 1px solid rgba(225, 235, 235, 0.70);
-    box-shadow:
-      inset 0 0 3px rgba(0, 0, 0, 0.82),
-      0 0 3px rgba(0, 0, 0, 0.85);
-    overflow: visible;
-  }
-
-  .eveosint-fit-charge-slot > a {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    width: 9px;
-    height: 9px;
-    position: relative;
-    z-index: 2;
-  }
-
-  .eveosint-fit-charge-slot .zkill-fit-item {
-    width: 9px !important;
-    height: 9px !important;
-    border: 0;
-    border-radius: 0;
-    display: block;
-    object-fit: contain;
-    image-rendering: auto;
-    transform: translateZ(0);
-  }
+  .fit-slot::after { content: ''; position: absolute; height: 3px; left: 16%; right: 16%; bottom: -5px; background: var(--state-color, #64777d); box-shadow: 0 0 4px var(--state-color, #64777d); }
+  .fit-slot.slot-looted, .fit-charge.slot-looted { --state-color: #85c9a4; }
+  .fit-slot.slot-destroyed, .fit-charge.slot-destroyed { --state-color: #d77e73; }
+  .fit-slot.slot-empty { background: linear-gradient(145deg, #0d1920, #20343c); border: 1px solid #48616b; opacity: .6; }
+  .fit-slot.slot-empty::before { content: '+'; position: absolute; inset: 0; display: grid; place-content: center; color: #6e858e; font: 400 20px monospace; transform: rotate(calc(-1 * var(--turn))); }
+  .fit-slot > a { display: grid; width: 100%; height: 100%; place-items: center; transform: rotate(calc(-1 * var(--turn))); }
+  .fit-slot .zkill-fit-item { display: block; width: 92% !important; height: 92% !important; object-fit: contain; border: 0; border-radius: 0; }
+  .fit-slot:hover, .fit-slot:focus-within { border-color: #d3f1f5; box-shadow: 0 0 0 1px #9bbbc4, 0 0 15px #77c3df66; z-index: 8; }
+  .fit-slot-number { position: absolute; top: 1px; left: 3px; color: #c1d1d5; font: 8px sans-serif; pointer-events: none; }
+  .fit-charge { position: absolute; width: 4.3%; aspect-ratio: 1; transform: translate(-50%, -50%); border: 1px solid #6c828b; background: #0e1a21ed; z-index: 4; box-shadow: 0 1px 4px #000; }
+  .fit-charge > a { display: block; width: 100%; height: 100%; }
+  .fit-charge .zkill-fit-item { width: 100% !important; height: 100% !important; object-fit: contain; border-radius: 0; }
+  .fit-charge-qty { position: absolute; right: -3px; bottom: -5px; background: #080f15; color: #c9dde4; font: 7px sans-serif; line-height: 1.3; padding: 0 2px; pointer-events: none; }
+  .fit-caption { position: absolute; left: 20%; right: 20%; top: 39%; text-align: center; z-index: 0; color: #8ba4ae; font-size: .75rem; }
+  .fit-legend { position: absolute; bottom: 1.2%; left: 0; right: 0; display: flex; justify-content: center; gap: 1rem; font-size: clamp(8px, 2cqw, 11px); color: #93a9b2; }
+  .fit-legend span::before { content: ''; display: inline-block; width: 5px; height: 5px; margin-right: 5px; background: #8bc6a7; }
+  .fit-legend span:last-child::before { background: #d77e73; }
 
   .victim-stack {
     display: grid;
@@ -662,43 +566,27 @@
     color: #d49a91;
   }
 
-  .inventory-items {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
-    gap: 0.35rem;
-  }
-
+  .inventory-side { min-width: 0; }
+  .inventory-items { display: block; overflow-x: auto; }
   .inventory-item {
-    display: grid;
-    grid-template-columns: 32px minmax(0, 1fr) auto;
-    gap: 0.45rem;
-    align-items: center;
-    min-height: 40px;
-    padding: 0.3rem 0.38rem;
-    background: rgba(7, 12, 14, 0.62);
-    border: 1px solid rgba(143, 167, 174, 0.12);
+    display: grid; grid-template-columns: 28px minmax(110px, 1fr) 32px 72px 80px;
+    align-items: center; gap: .4rem; min-width: 355px; padding: .4rem .15rem;
+    border-bottom: 1px solid #78909c17;
   }
-
-  .inventory-item img {
-    width: 32px;
-    height: 32px;
-    object-fit: contain;
-  }
-
-  .inventory-name {
-    min-width: 0;
-    color: #dce8eb;
-    font-size: 0.76rem;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-
-  .inventory-qty {
-    color: #8ea3aa;
-    font-size: 0.7rem;
-    font-variant-numeric: tabular-nums;
-  }
+  .inventory-item img { width: 28px; height: 28px; object-fit: contain; }
+  .inventory-name { min-width: 0; font-size: .76rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .inventory-qty, .inventory-price { font-size: .72rem; text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .inventory-price { color: #dce8eb; cursor: help; }
+  .inventory-columns { color: #7e969f; font-size: .6rem; text-transform: uppercase; letter-spacing: .05em; }
+  .inventory-columns span:nth-last-child(-n+3) { text-align: right; }
+  .inventory-totals { display: grid; grid-template-columns: repeat(4,minmax(0,1fr)); gap: 1px; background: #48606a40; border: 1px solid #48606a40; margin: .75rem; }
+  .inventory-totals > div { background: #0b161c; padding: .7rem; }
+  .inventory-totals .label { display: block; color: #8da5ae; font-size: .65rem; margin-bottom: .25rem; }
+  .inventory-totals .inventory-price { font-size: 1rem; font-weight: 600; }
+  .inventory-hull { margin: .75rem; padding: .6rem; background: #6b30242b; display: flex; gap: .65rem; align-items: center; font-size: .8rem; }
+  .inventory-hull img { width: 36px; height: 36px; }
+  .inventory-hull .inventory-price { margin-left: auto; }
+  @media(max-width:700px) { .inventory-totals { grid-template-columns: repeat(2,minmax(0,1fr)); } }
 
   .inventory-empty {
     color: #60747c;
@@ -734,16 +622,7 @@
       grid-template-columns: 1fr;
     }
 
-    .fit-only-card {
-      width: 100%;
-      height: 420px;
-    }
-
-    #Fitting_Panel {
-      transform: scale(0.96);
-      transform-origin: top center;
-      margin-left: calc(50% - 199px);
-    }
+    .fit-only-card { width: 100%; }
   }
 </style><div class="killmail-page">
 {% if error %}
@@ -757,7 +636,7 @@
     {% set section_key = (section.label or '')|lower %}
     {% if section_key == 'high slots' %}
       {% for item in section['items'] %}
-        {% if item.total_quantity and item.total_quantity > 1 %}
+        {% if item.is_charge %}
           {% set ns.high_charges = ns.high_charges + [item] %}
         {% else %}
           {% set ns.high_items = ns.high_items + [item] %}
@@ -765,7 +644,7 @@
       {% endfor %}
     {% elif section_key == 'mid slots' %}
       {% for item in section['items'] %}
-        {% if item.total_quantity and item.total_quantity > 1 %}
+        {% if item.is_charge %}
           {% set ns.mid_charges = ns.mid_charges + [item] %}
         {% else %}
           {% set ns.mid_items = ns.mid_items + [item] %}
@@ -773,7 +652,7 @@
       {% endfor %}
     {% elif section_key == 'low slots' %}
       {% for item in section['items'] %}
-        {% if item.total_quantity and item.total_quantity > 1 %}
+        {% if item.is_charge %}
           {% set ns.low_charges = ns.low_charges + [item] %}
         {% else %}
           {% set ns.low_items = ns.low_items + [item] %}
@@ -851,46 +730,46 @@
         >
           {% for item in ns.low_items %}
             {% if item.item %}
-            <span data-eft-kind="module" data-eft-group="low" data-eft-index="{{ loop.index0 }}" data-eft-name="{{ item.item.name|e }}"></span>
+            <span data-eft-kind="module" data-eft-group="low" data-eft-index="{{ item.slot_index|default(loop.index0) }}" data-eft-name="{{ item.item.name|e }}"></span>
             {% endif %}
           {% endfor %}
           {% for item in ns.low_charges %}
             {% if item.item %}
-            <span data-eft-kind="charge" data-eft-group="low" data-eft-index="{{ loop.index0 }}" data-eft-name="{{ item.item.name|e }}"></span>
+            <span data-eft-kind="charge" data-eft-group="low" data-eft-index="{{ item.slot_index|default(loop.index0) }}" data-eft-name="{{ item.item.name|e }}"></span>
             {% endif %}
           {% endfor %}
 
           {% for item in ns.mid_items %}
             {% if item.item %}
-            <span data-eft-kind="module" data-eft-group="mid" data-eft-index="{{ loop.index0 }}" data-eft-name="{{ item.item.name|e }}"></span>
+            <span data-eft-kind="module" data-eft-group="mid" data-eft-index="{{ item.slot_index|default(loop.index0) }}" data-eft-name="{{ item.item.name|e }}"></span>
             {% endif %}
           {% endfor %}
           {% for item in ns.mid_charges %}
             {% if item.item %}
-            <span data-eft-kind="charge" data-eft-group="mid" data-eft-index="{{ loop.index0 }}" data-eft-name="{{ item.item.name|e }}"></span>
+            <span data-eft-kind="charge" data-eft-group="mid" data-eft-index="{{ item.slot_index|default(loop.index0) }}" data-eft-name="{{ item.item.name|e }}"></span>
             {% endif %}
           {% endfor %}
 
           {% for item in ns.high_items %}
             {% if item.item %}
-            <span data-eft-kind="module" data-eft-group="high" data-eft-index="{{ loop.index0 }}" data-eft-name="{{ item.item.name|e }}"></span>
+            <span data-eft-kind="module" data-eft-group="high" data-eft-index="{{ item.slot_index|default(loop.index0) }}" data-eft-name="{{ item.item.name|e }}"></span>
             {% endif %}
           {% endfor %}
           {% for item in ns.high_charges %}
             {% if item.item %}
-            <span data-eft-kind="charge" data-eft-group="high" data-eft-index="{{ loop.index0 }}" data-eft-name="{{ item.item.name|e }}"></span>
+            <span data-eft-kind="charge" data-eft-group="high" data-eft-index="{{ item.slot_index|default(loop.index0) }}" data-eft-name="{{ item.item.name|e }}"></span>
             {% endif %}
           {% endfor %}
 
           {% for item in ns.rig_items %}
             {% if item.item %}
-            <span data-eft-kind="module" data-eft-group="rig" data-eft-index="{{ loop.index0 }}" data-eft-name="{{ item.item.name|e }}"></span>
+            <span data-eft-kind="module" data-eft-group="rig" data-eft-index="{{ item.slot_index|default(loop.index0) }}" data-eft-name="{{ item.item.name|e }}"></span>
             {% endif %}
           {% endfor %}
 
           {% for item in ns.subsystem_items %}
             {% if item.item %}
-            <span data-eft-kind="module" data-eft-group="subsystem" data-eft-index="{{ loop.index0 }}" data-eft-name="{{ item.item.name|e }}"></span>
+            <span data-eft-kind="module" data-eft-group="subsystem" data-eft-index="{{ item.slot_index|default(loop.index0) }}" data-eft-name="{{ item.item.name|e }}"></span>
             {% endif %}
           {% endfor %}
 
@@ -908,106 +787,39 @@
         <div class="victim-fit-layout">
           <div class="fit-only-card">
     <div id="Fitting_Panel">
-      <div id="mask">
-        <img src="https://zkillboard.com/img/panel/tyrannis.png" alt="">
-      </div>
-
-      {% set high_positions = [
-        "left:68px; top:73px;", "left:96px; top:52px;", "left:126px; top:38px;", "left:157px; top:28px;",
-        "left:189px; top:25px;", "left:220px; top:29px;", "left:249px; top:40px;", "left:275px; top:56px;"
-      ] %}
-      {% set high_charge_positions = [
-        "left:78px; top:101px;", "left:106px; top:84px;", "left:135px; top:71px;", "left:165px; top:63px;",
-        "left:195px; top:60px;", "left:224px; top:64px;", "left:251px; top:75px;", "left:276px; top:91px;"
-      ] %}
-      {% set mid_positions = [
-        "left:337px; top:114px;", "left:347px; top:143px;", "left:351px; top:173px;", "left:350px; top:203px;",
-        "left:344px; top:232px;", "left:333px; top:259px;", "left:318px; top:283px;", "left:300px; top:305px;"
-      ] %}
-      {% set mid_charge_positions = [
-        "left:316px; top:140px;", "left:324px; top:167px;", "left:327px; top:193px;", "left:326px; top:220px;",
-        "left:320px; top:246px;", "left:310px; top:270px;", "left:296px; top:292px;", "left:280px; top:312px;"
-      ] %}
-      {% set low_positions = [
-        "left:46px; top:294px;", "left:70px; top:316px;", "left:98px; top:334px;", "left:129px; top:347px;",
-        "left:162px; top:354px;", "left:194px; top:353px;", "left:224px; top:346px;", "left:250px; top:333px;"
-      ] %}
-      {% set low_charge_positions = [
-        "left:62px; top:273px;", "left:86px; top:294px;", "left:113px; top:310px;", "left:144px; top:321px;",
-        "left:176px; top:327px;", "left:206px; top:325px;", "left:234px; top:318px;", "left:259px; top:304px;"
-      ] %}
-      {% set rig_positions = [
-        "left:20px; top:158px;", "left:17px; top:188px;", "left:20px; top:218px;"
-      ] %}
-
+      <svg class="fitting-ring" viewBox="0 0 560 560" aria-hidden="true">
+        <circle class="rim-shadow" cx="280" cy="280" r="260"/>
+        <circle class="track" cx="280" cy="280" r="234"/>
+        <circle class="rim" cx="280" cy="280" r="260"/>
+        <circle class="ticks" cx="280" cy="280" r="253"/>
+        <circle class="rim" cx="280" cy="280" r="212" opacity=".55"/>
+        <text x="280" y="16" text-anchor="middle">HIGH</text>
+        <text x="548" y="280" text-anchor="middle" transform="rotate(90 548 280)">MID</text>
+        <text x="84" y="463" text-anchor="middle" transform="rotate(47 84 463)">LOW</text>
+        <text x="29" y="187" text-anchor="middle" transform="rotate(-67 29 187)">RIGS</text>
+      </svg>
       {% macro slot_state(item) -%}
-        {%- if not item -%}
-          slot-empty
-        {%- elif (item.quantity_dropped is defined and item.quantity_dropped and item.quantity_dropped > 0)
-          or (item.dropped is defined and item.dropped)
-          or (item.total_dropped is defined and item.total_dropped and item.total_dropped > 0)
-          or (item.is_dropped is defined and item.is_dropped) -%}
-          slot-looted
-        {%- else -%}
-          slot-destroyed
-        {%- endif -%}
+        {{- 'slot-empty' if not item else 'slot-looted' if item.is_dropped else 'slot-destroyed' -}}
       {%- endmacro %}
-
-      {% set high_count = [(slot_layout.get('high', 0) or 0), ns.high_items|length]|max %}
-      {% set mid_count = [(slot_layout.get('mid', 0) or 0), ns.mid_items|length]|max %}
-      {% set low_count = [(slot_layout.get('low', 0) or 0), ns.low_items|length]|max %}
-      {% set rig_count = [(slot_layout.get('rig', 0) or 0), ns.rig_items|length]|max %}
-
-      {% set high_count = [high_count, high_positions|length]|min %}
-      {% set mid_count = [mid_count, mid_positions|length]|min %}
-      {% set low_count = [low_count, low_positions|length]|min %}
-      {% set rig_count = [rig_count, rig_positions|length]|min %}
-
-      {% set high_start = ((high_positions|length - high_count) // 2) if high_count > 0 else 0 %}
-      {% set mid_start = ((mid_positions|length - mid_count) // 2) if mid_count > 0 else 0 %}
-      {% set low_start = ((low_positions|length - low_count) // 2) if low_count > 0 else 0 %}
-      {% set rig_start = ((rig_positions|length - rig_count) // 2) if rig_count > 0 else 0 %}
-
-      {% set high_display_positions = high_positions[high_start:high_start + high_count] %}
-      {% set high_charge_display_positions = high_charge_positions[high_start:high_start + high_count] %}
-      {% set mid_display_positions = mid_positions[mid_start:mid_start + mid_count] %}
-      {% set mid_charge_display_positions = mid_charge_positions[mid_start:mid_start + mid_count] %}
-      {% set low_display_positions = low_positions[low_start:low_start + low_count] %}
-      {% set low_charge_display_positions = low_charge_positions[low_start:low_start + low_count] %}
-      {% set rig_display_positions = rig_positions[rig_start:rig_start + rig_count] %}
-
-      {% for pos in high_display_positions %}
-      {% set item = ns.high_items[loop.index0] if ns.high_items|length > loop.index0 else none %}
-      <div id="high{{ loop.index }}" class="eveosint-fit-circle-slot {{ slot_state(item) }}" style="{{ pos }}">{% if item %}{{ zkill_item(item, 24) }}{% endif %}</div>
+      {% for band in killmail.fitting_bands|default([]) %}
+        {% for slot in band.slots %}
+          {% set item = slot.module %}
+          <div class="fit-slot {{ slot_state(item) }}" data-fit-group="{{ band.key }}" data-fit-index="{{ slot.index }}"
+               style="left:{{ slot.x }}%;top:{{ slot.y }}%;--turn:{{ slot.rotation }}deg"
+               title="{{ slot.label }} · {{ item.item.name if item else 'Empty / no module recorded' }}{% if item %} · {{ 'Dropped' if item.is_dropped else 'Destroyed' }}{% endif %}">
+            {% if item %}{{ zkill_item(item, 64) }}{% endif %}
+            <span class="fit-slot-number">{{ slot.index + 1 }}</span>
+          </div>
+          {% for charge in slot.charges %}
+          <div class="fit-charge {{ slot_state(charge) }}" data-charge-group="{{ band.key }}" data-charge-index="{{ slot.index }}"
+               style="left:{{ slot.charge_x }}%;top:{{ slot.charge_y }}%"
+               title="{{ slot.label }} · {{ charge.item.name }} × {{ charge.total_quantity }}">
+            {{ zkill_item(charge, 32) }}
+            <span class="fit-charge-qty">{{ charge.total_quantity }}</span>
+          </div>
+          {% endfor %}
+        {% endfor %}
       {% endfor %}
-      {% for pos in high_charge_display_positions %}
-      {% set item = ns.high_charges[loop.index0] if ns.high_charges|length > loop.index0 else none %}
-      {% if item %}<div id="highcharge{{ loop.index }}" class="eveosint-fit-charge-slot {{ slot_state(item) }}" style="{{ pos }}">{{ zkill_item(item, 12) }}</div>{% endif %}
-      {% endfor %}
-
-      {% for pos in mid_display_positions %}
-      {% set item = ns.mid_items[loop.index0] if ns.mid_items|length > loop.index0 else none %}
-      <div id="mid{{ loop.index }}" class="eveosint-fit-circle-slot {{ slot_state(item) }}" style="{{ pos }}">{% if item %}{{ zkill_item(item, 24) }}{% endif %}</div>
-      {% endfor %}
-      {% for pos in mid_charge_display_positions %}
-      {% set item = ns.mid_charges[loop.index0] if ns.mid_charges|length > loop.index0 else none %}
-      {% if item %}<div id="midcharge{{ loop.index }}" class="eveosint-fit-charge-slot {{ slot_state(item) }}" style="{{ pos }}">{{ zkill_item(item, 12) }}</div>{% endif %}
-      {% endfor %}
-
-      {% for pos in low_display_positions %}
-      {% set item = ns.low_items[loop.index0] if ns.low_items|length > loop.index0 else none %}
-      <div id="low{{ loop.index }}" class="eveosint-fit-circle-slot {{ slot_state(item) }}" style="{{ pos }}">{% if item %}{{ zkill_item(item, 24) }}{% endif %}</div>
-      {% endfor %}
-      {% for pos in low_charge_display_positions %}
-      {% set item = ns.low_charges[loop.index0] if ns.low_charges|length > loop.index0 else none %}
-      {% if item %}<div id="lowcharge{{ loop.index }}" class="eveosint-fit-charge-slot {{ slot_state(item) }}" style="{{ pos }}">{{ zkill_item(item, 12) }}</div>{% endif %}
-      {% endfor %}
-
-      {% for pos in rig_display_positions %}
-      {% set item = ns.rig_items[loop.index0] if ns.rig_items|length > loop.index0 else none %}
-      <div id="rig{{ loop.index }}" class="eveosint-fit-circle-slot {{ slot_state(item) }}" style="{{ pos }}">{% if item %}{{ zkill_item(item, 24) }}{% endif %}</div>
-      {% endfor %}
-
       <div id="bigship">
         {% if killmail.victim_ship %}
           {% if killmail.victim_ship.entity_id %}
@@ -1033,6 +845,8 @@
           {% endif %}
         {% endif %}
       </div>
+      {% if not killmail.fitting_bands %}<div class="fit-caption">No fitted modules recorded</div>{% endif %}
+      <div class="fit-legend"><span>Dropped</span><span>Destroyed</span></div>
     </div>
           </div>
 
@@ -1163,8 +977,25 @@
     <section class="eve-window inventory-board">
       <div class="eve-window-title">
         <span>Ship inventory</span>
-        <span class="muted">Looted / Destroyed by ship area</span>
+        <span class="muted">Dropped & destroyed · ISK at the loss date</span>
       </div>
+      {% set totals = killmail.inventory_value_totals|default({}) %}
+      <div class="inventory-totals">
+        <div><span class="label">Dropped (ISK)</span>{{ isk(totals.get('dropped')) }}</div>
+        <div><span class="label">Destroyed, including hull (ISK)</span>{{ isk(totals.get('destroyed')) }}</div>
+        <div><span class="label">Hull (ISK)</span>{{ isk(totals.get('hull')) }}</div>
+        <div><span class="label">Total (ISK)</span>{{ isk(totals.get('total')) }}</div>
+      </div>
+      {% if killmail.inventory_value_mismatch %}
+      <p class="muted-line small mx-3">The item breakdown uses the available historical prices and differs from the saved estimate of {{ killmail.value_full_label }}.</p>
+      {% endif %}
+      {% if killmail.victim_ship %}
+      <div class="inventory-hull">
+        <img src="{{ killmail.victim_ship.image_url }}" alt="">
+        <a href="{{ killmail.victim_ship.url }}">{{ killmail.victim_ship.name }}</a>
+        <span class="muted">×1 · Destroyed hull</span>{{ isk(totals.get('hull')) }}
+      </div>
+      {% endif %}
       <div class="inventory-groups">
         {% for section in killmail.fitting_sections or [] %}
         {% set group_ns = namespace(looted_count=0, destroyed_count=0) %}
@@ -1179,14 +1010,17 @@
           </div>
           <div class="inventory-split">
             <div class="inventory-side looted">
-              <div class="inventory-side-title"><span>Looted</span><span>{{ group_ns.looted_count }}</span></div>
+              <div class="inventory-side-title"><span>Dropped · {{ group_ns.looted_count }} lines</span>{{ isk((section.value_totals|default({})).get("dropped")) }}</div>
               <div class="inventory-items">
+                <div class="inventory-item inventory-columns"><span></span><span>Item</span><span>Qty</span><span>Unit ISK</span><span>Total ISK</span></div>
                 {% for item in section['items'] %}
                 {% if item.quantity_dropped and item.quantity_dropped > 0 %}
                 <div class="inventory-item">
                   <div>{% if item.item and item.item.image_url %}<img src="{{ item.item.image_url }}" alt="{{ item.item.name }}" loading="lazy">{% endif %}</div>
                   <div class="inventory-name">{% if item.item %}<a href="{{ item.item.url }}">{{ item.item.name }}</a>{% else %}Unknown item{% endif %}</div>
                   <div class="inventory-qty">×{{ item.quantity_dropped }}</div>
+                  {{ isk((item.prices|default({})).get('unit')) }}
+                  {{ isk((item.prices|default({})).get('dropped')) }}
                 </div>
                 {% endif %}
                 {% else %}
@@ -1196,14 +1030,17 @@
               </div>
             </div>
             <div class="inventory-side destroyed">
-              <div class="inventory-side-title"><span>Destroyed</span><span>{{ group_ns.destroyed_count }}</span></div>
+              <div class="inventory-side-title"><span>Destroyed · {{ group_ns.destroyed_count }} lines</span>{{ isk((section.value_totals|default({})).get("destroyed")) }}</div>
               <div class="inventory-items">
+                <div class="inventory-item inventory-columns"><span></span><span>Item</span><span>Qty</span><span>Unit ISK</span><span>Total ISK</span></div>
                 {% for item in section['items'] %}
                 {% if item.quantity_destroyed and item.quantity_destroyed > 0 %}
                 <div class="inventory-item">
                   <div>{% if item.item and item.item.image_url %}<img src="{{ item.item.image_url }}" alt="{{ item.item.name }}" loading="lazy">{% endif %}</div>
                   <div class="inventory-name">{% if item.item %}<a href="{{ item.item.url }}">{{ item.item.name }}</a>{% else %}Unknown item{% endif %}</div>
                   <div class="inventory-qty">×{{ item.quantity_destroyed }}</div>
+                  {{ isk((item.prices|default({})).get('unit')) }}
+                  {{ isk((item.prices|default({})).get('destroyed')) }}
                 </div>
                 {% endif %}
                 {% else %}

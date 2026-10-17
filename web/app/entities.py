@@ -1,6 +1,7 @@
 import re
 import json
 import logging
+from math import cos, sin, radians
 from collections import OrderedDict
 from threading import Lock
 from time import perf_counter, monotonic
@@ -9595,7 +9596,7 @@ def _killmail_items_from_rows(rows, type_names):
                 item_type_id,
                 type_names.get(item_type_id, _format_type_name(item_type_id)),
                 "commodity",
-                32,
+                64,
             ),
             "flag": int(flag) if flag is not None else None,
             "flag_label": _killmail_item_flag_label(flag),
@@ -9618,6 +9619,67 @@ def _killmail_items_from_rows(rows, type_names):
             item["item_index"],
         ),
     )
+
+
+def _killmail_fitting_metadata(conn, type_ids, ship_type_id):
+    """Batch charge categories and ship slot counts; observed slots override current SDE."""
+    categories, counts = {}, {}
+    with conn.cursor() as cur:
+        cur.execute("""SELECT t.sde_key::bigint,(g.data->>'categoryID')::int
+                       FROM public.sde_types t LEFT JOIN public.sde_groups g ON g.sde_key=t.data->>'groupID'
+                       WHERE t.sde_key=ANY(%s)""", ([str(t) for t in type_ids],))
+        categories = {int(t): category for t, category in cur}
+        if ship_type_id is not None and _sde_json_table(conn, ['sde_typedogma']):
+            cur.execute("SELECT data->'dogmaAttributes' FROM public.sde_typedogma WHERE sde_key=%s", (str(ship_type_id),))
+            row = cur.fetchone()
+            keys = {12: 'low', 13: 'mid', 14: 'high', 1137: 'rig', 1366: 'subsystem'}
+            for attribute in (row[0] or []) if row else []:
+                key = keys.get(attribute.get('attributeID'))
+                if key:
+                    counts[key] = max(0, min(8, int(attribute.get('value') or 0)))
+    return categories, counts
+
+
+def _killmail_fitting_bands(items, categories=None, counts=None):
+    """Keep flag positions and charge identity, including one-unit laser crystals/scripts."""
+    categories, counts = categories or {}, counts or {}
+    specs = [('high', 'High slots', 27, 8, -90, 234, 10.8),
+             ('mid', 'Mid slots', 19, 8, 0, 234, 10.8),
+             ('low', 'Low slots', 11, 8, 90, 234, 10.8),
+             ('rig', 'Rigs', 92, 3, -160, 234, 12),
+             ('subsystem', 'Subsystems', 125, 5, 151, 193, 12)]
+    bands = []
+    for key, label, first_flag, capacity, center, radius, step_angle in specs:
+        grouped = {}
+        for item in items:
+            if item.get('group_key') != key or item.get('flag') is None:
+                continue
+            index = item['flag'] - first_flag
+            if not 0 <= index < capacity:
+                continue
+            category = categories.get(item['type_id'])
+            # Quantity is a legacy fallback only when SDE category data is absent.
+            item['is_charge'] = category == 8 or (category is None and key in {'high','mid','low'} and item.get('total_quantity',0) > 1)
+            item['slot_index'] = index
+            slot = grouped.setdefault(index, {'module': None, 'charges': []})
+            if item['is_charge']:
+                slot['charges'].append(item)
+            elif slot['module'] is None:
+                slot['module'] = item
+        size = min(capacity, max(int(counts.get(key,0)), max(grouped, default=-1)+1))
+        slots = []
+        for index in range(size):
+            angle = center + (index-(size-1)/2)*step_angle
+            slot = grouped.get(index, {'module': None, 'charges': []})
+            slots.append(dict(slot, index=index, label=f'{label} · slot {index+1}',
+                              x=round(50+radius/560*100*cos(radians(angle)),3),
+                              y=round(50+radius/560*100*sin(radians(angle)),3),
+                              charge_x=round(50+(radius-43)/560*100*cos(radians(angle)),3),
+                              charge_y=round(50+(radius-43)/560*100*sin(radians(angle)),3),
+                              rotation=round(angle+90,2)))
+        if slots:
+            bands.append(dict(key=key,label=label,slots=slots))
+    return bands
 
 
 def _killmail_fitting_sections(items):
@@ -9942,10 +10004,24 @@ def get_killmail_detail(killmail_id):
                 type_ids.add(int(row[1]))
 
         type_names = _lookup_type_names(conn, type_ids)
+        fitting_categories, slot_layout = _killmail_fitting_metadata(conn, type_ids, victim_ship_type_id)
         location = {}
         if solar_system_id is not None:
             location = _lookup_system_locations(conn, [solar_system_id]).get(int(solar_system_id), {})
         attacker_coalitions = _killmail_attacker_coalition_map(conn, attacker_rows, killmail_time)
+        from .killmail_item_values import load_prices
+        price_roots = {int(victim_ship_type_id)} if victim_ship_type_id is not None else set()
+        for _, type_id, flag, _, _, singleton in item_rows:
+            if type_id is not None and singleton != 2 and flag != 179 and not (type_id == 33329 and flag == 89):
+                price_roots.add(int(type_id))
+        item_prices = None
+        try:
+            with conn.cursor() as cur:
+                cur.execute("SET LOCAL statement_timeout='5000'")
+            item_prices = load_prices(conn, killmail_time.date(), price_roots) if killmail_time else None
+        except Exception:
+            conn.rollback()
+            logger.warning('Item price breakdown unavailable for killmail %s', normalized_id, exc_info=True)
 
     victim_damage = int(victim_damage_taken or 0)
     victim_character = _entity_ref("character", victim_character_id, victim_character_name)
@@ -10018,7 +10094,21 @@ def get_killmail_detail(killmail_id):
         )[0]
 
     items = _killmail_items_from_rows(item_rows, type_names)
+    fitting_bands = _killmail_fitting_bands(items, fitting_categories, slot_layout)
+    from .killmail_item_values import breakdown, calculator
+    item_values = breakdown(items, victim_ship_type_id, item_prices)
+    def value_fields(value):
+        fields = _killmail_value_fields(mer_isk=value)
+        return dict(label=fields['value_label'], title=fields['value_full_label'] or 'Price unavailable')
+    for item in items:
+        line = item_values['lines'][item['item_index']]
+        item['prices'] = {key: value_fields(value) for key,value in line.items()}
     fitting_sections = _killmail_fitting_sections(items)
+    for section in fitting_sections:
+        section['value_totals'] = {}
+        for key in ('dropped','destroyed'):
+            vals = [item_values['lines'][item['item_index']][key] for item in section['items']]
+            section['value_totals'][key] = value_fields(sum(vals,Decimal(0)) if all(v is not None for v in vals) else None)
     dropped_items = [item for item in items if item.get("is_dropped")]
     destroyed_items = [item for item in items if item.get("is_destroyed")]
 
@@ -10047,6 +10137,11 @@ def get_killmail_detail(killmail_id):
         "top_damage": top_damage,
         "items": items,
         "fitting_sections": fitting_sections,
+        "fitting_bands": fitting_bands,
+        "inventory_value_totals": {key: value_fields(item_values[key]) for key in ("hull","dropped","destroyed","total")},
+        "inventory_value_mismatch": (item_values['total'] is not None and stored_value_cents is not None
+                                     and calculator().cents(item_values['total']) != stored_value_cents),
+        "slot_layout": slot_layout,
         "dropped_items": dropped_items,
         "destroyed_items": destroyed_items,
         "source_url": source_url,
