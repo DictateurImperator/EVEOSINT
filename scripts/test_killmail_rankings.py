@@ -701,6 +701,45 @@ class DatabaseTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             query(includes=['alliance:1000'],target_id=1,around=True)
 
+    def test_historical_alliance_filter_uses_one_query_for_rank_and_neighbours(self):
+        self.build();self.build(FEB)
+        executed=[]
+        class TraceCursor(psycopg2.extensions.cursor):
+            def execute(self,*args,**kwargs):
+                result=super().execute(*args,**kwargs);executed.append(self.query.decode());return result
+        for mode in ['classic','weighted']:
+            for sort in rankings.SORTS:
+                with psycopg2.connect(self.dsn) as conn:
+                    expected=[r for r in rankings.engine().query(conn,'character',mode,sort,JAN,FEB) if r['entity_id'] in {1,2}]
+                executed.clear()
+                with psycopg2.connect(self.dsn,cursor_factory=TraceCursor) as conn:
+                    result=rankings.explorer().explore(conn,rankings.engine(),'character',mode,sort,JAN,FEB,
+                        as_of=JAN,includes=['alliance:1000'],target_id=1,around=True)
+                self.assertEqual([r['entity_id'] for r in result['rows']],[r['entity_id'] for r in expected])
+                self.assertEqual(result['position'],next(i for i,r in enumerate(expected,1) if r['entity_id']==1))
+                self.assertEqual(sum('scope_corporations AS MATERIALIZED' in query for query in executed),1)
+                self.assertFalse(any('rawkm.' in query for query in executed))
+
+    def test_historical_scope_preserves_latest_overlapping_history_and_exclusions(self):
+        self.build();self.build(FEB)
+        with self.conn.cursor() as cur:
+            cur.execute("INSERT INTO entities.character_corporation_history VALUES(1,3,30,'2026-01-16','2026-02-01',false)")
+        self.conn.commit()
+        def query(**kwargs):
+            with psycopg2.connect(self.dsn) as conn:
+                return rankings.explorer().explore(conn,rankings.engine(),'character','classic','destroyed',JAN,FEB,
+                    as_of=JAN,scope_day=date(2026,1,31),**kwargs)
+        self.assertEqual({r['entity_id'] for r in query(includes=['alliance:1000'])['rows']},{2})
+        self.assertEqual({r['entity_id'] for r in query(includes=['corporation:30'])['rows']},{1,3})
+        rule=lambda operation,kind,id:dict(operation=operation,member_type=kind,member_id=id,valid_from=None,valid_to=None)
+        rules={1:[rule('include','alliance',1000),rule('include','corporation',30),rule('exclude','corporation',10)]}
+        self.assertEqual({r['entity_id'] for r in query(includes=['coalition:1'],rules=rules)['rows']},{1,3})
+        empty=query(includes=['alliance:99999'],position=1000,around=True)
+        self.assertEqual(empty['total'],0)
+        self.assertEqual(empty['rows'],[])
+        with self.assertRaisesRegex(ValueError,'not ranked'):
+            query(includes=['alliance:1000'],target_id=1,around=True)
+
     def test_universe_and_no_alliance_filters_at_current_and_historical_dates(self):
         from datetime import date, datetime, UTC
         self.build();self.build(FEB)

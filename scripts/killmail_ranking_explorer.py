@@ -86,6 +86,71 @@ def scope_predicate(kind,includes,excludes,rules,day):
     return sql.SQL('({}) AND NOT ({})').format(inc,exc),ip+ep
 
 
+def historical_character_scope(as_of,includes,excludes,rules,day):
+    """Resolve matching historical members once, before reading their stored scores."""
+    cutoff=month_end(as_of)
+    predicate,params=scope_predicate('character',includes,excludes,rules,day)
+    prefix=sql.SQL('''scope_corporations AS MATERIALIZED (
+        SELECT DISTINCT ON(corporation_id) corporation_id,alliance_id,true AS affiliation_known
+        FROM entities.corporation_alliance_history
+        WHERE NOT is_deleted AND start_date<%s AND (end_date IS NULL OR end_date>=%s)
+        ORDER BY corporation_id,start_date DESC,record_id DESC
+    ), scope_entries AS (
+        SELECT h.character_id,h.record_id,h.start_date,h.corporation_id,aa.alliance_id,
+               COALESCE(aa.affiliation_known,false) AS alliance_known
+        FROM entities.character_corporation_history h
+        LEFT JOIN scope_corporations aa ON aa.corporation_id=h.corporation_id
+        WHERE NOT h.is_deleted AND h.start_date<%s AND (h.end_date IS NULL OR h.end_date>=%s)
+    ), scope_history AS MATERIALIZED (
+        SELECT DISTINCT ON(character_id) character_id,record_id FROM scope_entries
+        WHERE {predicate} ORDER BY character_id,start_date DESC,record_id DESC
+    ), scope_members AS MATERIALIZED (
+        SELECT s.character_id AS entity_id FROM scope_history s
+        JOIN LATERAL (
+            SELECT record_id FROM entities.character_corporation_history h
+            WHERE h.character_id=s.character_id AND NOT h.is_deleted
+              AND h.start_date<%s AND (h.end_date IS NULL OR h.end_date>=%s)
+            ORDER BY h.start_date DESC,h.record_id DESC LIMIT 1
+        ) latest ON latest.record_id=s.record_id
+    ),''').format(predicate=predicate)
+    return prefix,[cutoff,cutoff,cutoff,cutoff,*params,cutoff,cutoff]
+
+
+def scoped_result(cur,base,params,table,id_column,position,target_id,around,limit,requested_position):
+    """One filtered candidate set serves rank lookup, boundaries and visible neighbours."""
+    if target_id:
+        location=sql.SQL('(SELECT rank FROM ranked WHERE entity_id=%s)');location_params=[target_id]
+    elif around:
+        location=sql.SQL('CASE WHEN count(*)>0 THEN LEAST(%s,count(*)) ELSE 0 END');location_params=[position]
+    else:
+        location=sql.SQL('%s::bigint');location_params=[position]
+    start=sql.SQL('GREATEST(1,b.position-5)') if around else sql.SQL('b.position')
+    length=11 if around else limit+1
+    cur.execute(base+sql.SQL(''', ranked AS MATERIALIZED (
+        SELECT *,row_number() OVER(ORDER BY score DESC NULLS LAST,entity_id) AS rank FROM candidates
+    ), bounds AS (SELECT {location} AS position,count(*) AS total FROM ranked)
+    SELECT b.position,b.total,r.rank,r.entity_id,r.destroyed,r.lost,r.kills,r.losses,
+           r.unvalued_kills,r.unvalued_losses,r.destroyed-r.lost AS net,
+           100*r.destroyed/NULLIF(r.destroyed+r.lost,0) AS efficiency,e.name
+    FROM bounds b LEFT JOIN ranked r ON r.rank>={start} AND r.rank<{start}+%s
+    LEFT JOIN entities.{table} e ON e.{id_column}=r.entity_id ORDER BY r.rank''').format(
+        location=location,start=start,table=sql.Identifier(table),id_column=sql.Identifier(id_column)),
+        (*params,*location_params,length))
+    columns=[column.name for column in cur.description]
+    records=[dict(zip(columns,row)) for row in cur]
+    position=records[0]['position'];total=int(records[0]['total'])
+    if target_id and position is None:
+        raise ValueError('This entity is not ranked at this date under the selected filters.')
+    position=int(position)
+    rows=[dict(row,highlight=(row['entity_id']==target_id or row['rank']==position))
+          for row in records if row['entity_id'] is not None]
+    more=not around and len(rows)>limit
+    return dict(rows=rows if around else rows[:limit],position=position,
+                offset=max(0,position-6 if around else position-1),more=more,total=total,
+                requested_position=requested_position,
+                clamped=around and not target_id and total>0 and requested_position>total)
+
+
 def explore(conn,engine,kind,mode,sort,first,last,*,as_of=None,includes=(),excludes=(),rules=None,
             position=1,target_id=None,around=False,limit=50,scope_day=None):
     """Read sparse snapshots, then rank within the chosen membership scope."""
@@ -94,6 +159,12 @@ def explore(conn,engine,kind,mode,sort,first,last,*,as_of=None,includes=(),exclu
     destroyed='weighted_destroyed_cents' if mode=='weighted' else 'destroyed_cents'
     fields={'destroyed':destroyed,'lost':'lost_cents','kills':'kills','losses':'losses',
             'unvalued_kills':'unvalued_kills','unvalued_losses':'unvalued_losses'}
+    fast_scope=kind=='character' and as_of is not None and bool(includes) and 'universe:0' not in includes
+    prefix=sql.SQL('');members_join=sql.SQL('')
+    scope_params=[]
+    if fast_scope:
+        prefix,scope_params=historical_character_scope(as_of,includes,excludes,rules or {},scope_day)
+        members_join=sql.SQL('JOIN scope_members sm ON sm.entity_id=c.entity_id')
     requested_position=position
     total=None
     params=[]
@@ -117,7 +188,7 @@ def explore(conn,engine,kind,mode,sort,first,last,*,as_of=None,includes=(),exclu
     params.append(kind_id)
     scope_join=sql.SQL('')
     predicate=sql.SQL('true')
-    if includes or excludes:
+    if (includes or excludes) and not fast_scope:
         joins,corp,alliance,join_params=affiliations(kind,'f',as_of)
         known = ('true' if kind=='alliance' else 'COALESCE(aa.affiliation_known,false)' if as_of is not None
                  else 'ca.corporation_id IS NOT NULL' if kind=='character' else 'aa.corporation_id IS NOT NULL')
@@ -128,17 +199,20 @@ def explore(conn,engine,kind,mode,sort,first,last,*,as_of=None,includes=(),exclu
         params.extend(scope_params)
     metric={'net':sql.SQL('destroyed-lost'),
             'efficiency':sql.SQL('100*destroyed/NULLIF(destroyed+lost,0)')}.get(sort,sql.Identifier(sort))
-    base=sql.SQL('''WITH facts AS (SELECT c.entity_id,{values} FROM analytics.killmail_rankings_current c
-            {snapshot} WHERE c.entity_kind=%s AND {players}),{scope_join}
-        candidates AS (SELECT *,{metric} AS score FROM {source}
+    base=sql.SQL('''WITH {prefix} facts AS (SELECT c.entity_id,{values} FROM analytics.killmail_rankings_current c
+            {members_join} {snapshot} WHERE c.entity_kind=%s AND {players}),{scope_join}
+        candidates AS {materialized} (SELECT *,{metric} AS score FROM {source}
                         WHERE (kills>0 OR losses>0) AND ({predicate})) ''').format(
-        values=values,snapshot=snapshot,scope_join=scope_join,metric=metric,
+        prefix=prefix,members_join=members_join,values=values,snapshot=snapshot,scope_join=scope_join,metric=metric,
         players=engine.player_character_filter(kind,sql.SQL('c.entity_id')),
-        source=sql.Identifier('scoped' if includes or excludes else 'facts'),predicate=predicate)
+        source=sql.Identifier('scoped' if (includes or excludes) and not fast_scope else 'facts'),predicate=predicate,
+        materialized=sql.SQL('MATERIALIZED' if fast_scope else ''))
     with conn.cursor() as cur:
         cur.execute("SET LOCAL statement_timeout='25s'")
         cur.execute("SET LOCAL work_mem='32MB'")
         cur.execute('SET LOCAL max_parallel_workers_per_gather=2')
+        if fast_scope:
+            return scoped_result(cur,base,(*scope_params,*params),table,id_column,position,target_id,around,limit,requested_position)
         if around and not target_id:
             cur.execute(base+sql.SQL('SELECT count(*) FROM candidates'),params)
             total=int(cur.fetchone()[0])
