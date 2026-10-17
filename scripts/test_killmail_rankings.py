@@ -43,7 +43,7 @@ class ControlTests(unittest.TestCase):
             launch.assert_not_called()
 
     def test_populated_page_modes_and_values(self):
-        months=[dict(month=JAN,built_at='v1',killmails=3,valued=2,zero_damage=1,entity_rows=5,dirty=True)]
+        months=[dict(month=month,built_at='v1',killmails=3,valued=2,zero_damage=1,entity_rows=5,dirty=True) for month in (JAN,FEB)]
         rows=[dict(entity_id=42,name='<pilot>',destroyed=Decimal(123456789),lost=Decimal(100),
                    net=Decimal(123456689),efficiency=Decimal('99.99'),kills=2,losses=1,unvalued_kills=1,unvalued_losses=0)]
         with patch.object(rankings,'catalog',return_value=months),patch.object(rankings,'ranking_rows',return_value=(rows,False)) as query:
@@ -52,9 +52,21 @@ class ControlTests(unittest.TestCase):
             self.assertIn('1.23 M',r.text)
             self.assertIn('1,234,567.89 ISK',r.text)
             self.assertIn('&lt;pilot&gt;',r.text)
-            self.assertIn('1 awaiting refresh',r.text)
+            self.assertIn('2 awaiting refresh',r.text)
             self.assertIn('Partial results',r.text)
             self.assertEqual(query.call_args.args[:3],('character','weighted','net'))
+            self.assertEqual(query.call_args.args[3:5],(JAN,FEB))
+            self.assertIn('<strong>All time</strong>',r.text)
+            self.assertLess(r.text.index('class="table rank-table'),r.text.index('Monthly ranking builder'))
+            for url in ('?from=&through=', '?page=2'):
+                response=self.client.get('/admin/debug/rankings'+url)
+                self.assertEqual(response.status_code,200)
+                self.assertEqual(query.call_args.args[3:5],(JAN,FEB))
+                self.assertIn('<strong>All time</strong>',response.text)
+            response=self.client.get('/admin/debug/rankings?from=2026-02&through=2026-02')
+            self.assertEqual(query.call_args.args[3:5],(FEB,FEB))
+            self.assertIn('<strong>Selected period</strong>',response.text)
+
 
     def test_controls_permissions_and_no_side_effect_on_status(self):
         with patch.object(routes,'killmail_rankings_progress',return_value={'running':False,'progress':None}),patch.object(routes,'run_killmail_rankings') as launch:

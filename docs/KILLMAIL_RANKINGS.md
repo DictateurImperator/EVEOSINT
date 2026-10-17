@@ -53,7 +53,11 @@ Temp files may spill to disk; time and final size depend on the actual history.
 
 ## Period queries and caching
 
-The page displays the top 1,000 entities (50/page). Single-month queries sort the
+The page opens directly on the all-time top 1,000 entities (50/page), from the
+earliest built month to the latest. Month/period selection is optional; leaving
+both date fields empty restores all time. Use the same month in both fields for
+a single-month ranking. Builder controls and coverage details are collapsed below
+the results after initialization. Single-month queries sort the
 existing facts directly. Longer periods sum the selected months and sort the
 result, then fetch names only for the top rows. Query time is limited to 25s;
 longer selections show a clear timeout message. Ranking queries allow up to two

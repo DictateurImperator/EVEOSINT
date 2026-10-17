@@ -29,6 +29,7 @@ def page(request: Request):
     kind = params.get('kind','character')
     mode = params.get('mode','classic')
     sort = params.get('sort','destroyed')
+    custom_period = bool(params.get('from') or params.get('through'))
     error = None
     months = []
     rows = []
@@ -44,8 +45,8 @@ def page(request: Request):
             raise ValueError('Page must be between 1 and 20.')
         months = rankings.catalog()
         if months:
-            first = rankings.month_input(params.get('from',months[-1]['month'].strftime('%Y-%m')))
-            last = rankings.month_input(params.get('through',months[-1]['month'].strftime('%Y-%m')))
+            first = rankings.month_input(params.get('from') or months[0]['month'].strftime('%Y-%m'))
+            last = rankings.month_input(params.get('through') or months[-1]['month'].strftime('%Y-%m'))
             if first>last:
                 raise ValueError('From must precede through.')
             import time
@@ -64,13 +65,15 @@ def page(request: Request):
     if first and last:
         missing = max(0,(last.year-first.year)*12+last.month-first.month+1-len(selected))
     base = dict(kind=kind,mode=mode,sort=sort)
-    if first and last:
+    if custom_period and first and last:
         base.update({'from':first.strftime('%Y-%m'),'through':last.strftime('%Y-%m')})
     def link(number):
         return '/admin/debug/rankings?'+urlencode(dict(base,page=number))
     offset = (page_number-1)*rankings.PAGE_SIZE
     context.update(months=months,rows=rows[offset:offset+rankings.PAGE_SIZE],kind=kind,mode=mode,sort=sort,
-        first=first.strftime('%Y-%m') if first else '',last=last.strftime('%Y-%m') if last else '',
+        first=params.get('from',''),last=params.get('through',''),custom_period=custom_period,
+        period_from=first.strftime('%Y-%m') if first else '',
+        period_through=last.strftime('%Y-%m') if last else '',
         error=error,can_run='admin.jobs.run' in user.get('permissions',set()),
         selected=selected,missing=missing,cached=cached,elapsed=elapsed,page_number=page_number,offset=offset,
         previous=link(page_number-1) if page_number>1 else None,
