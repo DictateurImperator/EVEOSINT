@@ -117,9 +117,10 @@ class CombatStatsTests(unittest.TestCase):
             page=client.get('/character/42?tab=stats&stats_view=top-kills')
             self.assertEqual(page.status_code,200)
             self.assertIn('Loading top kills',page.text)
+            self.assertIn('data-url="/api/character/42/combat-stats/top-kills"',page.text)
             monthly.assert_not_called();query.assert_not_called()
             for kind in rankings.KINDS:
-                response=client.get(f'/api/combat-stats/{kind}/42/top-kills')
+                response=client.get(f'/api/{kind}/42/combat-stats/top-kills')
                 self.assertEqual(response.json()['status'],'completed')
                 markup=response.json()['html']
                 self.assertEqual(response.status_code,200)
@@ -132,22 +133,22 @@ class CombatStatsTests(unittest.TestCase):
                 self.assertIn('/kill/100',markup)
                 query.assert_called_with(kind,42,retry=False)
             with patch.object(top_kills,'top_kills_state',side_effect=top_kills.TopKillsBusy('Retry later.')):
-                self.assertEqual(client.get('/api/combat-stats/character/42/top-kills').status_code,409)
+                self.assertEqual(client.get('/api/character/42/combat-stats/top-kills').status_code,409)
             with patch.object(top_kills,'top_kills_state',side_effect=psycopg2.errors.QueryCanceled()):
-                self.assertEqual(client.get('/api/combat-stats/character/42/top-kills').status_code,504)
+                self.assertEqual(client.get('/api/character/42/combat-stats/top-kills').status_code,504)
             with patch.object(top_kills,'top_kills_state',return_value=dict(status='running',progress={'checked':1,'total':227},result={'raw':[row],'weighted':[row]})):
-                response=client.get('/api/combat-stats/character/42/top-kills')
+                response=client.get('/api/character/42/combat-stats/top-kills')
                 self.assertEqual(response.status_code,202)
                 self.assertEqual(response.json()['progress']['checked'],1)
                 self.assertIn('Highest true ISK',response.json()['html'])
-                unchanged=client.get('/api/combat-stats/character/42/top-kills?after=1')
+                unchanged=client.get('/api/character/42/combat-stats/top-kills?after=1')
                 self.assertEqual(unchanged.status_code,202)
                 self.assertEqual(unchanged.json()['html'],'')
-            self.assertEqual(client.get('/api/combat-stats/coalition/42/top-kills').status_code,400)
-            self.assertEqual(client.get('/api/combat-stats/character/0/top-kills').status_code,400)
+            self.assertEqual(client.get('/api/coalition/42/combat-stats/top-kills').status_code,400)
+            self.assertEqual(client.get('/api/character/0/combat-stats/top-kills').status_code,400)
         with patch.object(self.routes,'require_login',return_value=dict(username='Denied',permissions=set())), \
              patch.object(top_kills,'top_kills_state') as query,TestClient(app) as client:
-            self.assertEqual(client.get('/api/combat-stats/character/42/top-kills').status_code,403)
+            self.assertEqual(client.get('/api/character/42/combat-stats/top-kills').status_code,403)
             query.assert_not_called()
 
 

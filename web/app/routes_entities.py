@@ -3824,7 +3824,8 @@ def alliance_profile(request: Request, alliance_id: int):
     return entity_profile(request, "alliance", alliance_id)
 
 
-@router.get("/api/combat-stats/{entity_type}/{entity_id}/top-kills", response_class=JSONResponse)
+@router.get("/api/{entity_type}/{entity_id}/combat-stats/top-kills", response_class=JSONResponse)
+@router.get("/api/combat-stats/{entity_type}/{entity_id}/top-kills", response_class=JSONResponse, include_in_schema=False)
 def combat_top_kills_fragment(request: Request, entity_type: str, entity_id: int):
     user = require_login(request)
     if not has_permission(user, "entities.view"):

@@ -16,7 +16,7 @@
   {% if combat_stats_view == 'top-kills' %}
     <p class="muted-line">Top 20 across all available killmails. Kills without an ISK value are excluded. Corporation and alliance membership is taken from each killmail. Results may be cached for up to five minutes.</p>
     <p id="combatTopProgress" class="muted-line" role="status" aria-live="polite">Loading top kills…</p>
-    <div id="combatTopKills" data-url="/api/combat-stats/{{ profile.entity_type }}/{{ profile.entity_id }}/top-kills"></div>
+    <div id="combatTopKills" data-url="/api/{{ profile.entity_type }}/{{ profile.entity_id }}/combat-stats/top-kills"></div>
     <button id="combatTopRetry" class="btn btn-sm btn-outline-primary mt-2" type="button" hidden>Retry</button>
     <script>
     (() => {
