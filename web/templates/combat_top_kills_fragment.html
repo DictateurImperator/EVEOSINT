@@ -1,0 +1,36 @@
+{% if not top_kills.raw %}
+  <p class="muted-line">{% if provisional %}No valued kills found in the months checked so far.{% else %}No valued kills recorded for this entity.{% endif %}</p>
+{% else %}
+  <div class="d-flex flex-wrap gap-2 mb-3" aria-label="Top kills ranking mode">
+    <button type="button" class="btn btn-sm btn-primary" data-combat-top-mode="raw" aria-pressed="true">Highest raw ISK</button>
+    <button type="button" class="btn btn-sm btn-outline-primary" data-combat-top-mode="weighted" aria-pressed="false">Highest true ISK</button>
+  </div>
+  {% for mode, label in [('raw', 'Highest raw ISK'), ('weighted', 'Highest true ISK')] %}
+  <div data-combat-top-panel="{{ mode }}"{% if mode != 'raw' %} hidden{% endif %}>
+    <h3 class="h6">{{ label }}</h3>
+    <div class="table-responsive">
+      <table class="table align-middle" aria-label="{{ label }} kills">
+        <thead><tr><th scope="col">Rank</th><th scope="col">Date (UTC)</th><th scope="col">Victim / ship</th><th scope="col">System</th><th scope="col" class="text-end">Raw ISK</th><th scope="col" class="text-end">True ISK</th><th scope="col" class="text-end">Damage share</th></tr></thead>
+        <tbody>
+        {% for row in top_kills[mode] %}
+          <tr>
+            <td>{{ loop.index }}</td>
+            <td class="text-nowrap"><a href="/kill/{{ row.killmail_id }}">{{ row.killmail_time.strftime('%Y-%m-%d %H:%M') }}</a></td>
+            <td>
+              <div class="d-flex gap-2 align-items-center">
+                {% if row.ship_id %}<a href="/kill/{{ row.killmail_id }}"><img src="https://images.evetech.net/types/{{ row.ship_id }}/icon?size=64" width="40" height="40" alt="" loading="lazy"></a>{% endif %}
+                <div><a href="/kill/{{ row.killmail_id }}">{{ row.ship_name }}</a><div class="muted-line">{% if row.victim_id %}<a href="/character/{{ row.victim_id }}">{{ row.victim_name }}</a>{% elif row.victim_corporation_id %}<a href="/corporation/{{ row.victim_corporation_id }}">{{ row.victim_name }}</a>{% else %}{{ row.victim_name }}{% endif %}</div></div>
+              </div>
+            </td>
+            <td>{% if row.system_id %}<a href="/system/{{ row.system_id }}">{{ row.system_name }}</a>{% else %}{{ row.system_name }}{% endif %}</td>
+            <td class="text-end text-nowrap{% if mode == 'raw' %} fw-bold text-success{% endif %}" title="{{ full_isk(row.raw_cents) }}">{{ compact_isk(row.raw_cents) }}</td>
+            <td class="text-end text-nowrap{% if mode == 'weighted' %} fw-bold text-success{% endif %}" title="{{ full_isk(row.true_cents) }}">{{ compact_isk(row.true_cents) }}</td>
+            <td class="text-end text-nowrap">{% if row.damage_percent is not none %}{{ '%.3f'|format(row.damage_percent) }}%{% else %}<span title="No positive attacker damage recorded">—</span>{% endif %}</td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+  {% endfor %}
+{% endif %}

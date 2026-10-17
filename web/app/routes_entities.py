@@ -3824,6 +3824,38 @@ def alliance_profile(request: Request, alliance_id: int):
     return entity_profile(request, "alliance", alliance_id)
 
 
+@router.get("/api/combat-stats/{entity_type}/{entity_id}/top-kills", response_class=JSONResponse)
+def combat_top_kills_fragment(request: Request, entity_type: str, entity_id: int):
+    user = require_login(request)
+    if not has_permission(user, "entities.view"):
+        return JSONResponse({"error": "Access denied."}, status_code=403)
+    if entity_type not in {"character", "corporation", "alliance"} or not 0 < entity_id < 2**63:
+        return JSONResponse({"error": "Invalid entity."}, status_code=400)
+    from .combat_top_kills import top_kills_state, TopKillsBusy
+    from .killmail_rankings import compact_isk, full_isk
+    try:
+        state = top_kills_state(entity_type, entity_id, retry=request.query_params.get("retry")=="1")
+    except TopKillsBusy as exc:
+        return JSONResponse({"error": str(exc)}, status_code=409)
+    except QueryCanceled:
+        return JSONResponse({"error": "Top kills exceeded the query time limit. Please retry later."}, status_code=504)
+    except Exception:
+        logger.exception("Top kills failed for %s %s", entity_type, entity_id)
+        return JSONResponse({"error": "Top kills are temporarily unavailable."}, status_code=503)
+    if state['status']=='failed':
+        return JSONResponse({'error': state['error']}, status_code=503, headers={"Cache-Control":"no-store"})
+    html = ''
+    if state.get('result') and (state['status']=='completed' or request.query_params.get('after')!=str(state['progress'].get('checked'))):
+        response = templates.TemplateResponse(request=request, name="combat_top_kills_fragment.html", context={
+            "top_kills": state['result'], "compact_isk": compact_isk, "full_isk": full_isk,
+            "provisional": state['status']=='running',
+        })
+        html = response.body.decode('utf-8')
+    return JSONResponse(dict(status=state['status'],progress=state['progress'],html=html),
+                        status_code=202 if state['status']=='running' else 200,
+                        headers={"Cache-Control":"no-store"})
+
+
 @router.get("/system/{system_id}", response_class=HTMLResponse)
 def system_profile(request: Request, system_id: int):
     return entity_profile(request, "system", system_id)
@@ -5335,6 +5367,7 @@ def entity_profile(request: Request, entity_type: str, entity_id: int):
     corporation_history = None
     combat_stats = None
     combat_stats_error = None
+    combat_stats_view = "top-kills" if request.query_params.get("stats_view") == "top-kills" else "history"
 
     try:
         profile_started = perf_counter()
@@ -5347,11 +5380,12 @@ def entity_profile(request: Request, entity_type: str, entity_id: int):
     if requested_tab == "stats" and profile:
         from . import killmail_rankings
         context.update(compact_isk=killmail_rankings.compact_isk, full_isk=killmail_rankings.full_isk)
-        try:
-            combat_stats = killmail_rankings.combat_history(entity_type, entity_id)
-        except Exception:
-            logger.exception("Combat stats load failed for %s %s", entity_type, entity_id)
-            combat_stats_error = "Combat stats are temporarily unavailable. Please retry."
+        if combat_stats_view == "history":
+            try:
+                combat_stats = killmail_rankings.combat_history(entity_type, entity_id)
+            except Exception:
+                logger.exception("Combat stats load failed for %s %s", entity_type, entity_id)
+                combat_stats_error = "Combat stats are temporarily unavailable. Please retry."
 
     if profile and profile.get("entity_type") == "alliance":
         try:
@@ -5488,6 +5522,7 @@ def entity_profile(request: Request, entity_type: str, entity_id: int):
         "corporation_history": corporation_history,
         "combat_stats": combat_stats,
         "combat_stats_error": combat_stats_error,
+        "combat_stats_view": combat_stats_view,
         "killmail_ship_options": killmail_ship_options,
         "killmail_ship_options_error": killmail_ship_options_error,
         "killmail_page": killmail_page,

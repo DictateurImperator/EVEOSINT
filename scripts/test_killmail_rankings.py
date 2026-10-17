@@ -1,14 +1,17 @@
 """Offline ranking checks, with optional disposable PostgreSQL integration tests."""
 from datetime import date, datetime, UTC
+from collections import OrderedDict
 from decimal import Decimal
 import os
 import json
 import subprocess
 import sys
 import tempfile
+import threading
+import time
 from pathlib import Path
 import unittest
-from unittest.mock import patch
+from unittest.mock import patch, MagicMock
 
 import psycopg2
 from fastapi import FastAPI
@@ -20,6 +23,7 @@ from scripts import test_first_loss_admin as fixture
 jobs = fixture.jobs
 rankings = fixture.f.load('killmail_rankings')
 routes = fixture.f.load('routes_admin_rankings')
+top_kills = fixture.f.load('combat_top_kills')
 JAN = date(2026,1,1)
 FEB = date(2026,2,1)
 
@@ -99,6 +103,86 @@ class CombatStatsTests(unittest.TestCase):
                     response=client.get('/character/42?tab=stats')
                     self.assertEqual(response.status_code,200)
                     self.assertIn(message,response.text)
+
+    def test_top_kills_loads_on_demand_and_formats_the_two_lists(self):
+        app=FastAPI();app.include_router(self.routes.router)
+        row=dict(killmail_id=100,killmail_time=datetime(2026,1,2,tzinfo=UTC),
+                 raw_cents=Decimal(100000000000),true_cents=Decimal(50000000),damage_percent=Decimal('.05'),
+                 ship_id=638,ship_name='Raven',system_id=30000142,system_name='Jita',
+                 victim_id=9,victim_name='<Victim>',victim_corporation_id=90)
+        with patch.object(self.routes,'require_login',return_value=dict(username='Reader',permissions={'entities.view'})), \
+             patch.object(self.routes,'get_entity_profile',return_value=dict(entity_type='character',entity_id=42,name='Pilot',subtitle='Character')), \
+             patch.object(rankings,'combat_history') as monthly, \
+             patch.object(top_kills,'top_kills_state',return_value=dict(status='completed',progress={'checked':227,'total':227},result={'raw':[row],'weighted':[row]})) as query,TestClient(app) as client:
+            page=client.get('/character/42?tab=stats&stats_view=top-kills')
+            self.assertEqual(page.status_code,200)
+            self.assertIn('Loading top kills',page.text)
+            monthly.assert_not_called();query.assert_not_called()
+            for kind in rankings.KINDS:
+                response=client.get(f'/api/combat-stats/{kind}/42/top-kills')
+                self.assertEqual(response.json()['status'],'completed')
+                markup=response.json()['html']
+                self.assertEqual(response.status_code,200)
+                self.assertIn('Highest raw ISK',markup)
+                self.assertIn('Highest true ISK',markup)
+                self.assertIn('1.00 B',markup)
+                self.assertIn('500.00 K',markup)
+                self.assertIn('0.050%',markup)
+                self.assertIn('&lt;Victim&gt;',markup)
+                self.assertIn('/kill/100',markup)
+                query.assert_called_with(kind,42,retry=False)
+            with patch.object(top_kills,'top_kills_state',side_effect=top_kills.TopKillsBusy('Retry later.')):
+                self.assertEqual(client.get('/api/combat-stats/character/42/top-kills').status_code,409)
+            with patch.object(top_kills,'top_kills_state',side_effect=psycopg2.errors.QueryCanceled()):
+                self.assertEqual(client.get('/api/combat-stats/character/42/top-kills').status_code,504)
+            with patch.object(top_kills,'top_kills_state',return_value=dict(status='running',progress={'checked':1,'total':227},result={'raw':[row],'weighted':[row]})):
+                response=client.get('/api/combat-stats/character/42/top-kills')
+                self.assertEqual(response.status_code,202)
+                self.assertEqual(response.json()['progress']['checked'],1)
+                self.assertIn('Highest true ISK',response.json()['html'])
+                unchanged=client.get('/api/combat-stats/character/42/top-kills?after=1')
+                self.assertEqual(unchanged.status_code,202)
+                self.assertEqual(unchanged.json()['html'],'')
+            self.assertEqual(client.get('/api/combat-stats/coalition/42/top-kills').status_code,400)
+            self.assertEqual(client.get('/api/combat-stats/character/0/top-kills').status_code,400)
+        with patch.object(self.routes,'require_login',return_value=dict(username='Denied',permissions=set())), \
+             patch.object(top_kills,'top_kills_state') as query,TestClient(app) as client:
+            self.assertEqual(client.get('/api/combat-stats/character/42/top-kills').status_code,403)
+            query.assert_not_called()
+
+
+class TopKillsWorkerTests(unittest.TestCase):
+    def test_one_readonly_worker_serves_progress_partial_tops_and_cached_result(self):
+        entered=threading.Event();release=threading.Event()
+        result={'raw':[],'weighted':[]}
+        conn=MagicMock()
+        def scan(connection,kind,entity_id,limit,report):
+            report(checked=1,total=227,current_month='2026-10',kills_examined=64,result=result)
+            entered.set()
+            if not release.wait(3):raise AssertionError('Test worker was not released')
+            report(phase='completed',checked=227,total=227,kills_examined=128)
+            return result
+        with patch.object(top_kills,'_CACHE',OrderedDict()),patch.object(top_kills,'_RUNS',OrderedDict()), \
+             patch.object(top_kills,'db',return_value=conn) as connect, \
+             patch.object(top_kills,'_scan',side_effect=scan),patch.object(top_kills,'_enrich'):
+            try:
+                self.assertEqual(top_kills.top_kills_state('character',42)['status'],'running')
+                self.assertTrue(entered.wait(3))
+                progress=top_kills.top_kills_state('character',42)
+                self.assertEqual(progress['progress']['checked'],1)
+                self.assertEqual(progress['result'],result)
+                self.assertEqual(top_kills.top_kills_state('character',42,retry=True)['status'],'running')
+                self.assertEqual(connect.call_count,1)
+            finally:release.set()
+            deadline=time.monotonic()+3
+            while top_kills.top_kills_state('character',42)['status']=='running' and time.monotonic()<deadline:
+                time.sleep(.01)
+            final=top_kills.top_kills_state('character',42)
+            self.assertEqual(final['status'],'completed')
+            self.assertEqual(final['progress']['checked'],227)
+            self.assertEqual(connect.call_count,1)
+            conn.set_session.assert_called_once_with(readonly=True,isolation_level='REPEATABLE READ')
+            conn.close.assert_called_once()
 
 
 class ControlTests(unittest.TestCase):
@@ -495,6 +579,48 @@ class DatabaseTests(unittest.TestCase):
             self.assertIsNone(losses_only['totals']['ratio'])
             self.assertEqual(rankings.combat_history('character',999999)['rows'],[])
         with self.assertRaises(ValueError):rankings.combat_history('coalition',42)
+
+    def test_top_kills_exact_ordering_beyond_the_first_raw_candidates(self):
+        with self.conn.cursor() as cur:
+            cur.execute('''INSERT INTO rawkm.killmails VALUES
+                (104,'2026-01-06 12:00+00',100000,9,90,900),
+                (105,'2026-01-07 12:00+00',90000,9,90,900);
+                INSERT INTO rawkm.killmail_attackers VALUES
+                (104,'2026-01-06 12:00+00',1,10,1000,1),
+                (104,'2026-01-06 12:00+00',NULL,1000001,NULL,999),
+                (105,'2026-01-07 12:00+00',1,10,1000,1),
+                (105,'2026-01-07 12:00+00',NULL,1000001,NULL,999);
+                INSERT INTO rawkm.killmails VALUES (106,'2026-02-07 12:00+00',50000,9,90,900);
+                INSERT INTO rawkm.killmail_attackers VALUES
+                (106,'2026-02-07 12:00+00',4,10,1000,1),
+                (106,'2026-02-07 12:00+00',NULL,1000001,NULL,99);
+            ''')
+        # The true top is NOT a re-sort of the raw top. Fetch across several batches.
+        with patch.object(top_kills,'BATCH',2):
+            data=top_kills._scan(self.conn,'character',1,2)
+        self.assertEqual([r['killmail_id'] for r in data['raw']],[104,105])
+        self.assertEqual([r['true_cents'] for r in data['weighted']],[Decimal(30000),Decimal(3000)])
+        self.assertEqual([r['damage_percent'] for r in data['weighted']],[Decimal(100),Decimal(30)])
+        self.assertEqual(top_kills._scan(self.conn,'character',9999,20),dict(raw=[],weighted=[]))
+        for kind,id in [('corporation',10),('alliance',1000)]:
+            data=top_kills._scan(self.conn,kind,id,20)
+            kill=next(r for r in data['raw'] if r['killmail_id']==100)
+            self.assertEqual(kill['true_cents'],Decimal(5000))
+            self.assertEqual(kill['damage_percent'],Decimal(50))
+            self.assertEqual(len([r for r in data['raw'] if r['killmail_id']==100]),1)
+            updates=[]
+            with patch.object(top_kills,'_enrich'):
+                limited=top_kills._scan(self.conn,kind,id,2,report=lambda **p:updates.append(p))
+            self.assertEqual([r['killmail_id'] for r in limited['raw']],[104,105])
+            self.assertEqual([r['true_cents'] for r in limited['weighted']],[Decimal(5000),Decimal(500)])
+            partial=[p for p in updates if 'result' in p]
+            self.assertEqual([p['checked'] for p in partial],[1,2])
+            self.assertEqual(partial[0]['result']['raw'][0]['killmail_id'],106)
+            self.assertEqual(partial[1]['result']['raw'][0]['killmail_id'],104)
+            self.assertEqual(updates[-1]['phase'],'completed')
+        zero_damage=top_kills._scan(self.conn,'character',3,20)['weighted'][0]
+        self.assertEqual(zero_damage['true_cents'],0)
+        self.assertIsNone(zero_damage['damage_percent'])
 
     def test_terminal_purge_is_limited_to_generated_rankings(self):
         self.build(JAN)

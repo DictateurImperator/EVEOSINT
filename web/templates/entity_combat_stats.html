@@ -8,8 +8,76 @@
 {%- endmacro %}
 <section class="content-card p-3 p-md-4 mb-4">
   <h2 class="h5 fw-bold mb-2">Combat stats</h2>
+  <nav class="d-flex flex-wrap gap-2 mb-3" aria-label="Combat stats views">
+    <a class="btn btn-sm {% if combat_stats_view != 'top-kills' %}btn-primary{% else %}btn-outline-primary{% endif %}" href="/{{ profile.entity_type }}/{{ profile.entity_id }}?tab=stats">Monthly history</a>
+    <a class="btn btn-sm {% if combat_stats_view == 'top-kills' %}btn-primary{% else %}btn-outline-primary{% endif %}" href="/{{ profile.entity_type }}/{{ profile.entity_id }}?tab=stats&amp;stats_view=top-kills">Top kills</a>
+  </nav>
   <p class="muted-line">Raw ISK credits the full value of each kill once. True ISK credits only the share of damage dealt by this {{ profile.entity_type }}. The ratio is True ISK / Raw ISK. Losses always use their full value.</p>
-  {% if combat_stats_error %}
+  {% if combat_stats_view == 'top-kills' %}
+    <p class="muted-line">Top 20 across all available killmails. Kills without an ISK value are excluded. Corporation and alliance membership is taken from each killmail. Results may be cached for up to five minutes.</p>
+    <p id="combatTopProgress" class="muted-line" role="status" aria-live="polite">Loading top kills…</p>
+    <div id="combatTopKills" data-url="/api/combat-stats/{{ profile.entity_type }}/{{ profile.entity_id }}/top-kills"></div>
+    <button id="combatTopRetry" class="btn btn-sm btn-outline-primary mt-2" type="button" hidden>Retry</button>
+    <script>
+    (() => {
+      const container = document.getElementById('combatTopKills');
+      const retry = document.getElementById('combatTopRetry');
+      const progress = document.getElementById('combatTopProgress');
+      let mode = 'raw';
+      let lastMarkup = '';
+      let checked = null;
+      function selectMode() {
+        container.querySelectorAll('[data-combat-top-panel]').forEach(panel => { panel.hidden = panel.dataset.combatTopPanel !== mode; });
+        container.querySelectorAll('[data-combat-top-mode]').forEach(tab => {
+          const active = tab.dataset.combatTopMode === mode;
+          tab.classList.toggle('btn-primary', active);
+          tab.classList.toggle('btn-outline-primary', !active);
+          tab.setAttribute('aria-pressed', String(active));
+        });
+      }
+      container.addEventListener('click', event => {
+        const button = event.target.closest('[data-combat-top-mode]');
+        if (button) { mode = button.dataset.combatTopMode; selectMode(); }
+      });
+      async function load(restart = false) {
+        retry.hidden = true;
+        container.setAttribute('aria-busy', 'true');
+        try {
+          const params = new URLSearchParams();
+          if (restart) { params.set('retry', '1'); checked = null; }
+          if (checked !== null) params.set('after', String(checked));
+          const response = await fetch(container.dataset.url + (params.size ? '?' + params.toString() : ''), {headers: {'Accept': 'application/json'}, cache: 'no-store'});
+          if (!response.ok) {
+            let message = 'Top kills could not be loaded.';
+            try { message = (await response.json()).error || message; } catch (_) {}
+            throw new Error(message);
+          }
+          if (response.redirected) throw new Error('Please sign in again to view top kills.');
+          const data = await response.json();
+          if (data.html && data.html !== lastMarkup) {
+            container.innerHTML = data.html;
+            lastMarkup = data.html;
+            selectMode();
+          }
+          const p = data.progress || {};
+          checked = p.checked || 0;
+          const counts = `Months checked: ${p.checked || 0} / ${p.total || 0} · Kills evaluated: ${(p.kills_examined || 0).toLocaleString()}`;
+          if (data.status === 'running') {
+            progress.textContent = `Provisional rankings — ${counts}` + (p.current_month ? ` · Current month: ${p.current_month}` : ' · Starting…');
+            setTimeout(() => load(), 1500);
+          } else {
+            progress.textContent = p.total ? `Complete — ${counts}` : 'Complete — cached rankings.';
+          }
+        } catch (error) {
+          progress.textContent = error.message + (lastMarkup ? ' Rankings below are provisional.' : '');
+          retry.hidden = false;
+        } finally { container.setAttribute('aria-busy', 'false'); }
+      }
+      retry.addEventListener('click', () => load(true));
+      load();
+    })();
+    </script>
+  {% elif combat_stats_error %}
     <div class="alert alert-warning" role="alert">{{ combat_stats_error }}</div>
   {% elif not combat_stats or not combat_stats.ready %}
     <p class="muted-line">Combat stats will be available once monthly rankings have been built.</p>
