@@ -13,7 +13,7 @@ import tempfile
 from psycopg2 import sql
 
 LOG = logging.getLogger(__name__)
-CACHE_VERSION = 3
+CACHE_VERSION = 4
 CACHE_LIMIT = 64
 TOP_LIMIT = 1000
 KINDS = {'character':(1,'characters','character_id'), 'corporation':(2,'corporations','corporation_id'),
@@ -24,6 +24,13 @@ DECIMALS = ('destroyed','lost','net','efficiency')
 
 class RankingsBusy(Exception):
     pass
+
+
+def player_character_filter(kind,entity_id):
+    """Keep recorded NPC scores, but remove SDE NPCs before ordering/ranking."""
+    if kind!='character':
+        return sql.SQL('true')
+    return sql.SQL('NOT EXISTS (SELECT 1 FROM public.sde_npccharacters npc WHERE npc.sde_key=({})::text)').format(entity_id)
 
 
 def _current_rows(cur,kind_id,table,id_column,column,sort,first,last):
@@ -63,7 +70,7 @@ def _current_rows(cur,kind_id,table,id_column,column,sort,first,last):
     params.extend((kind_id,TOP_LIMIT))
     cur.execute(sql.SQL('''WITH facts AS (
         SELECT c.entity_id,{facts} FROM analytics.killmail_rankings_current c {join}
-        WHERE c.entity_kind=%s
+        WHERE c.entity_kind=%s AND {players}
     ), top_rows AS (
         SELECT *,{metric} AS score FROM facts WHERE kills>0 OR losses>0
         ORDER BY score DESC NULLS LAST,entity_id LIMIT %s
@@ -71,7 +78,8 @@ def _current_rows(cur,kind_id,table,id_column,column,sort,first,last):
              r.destroyed-r.lost AS net,100*r.destroyed/NULLIF(r.destroyed+r.lost,0) AS efficiency,e.name
       FROM top_rows r LEFT JOIN entities.{table} e ON e.{id_column}=r.entity_id
       ORDER BY r.score DESC NULLS LAST,r.entity_id''').format(facts=facts,metric=metric,join=join,
-        table=sql.Identifier(table),id_column=sql.Identifier(id_column)),params)
+        table=sql.Identifier(table),id_column=sql.Identifier(id_column),
+        players=player_character_filter('character' if kind_id==1 else 'other',sql.SQL('c.entity_id'))),params)
     columns=[c.name for c in cur.description]
     return [dict(zip(columns,r)) for r in cur]
 
@@ -101,9 +109,10 @@ def query(conn, kind, mode, sort, first, last):
             return current
         cur.execute(sql.SQL('''SELECT entity_id,{metric} AS score
             FROM analytics.killmail_rankings_monthly
-            WHERE entity_kind=%s AND month BETWEEN %s AND %s {group}
+            WHERE entity_kind=%s AND month BETWEEN %s AND %s AND {players} {group}
             ORDER BY score DESC NULLS LAST,entity_id LIMIT %s''').format(
-                metric=metrics[sort],group=sql.SQL('GROUP BY entity_id' if multi else '')),
+                metric=metrics[sort],players=player_character_filter(kind,sql.Identifier('entity_id')),
+                group=sql.SQL('GROUP BY entity_id' if multi else '')),
                 (kind_id,first,last,TOP_LIMIT))
         ids=[r[0] for r in cur]
         if not ids:

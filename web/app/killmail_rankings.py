@@ -155,14 +155,16 @@ def lookup(query,kind,purpose='target',as_of=None):
         entity_id=int(query) if query.isascii() and query.isdigit() and len(query)<=18 else None
         rows=[]
         if entity_id is not None:
-            cur.execute(sql.SQL('SELECT {id},name FROM entities.{table} WHERE {id}=%s').format(
-                id=sql.Identifier(id_column),table=sql.Identifier(table)),(entity_id,))
+            cur.execute(sql.SQL('SELECT {id},name FROM entities.{table} WHERE {id}=%s AND {players}').format(
+                id=sql.Identifier(id_column),table=sql.Identifier(table),
+                players=engine().player_character_filter(kind,sql.Identifier(id_column))),(entity_id,))
             rows=list(cur)
         if not rows:
             statement=sql.SQL('''SELECT {id},name FROM entities.{table}
-                WHERE lower(COALESCE(name,'')) LIKE %s
+                WHERE lower(COALESCE(name,'')) LIKE %s AND {players}
                 ORDER BY (lower(name)=%s) DESC,lower(name),{id} LIMIT 12''').format(
-                    id=sql.Identifier(id_column),table=sql.Identifier(table))
+                    id=sql.Identifier(id_column),table=sql.Identifier(table),
+                    players=engine().player_character_filter(kind,sql.Identifier(id_column)))
             cur.execute(statement,(needle+'%',query.lower()))
             rows=list(cur)
             if not rows and len(query)>=3:

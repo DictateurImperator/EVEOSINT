@@ -121,10 +121,11 @@ def explore(conn,engine,kind,mode,sort,first,last,*,as_of=None,includes=(),exclu
     metric={'net':sql.SQL('destroyed-lost'),
             'efficiency':sql.SQL('100*destroyed/NULLIF(destroyed+lost,0)')}.get(sort,sql.Identifier(sort))
     base=sql.SQL('''WITH facts AS (SELECT c.entity_id,{values} FROM analytics.killmail_rankings_current c
-            {snapshot} WHERE c.entity_kind=%s),{scope_join}
+            {snapshot} WHERE c.entity_kind=%s AND {players}),{scope_join}
         candidates AS (SELECT *,{metric} AS score FROM {source}
                         WHERE (kills>0 OR losses>0) AND ({predicate})) ''').format(
         values=values,snapshot=snapshot,scope_join=scope_join,metric=metric,
+        players=engine.player_character_filter(kind,sql.SQL('c.entity_id')),
         source=sql.Identifier('scoped' if includes or excludes else 'facts'),predicate=predicate)
     with conn.cursor() as cur:
         cur.execute("SET LOCAL statement_timeout='25s'")

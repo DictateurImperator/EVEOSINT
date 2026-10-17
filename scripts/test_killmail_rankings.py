@@ -272,6 +272,8 @@ class DatabaseTests(unittest.TestCase):
                 CREATE TABLE rawkm.killmails_2026_02 PARTITION OF rawkm.killmails FOR VALUES FROM ('2026-02-01') TO ('2026-03-01');
                 CREATE TABLE rawkm.killmail_attackers_2026_01 PARTITION OF rawkm.killmail_attackers FOR VALUES FROM ('2026-01-01') TO ('2026-02-01');
                 CREATE TABLE rawkm.killmail_attackers_2026_02 PARTITION OF rawkm.killmail_attackers FOR VALUES FROM ('2026-02-01') TO ('2026-03-01');
+                CREATE TABLE IF NOT EXISTS public.sde_npccharacters(sde_key text PRIMARY KEY,data jsonb);
+                TRUNCATE public.sde_npccharacters;
                 CREATE SCHEMA entities;
                 CREATE TABLE entities.characters(character_id bigint PRIMARY KEY,name text);
                 CREATE TABLE entities.corporations(corporation_id bigint PRIMARY KEY,name text);
@@ -373,6 +375,40 @@ class DatabaseTests(unittest.TestCase):
             self.assertEqual(rankings.lookup('999999999999999999999999','character'),[])
             self.assertEqual(rankings.lookup('old','corporation')[0]['alliance_name'],'Old Alliance')
             self.assertEqual(rankings.lookup('new','alliance')[0]['name'],'New Alliance')
+
+    def test_npcs_keep_their_scores_but_are_not_ranked_or_suggested(self):
+        with self.conn.cursor() as cur:
+            cur.execute("INSERT INTO public.sde_npccharacters VALUES('3019582','{}')")
+            cur.execute("INSERT INTO entities.characters VALUES(3019582,'Apollo Tyrannos')")
+            cur.execute("INSERT INTO rawkm.killmail_attackers VALUES(100,'2026-01-02 12:00+00',3019582,1000274,NULL,500)")
+        self.conn.commit()
+        self.build()
+        with self.conn.cursor() as cur:
+            cur.execute('SELECT destroyed_cents FROM analytics.killmail_rankings_monthly WHERE entity_kind=1 AND entity_id=3019582')
+            self.assertEqual(cur.fetchone()[0],10000)
+        self.conn.commit()
+        for mode in ['classic','weighted']:
+            for sort in rankings.SORTS:
+                with psycopg2.connect(self.dsn) as conn:
+                    rows=rankings.engine().query(conn,'character',mode,sort,JAN,JAN)
+                    self.assertNotIn(3019582,[r['entity_id'] for r in rows])
+                with psycopg2.connect(self.dsn) as conn:
+                    result=rankings.explorer().explore(conn,rankings.engine(),'character',mode,sort,JAN,JAN,as_of=JAN)
+                    self.assertNotIn(3019582,[r['entity_id'] for r in result['rows']])
+                    self.assertEqual([r['rank'] for r in result['rows']],list(range(1,len(result['rows'])+1)))
+        with patch.object(rankings,'db',side_effect=lambda:psycopg2.connect(self.dsn)):
+            self.assertEqual(rankings.lookup('Apollo','character'),[])
+            self.assertEqual(rankings.lookup('3019582','character'),[])
+        with psycopg2.connect(self.dsn) as conn:
+            with self.assertRaisesRegex(ValueError,'not ranked'):
+                rankings.explorer().explore(conn,rankings.engine(),'character','classic','destroyed',JAN,JAN,target_id=3019582)
+        # The fallback monthly query also filters before applying the top limit.
+        with self.conn.cursor() as cur:
+            cur.execute('UPDATE analytics.killmail_ranking_current_state SET ready=false')
+        self.conn.commit()
+        with psycopg2.connect(self.dsn) as conn:
+            rows=rankings.engine().query(conn,'character','classic','destroyed',JAN,JAN)
+            self.assertNotIn(3019582,[r['entity_id'] for r in rows])
 
     def test_credit_dedup_damage_npc_losses_and_no_empty_rows(self):
         result=self.build()
