@@ -1,6 +1,11 @@
 #!/usr/bin/env python3
 """Manually import all daily zKill valuation prices, resumably, from 2003-01-01."""
 
+if __package__:
+    from .pipeline_metrics import MetricEmitter
+else:
+    from pipeline_metrics import MetricEmitter
+
 import argparse
 import hashlib
 import json
@@ -252,12 +257,14 @@ def main():
         "requests": 0,
     }
 
+    emit_metrics = MetricEmitter("killmail_missing_prices")
     def progress(phase, **values):
         state.update(phase=phase, updated_at=datetime.now(UTC).isoformat(), **values)
         args.progress.parent.mkdir(parents=True, exist_ok=True)
         tmp = args.progress.with_suffix(".tmp")
         tmp.write_text(json.dumps(state))
         tmp.replace(args.progress)
+        emit_metrics(state)
 
     try:
         cfg = json.loads(args.db_config.read_text())

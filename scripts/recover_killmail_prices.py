@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
 """Diagnose NULL killmail values, then recover quotes from zKill item pages."""
+if __package__:
+    from .pipeline_metrics import MetricEmitter
+else:
+    from pipeline_metrics import MetricEmitter
+
 import argparse
 import json
 import logging
@@ -380,12 +385,14 @@ def main():
                         handlers=[logging.StreamHandler(), logging.FileHandler(log_path)])
     stopped = threading.Event()
     state = {'pid': os.getpid(), 'started_at': datetime.now(UTC).isoformat()}
+    emit_metrics = MetricEmitter("killmail_price_recovery")
     def progress(phase, **kw):
         state.update(phase=phase, updated_at=datetime.now(UTC).isoformat(), **kw)
         args.progress.parent.mkdir(parents=True, exist_ok=True)
         tmp = args.progress.with_suffix('.tmp')
         tmp.write_text(json.dumps(state))
         tmp.replace(args.progress)
+        emit_metrics(state)
         LOG.info('PRICE_RECOVERY %s', json.dumps(state))
     connections = []
     def stop(*_):

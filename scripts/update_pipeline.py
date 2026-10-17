@@ -12,6 +12,12 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 
+if __package__:
+    from .pipeline_metrics import FIELDS, MARKER
+else:
+    from pipeline_metrics import FIELDS, MARKER
+
+
 BASE_DIR = Path.home() / "eveosint"
 WEB_DIR = BASE_DIR / "web"
 SCRIPT_DIR = BASE_DIR / "scripts"
@@ -139,6 +145,106 @@ def parse_step_metrics(item, line):
     step_id = item.get("id") or ""
     changed = False
     kv = _kv_numbers(line)
+
+    if MARKER in line:
+        try:
+            payload = json.loads(line.split(MARKER, 1)[1])
+        except (ValueError, TypeError):
+            return False
+        if not isinstance(payload, dict) or payload.get('version') != 1 or payload.get('step') != step_id:
+            return False
+        metrics = payload.get('metrics')
+        if not isinstance(metrics, dict):
+            return False
+        allowed = set(FIELDS.get(step_id, {}).values())
+        for key, value in metrics.items():
+            if key not in allowed:
+                continue
+            if value is None:
+                changed |= item.setdefault('metrics', {}).pop(key, None) is not None
+            elif isinstance(value, str):
+                changed |= _set_text_metric(item, key, value)
+            elif type(value) in (int, float, bool):
+                changed |= _set_metric(item, key, value)
+        return changed
+
+    if step_id == 'killmail_rankings':
+        if 'Rankings await manual initialization' in line:
+            changed |= _set_text_metric(item, 'current_phase', 'awaiting_manual_initialization')
+        elif 'Another rankings builder is already running' in line:
+            changed |= _set_text_metric(item, 'current_phase', 'another_builder_already_running')
+    if step_id == 'sovereignty_esi' and 'Another sovereignty ESI job is already active' in line:
+        changed |= _set_text_metric(item, 'current_phase', 'another_job_already_running')
+
+    if step_id == 'killmail_archive_refresh' and 'MER_MATCH_DONE ' in line:
+        try:
+            result = json.loads(line.split('MER_MATCH_DONE ', 1)[1])
+        except (ValueError, TypeError):
+            result = {}
+        if isinstance(result, dict):
+            for source, target in {'matched_unique':'mer_matched', 'unresolved':'mer_unresolved', 'ambiguous':'mer_ambiguous'}.items():
+                changed |= _set_metric(item, target, result.get(source))
+
+    if step_id == 'population_alliances_daily':
+        if '[DISCOVERY] complete' in line:
+            changed |= _set_metric(item, 'population_pages', kv.get('pages'))
+            changed |= _set_metric(item, 'population_alliances', kv.get('unique_alliances'))
+        if '[SNAPSHOT]' in line:
+            changed |= _set_metric(item, 'population_snapshots', kv.get('saved'))
+            changed |= _set_metric(item, 'population_unresolved', kv.get('unresolved'))
+        if '[BACKFILL] queued=' in line:
+            changed |= _set_metric(item, 'population_backfill_total', kv.get('queued'))
+        match = re.search(r'\[RESOLVE (\d+)/(\d+)\]', line)
+        if match:
+            completed = ' OK ' in line or ' ERROR ' in line
+            changed |= _set_metric(item, 'population_resolved', int(match[1]) - (0 if completed else 1))
+            changed |= _set_metric(item, 'population_resolve_total', match[2])
+        match = re.search(r'\[BACKFILL PROGRESS\] (\d+)/(\d+)', line)
+        if match:
+            changed |= _set_metric(item, 'population_backfill_done', match[1])
+            changed |= _set_metric(item, 'population_backfill_total', match[2])
+        for source, target in {'snapshot_saved':'population_snapshots', 'resolve_errors':'population_resolve_errors',
+            'backfill_completed':'population_backfill_completed', 'backfill_skipped':'population_backfill_skipped',
+            'backfill_errors':'population_backfill_errors', 'http_calls':'population_requests',
+            'new_or_renamed':'population_new_or_renamed'}.items():
+            changed |= _set_metric(item, target, kv.get(source))
+        if '[BACKFILL PROGRESS]' in line:
+            for source, target in {'completed':'population_backfill_completed', 'skipped':'population_backfill_skipped',
+                                   'errors':'population_backfill_errors'}.items():
+                changed |= _set_metric(item, target, kv.get(source))
+
+    if step_id == 'sovereignty_esi' and 'SOV_ESI status=' in line:
+        match = re.search(r'SOV_ESI status=([a-z_]+)', line)
+        if match:
+            changed |= _set_text_metric(item, 'current_phase', match[1])
+        changed |= _set_metric(item, 'sovereignty_systems', kv.get('systems'))
+        changed |= _set_metric(item, 'sovereignty_changes', kv.get('changes'))
+
+    if step_id == 'character_skill_inference':
+        if 'MONTHS available=' in line:
+            changed |= _set_metric(item, 'skill_months_total', kv.get('available'))
+        if re.search(r'MONTH \d{4}_\d{2} done', line):
+            changed |= _increment_metric(item, 'skill_months_done')
+
+    if 'sync_killmails' in step_id:
+        match = re.search(r'\b(\d{4}-\d{2}-\d{2}) (?:committed (\d+)/(\d+)|files=(\d+)|final commit|downloading|extracting|archive exists)', line)
+        if match:
+            day = match[1]
+            changed |= _set_text_metric(item, 'current_period', day)
+            if match[2] is not None or match[4] is not None:
+                counts = item.setdefault('_import_day_counts', {})
+                entry = counts.setdefault(day, {'processed': 0, 'files': 0})
+                entry['processed'] = int(match[2] or entry['processed'])
+                entry['files'] = int(match[3] or match[4])
+                changed |= _set_metric(item, 'import_files_total', sum(d['files'] for d in counts.values()))
+                changed |= _set_metric(item, 'import_files_processed', sum(d['processed'] for d in counts.values()))
+        match = re.search(r'\bSUCCESS (\d{4}-\d{2}-\d{2})\b', line)
+        if match:
+            entry = item.get('_import_day_counts', {}).get(match[1])
+            if entry:
+                entry['processed'] = entry['files']
+                changed |= _set_metric(item, 'import_files_processed', sum(d['processed'] for d in item['_import_day_counts'].values()))
+
 
     if step_id == "sync_sde":
         match = re.search(r"\bbuild:\s*(\d+)", line)
@@ -414,6 +520,8 @@ def run_step(state, index, log_handle):
                     write_state(state)
                     last_metric_write = monotonic_now
 
+    if process.stdout is not None:
+        process.stdout.close()
     refresh_run_summary(state)
     write_state(state)
     rc = process.wait()

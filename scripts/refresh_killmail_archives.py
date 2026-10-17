@@ -5,6 +5,11 @@ Run manually or by the daily update pipeline. No CCP requests or zKillboard subm
 our local download date, including on the first run.
 """
 
+if __package__:
+    from .pipeline_metrics import MetricEmitter
+else:
+    from pipeline_metrics import MetricEmitter
+
 import argparse
 import fcntl
 import json
@@ -53,6 +58,7 @@ def save_state(path, state):
 
 class Progress:
     def __init__(self, path):
+        self.emit_metrics = MetricEmitter("killmail_archive_refresh")
         self.path = path
         self.data = {
             "pid": os.getpid(), "phase": "starting", "started_at": datetime.now(UTC).isoformat(),
@@ -66,6 +72,7 @@ class Progress:
         self.data.update(values)
         self.data["updated_at"] = datetime.now(UTC).isoformat()
         save_state(self.path, self.data)
+        self.emit_metrics(self.data)
 
 
 def get_json(session, url):

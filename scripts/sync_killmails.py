@@ -3,6 +3,7 @@ import argparse
 import json
 import logging
 import logging.handlers
+import sys
 import multiprocessing
 import shutil
 import tarfile
@@ -64,9 +65,12 @@ def configure_listener_logger():
 
     file_handler.setFormatter(formatter)
 
+    stream_handler = logging.StreamHandler(sys.stdout)
+    stream_handler.setFormatter(formatter)
     listener = logging.handlers.QueueListener(
         log_queue,
         file_handler,
+        stream_handler,
     )
 
     listener.start()

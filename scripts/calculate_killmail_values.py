@@ -1,6 +1,11 @@
 #!/usr/bin/env python3
 """Calculate and store zKill-like values directly on rawkm.killmails."""
 
+if __package__:
+    from .pipeline_metrics import MetricEmitter
+else:
+    from pipeline_metrics import MetricEmitter
+
 import argparse
 import json
 import logging
@@ -761,12 +766,14 @@ def main():
         state.update(recipe_snapshot_date=snapshot["snapshot_date"],
                      recipe_source=snapshot["source"], recipe_sha256=snapshot["recipes_sha256"])
 
+    emit_metrics = MetricEmitter("killmail_missing_values")
     def progress(phase, **values):
         state.update(phase=phase, updated_at=datetime.now(UTC).isoformat(), **values)
         args.progress.parent.mkdir(parents=True, exist_ok=True)
         temporary = args.progress.with_suffix(".tmp")
         temporary.write_text(json.dumps(state))
         temporary.replace(args.progress)
+        emit_metrics(state)
         LOG.info("PROGRESS phase=%s month=%s price_day=%s months=%s/%s valued=%s unvalued=%s",
                  phase, state.get("current_month", "-"), state.get("current_price_day", "-"),
                  state["months_processed"], state.get("months_total", "?"),

@@ -161,6 +161,71 @@ function stepPrefix(group) {
   return group === 'superintel' ? '↳' : group === 'weekly' ? 'W' : '';
 }
 const metricLabels = {
+  archives_checked: 'Archives checked',
+  archives_total: 'Archives to check',
+  archives_to_update: 'Archives needing update',
+  archives_processed: 'Update candidates processed',
+  archives_updated: 'Archives replaced',
+  archive_errors: 'Archive errors',
+  archive_killmails_added: 'New killmails',
+  archive_bytes_downloaded: 'Current archive bytes downloaded',
+  archive_bytes_total: 'Current archive bytes total',
+  archive_files_read: 'Current archive files read',
+  price_days_total: 'Price days in scope',
+  price_days_processed: 'Price days processed',
+  price_days_downloaded: 'Price days imported',
+  price_days_skipped: 'Price days already imported',
+  price_days_empty: 'Empty price days',
+  price_rows_imported: 'Item price rows imported',
+  price_errors: 'Price import errors',
+  price_requests: 'Price API requests',
+  valuation_months_done: 'Valuation months saved',
+  valuation_months_total: 'Valuation months to process',
+  valuation_price_day: 'Price date',
+  killmails_valued: 'Killmails valued',
+  killmails_unvalued: 'Killmails left unvalued',
+  valuation_price_fallbacks: 'Price fallback pairs',
+  valuation_recipe_gaps: 'Unavailable recipe price pairs',
+  recovery_months_done: 'Months diagnosed',
+  recovery_months_total: 'Months to diagnose',
+  recovery_missing_items: 'Distinct items missing prices',
+  recovery_pairs_total: 'Missing item/date pairs',
+  recovery_pairs_done: 'Item/date pairs processed',
+  recovery_items_done: 'Items checked',
+  recovery_pairs_recovered: 'Item/date prices recovered',
+  recovery_fallback_pairs: 'Item/date prices set to 0.01 ISK',
+  recovery_unresolved: 'Unresolved item/date pairs',
+  recovery_requests: 'Item page requests',
+  recovery_calls_estimated: 'Estimated maximum item page requests',
+  recovery_valuation_phase: 'Recalculation stage',
+  ranking_months_done: 'Ranking months saved',
+  ranking_months_total: 'Ranking months to process',
+  ranking_rows_saved: 'Monthly entity rows saved',
+  ranking_current_killmails: 'Killmails in current month',
+  ranking_current_valued: 'Valued killmails in current month',
+  population_pages: 'DOTLAN pages read',
+  population_alliances: 'Alliances discovered',
+  population_snapshots: 'Population snapshots saved',
+  population_unresolved: 'Alliances needing identification',
+  population_resolved: 'Alliances processed for identification',
+  population_resolve_total: 'Alliances to identify',
+  population_resolve_errors: 'Alliance identification errors',
+  population_backfill_done: 'Historical backfills processed',
+  population_backfill_total: 'Historical backfills queued',
+  population_backfill_completed: 'Historical backfills completed',
+  population_backfill_skipped: 'Historical backfills skipped',
+  population_backfill_errors: 'Historical backfill errors',
+  population_requests: 'DOTLAN requests',
+  population_new_or_renamed: 'New or renamed alliances',
+  sovereignty_systems: 'Systems in sovereignty map',
+  sovereignty_changes: 'Sovereignty changes',
+  skill_months_done: 'Skill months processed',
+  skill_months_total: 'Skill months to process',
+  import_files_total: 'Killmail files found',
+  import_files_processed: 'Killmail files processed',
+  mer_matched: 'MER losses matched',
+  mer_unresolved: 'MER losses still unmatched',
+  mer_ambiguous: 'Ambiguous MER matches',
   sde_build: 'SDE build',
   sde_already_current: 'Already current',
   sde_tables_done: 'SDE tables done',
@@ -236,6 +301,7 @@ function renderMetricPills(metrics) {
   return metricOrder.filter(key => source[key] !== undefined && source[key] !== null).map(key => {
     let value = source[key];
     if (key === 'sde_already_current') value = Number(value) ? 'yes' : 'no';
+    else if (['current_phase', 'recovery_valuation_phase'].includes(key)) value = String(value).replaceAll('_', ' ');
     else value = fmtMetric(value);
     return `<span class="metric-pill"><span>${esc(metricLabels[key] || key)}</span><strong>${esc(value)}</strong></span>`;
   }).join('');
@@ -279,7 +345,7 @@ function renderState(state) {
           ${s.error ? `<div class="small text-danger">${esc(s.error)}</div>` : ''}
         </div>
         <div class="step-status">${badge(s.status)}</div>
-        <div class="step-time text-end small muted-line">${fmtDuration(s.duration_seconds)}</div>
+        <div class="step-time text-end small muted-line">${fmtDuration(s.status === 'running' && s.started_at ? (Date.now() - Date.parse(s.started_at)) / 1000 : s.duration_seconds)}</div>
       </div>`).join('');
   }
   renderHistory(state.history || []);

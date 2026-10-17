@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
 """Build sparse monthly ISK rankings. One transaction per month; source KM are read only."""
+if __package__:
+    from .pipeline_metrics import MetricEmitter
+else:
+    from pipeline_metrics import MetricEmitter
+
 import argparse
 import json
 import logging
@@ -22,6 +27,7 @@ SCHEMA = Path(__file__).with_name('killmail_rankings_schema.sql')
 class ProgressReporter:
     """Publish a heartbeat during SQL work; only committed months count as saved."""
     def __init__(self, path, state):
+        self.emit_metrics = MetricEmitter("killmail_rankings")
         self.path, self.state = path, state
         self.lock = threading.Lock()
         self.done = threading.Event()
@@ -37,6 +43,7 @@ class ProgressReporter:
             temp = self.path.with_suffix('.tmp')
             temp.write_text(json.dumps(self.state))
             temp.replace(self.path)
+            self.emit_metrics(self.state)
 
     def _heartbeat(self):
         while not self.done.wait(2):
