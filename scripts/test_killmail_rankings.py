@@ -167,6 +167,27 @@ class ControlTests(unittest.TestCase):
                 self.assertEqual(self.client.post('/admin/debug/rankings/start').status_code,200)
             launch.assert_called_once()
 
+    def test_leaderboard_is_visible_to_entity_readers_without_admin_controls(self):
+        self.user['permissions']={'entities.view'}
+        months=[dict(month=JAN,built_at='v',killmails=1,valued=1,zero_damage=0,entity_rows=1,dirty=False)]
+        with patch.object(rankings,'catalog',return_value=months),patch.object(rankings,'ranking_rows',return_value=([],True)),patch.object(rankings,'lookup',return_value=[]) as lookup,patch.object(routes,'run_killmail_rankings') as launch:
+            response=self.client.get('/leaderboard')
+            self.assertEqual(response.status_code,200)
+            self.assertIn('ISK rankings',response.text)
+            self.assertIn('/leaderboard?',response.text)
+            self.assertNotIn('Monthly ranking builder',response.text)
+            self.assertNotIn('Admin Jobs',response.text)
+            self.assertNotIn('/admin/debug/rankings/status',response.text)
+            self.assertEqual(self.client.get('/leaderboard/lookup?q=Pilot').status_code,200)
+            lookup.assert_called_once()
+            self.assertEqual(self.client.post('/admin/debug/rankings/start').status_code,403)
+            self.assertEqual(self.client.get('/admin/debug/rankings/status').status_code,403)
+            launch.assert_not_called()
+            self.assertEqual(self.client.get('/admin/debug/rankings').status_code,200)
+            self.user['permissions']=set()
+            self.assertEqual(self.client.get('/leaderboard',follow_redirects=False).status_code,302)
+            self.assertEqual(self.client.get('/leaderboard/lookup?q=Pilot').status_code,403)
+
     def test_bad_filters_never_query(self):
         with patch.object(rankings,'catalog',return_value=[]),patch.object(rankings,'ranking_rows') as query:
             for url in ['?kind=oops','?sort=destroyed;DROP','?page=-1']:

@@ -123,12 +123,29 @@ def build_top_menu(user, active_module):
         items.append({"id": None, "menu_key": "tools", "label": "Tools", "href": "/tools",
                       "icon": "", "permission_key": None})
 
+    can_rank=bool(permissions & {"entities.view","admin.jobs.view"})
+    if can_rank:
+        leaderboard=next((item for item in items if item["menu_key"]=="leaderboard"),None)
+        leaderboard=dict(leaderboard or {},id=None,menu_key="leaderboard",label="Leaderboard",
+                         href="/leaderboard",icon="",permission_key=None)
+        items=[item for item in items if item["menu_key"]!="leaderboard"]
+        insert_at=next((i+1 for i,item in enumerate(items) if item["menu_key"]=="tools"),len(items))
+        items.insert(insert_at,leaderboard)
+    trailing={key:[item for item in items if item["menu_key"]==key] for key in ("admin","profiles")}
+    items=[item for item in items if item["menu_key"] not in trailing]+trailing["admin"]+trailing["profiles"]
+
     for item in items:
         item["active"] = item["menu_key"] == active_module
     return items
 
 
 def build_context_menu(user, active_module, active_menu_key):
+    if active_module == "leaderboard":
+        allowed=bool(user.get("permissions",set()) & {"entities.view","admin.jobs.view"})
+        items=[{"menu_key":"leaderboard.rankings","label":"ISK rankings","href":"/leaderboard",
+                "icon":"","active":active_menu_key=="leaderboard.rankings"}] if allowed else []
+        return {"title":"Leaderboard","items":items}
+
     if active_module == "tools":
         items = [{"menu_key": "tools", "label": "All tools", "href": "/tools", "icon": ""}] + visible_tools(user)
         for item in items:

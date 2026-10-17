@@ -371,7 +371,9 @@ def admin_debug(request: Request):
     redirect = require_permission_or_redirect(user, "admin.jobs.view")
     if redirect:
         return redirect
-    return RedirectResponse(url="/admin/debug/rankings", status_code=302)
+    context=app_context(request=request,user=user,title="EVEOSINT - Debug",
+                        active_module="admin",active_menu_key="admin.debug")
+    return templates.TemplateResponse(request=request,name="admin_debug_index.html",context=context)
 
 
 @router.get("/admin/debug/api/status")

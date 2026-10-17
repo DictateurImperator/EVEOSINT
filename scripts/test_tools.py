@@ -27,6 +27,22 @@ class ToolsTests(unittest.TestCase):
         context=menus.build_context_menu(user,'tools','tools.economics')
         self.assertTrue(next(t for t in context['items'] if t['menu_key']=='tools.economics')['active'])
 
+    def test_leaderboard_sits_after_tools_and_admin_profiles_are_last(self):
+        root=[dict(id=i,menu_key=key,label=key,href='/'+key,icon='',permission_key=None)
+              for i,key in enumerate(['home','superintel','entities','admin','profiles','tools','leaderboard'])]
+        user={'permissions':{'entities.view','superintel.view','admin.jobs.view'}}
+        with patch.object(menus,'fetch_visible_menu_items',return_value=root):
+            top=menus.build_top_menu(user,'leaderboard')
+        self.assertEqual([item['menu_key'] for item in top],
+                         ['home','superintel','entities','killboard','tools','leaderboard','admin','profiles'])
+        board=next(item for item in top if item['menu_key']=='leaderboard')
+        self.assertEqual((board['label'],board['href'],board['active']),('Leaderboard','/leaderboard',True))
+        context=menus.build_context_menu(user,'leaderboard','leaderboard.rankings')
+        self.assertEqual(context['items'][0]['href'],'/leaderboard')
+        self.assertTrue(context['items'][0]['active'])
+        with patch.object(menus,'fetch_visible_menu_items',return_value=[]):
+            self.assertNotIn('leaderboard',[item['menu_key'] for item in menus.build_top_menu({'permissions':set()},'home')])
+
     def test_hub_and_comparators_render_with_permission(self):
         app=FastAPI();app.include_router(routes.router)
         user={'username':'test','permissions':{'entities.view'}}

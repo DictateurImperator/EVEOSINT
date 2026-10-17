@@ -18,14 +18,15 @@ router = APIRouter()
 LOG = logging.getLogger(__name__)
 
 
-@router.get('/admin/debug/rankings', response_class=HTMLResponse)
+@router.get('/leaderboard', response_class=HTMLResponse)
+@router.get('/admin/debug/rankings', response_class=HTMLResponse, include_in_schema=False)
 def page(request: Request):
     import time
     user=require_login(request)
-    redirect=require_permission_or_redirect(user,'admin.jobs.view')
+    redirect=require_permission_or_redirect(user,'entities.view' if 'entities.view' in user.get('permissions',set()) else 'admin.jobs.view')
     if redirect:
         return redirect
-    context=app_context(request=request,user=user,title='EVEOSINT - ISK rankings',active_module='admin',active_menu_key='admin.debug')
+    context=app_context(request=request,user=user,title='EVEOSINT - ISK rankings',active_module='leaderboard',active_menu_key='leaderboard.rankings')
     params=request.query_params
     kind=params.get('kind','character');mode=params.get('mode','classic');sort=params.get('sort','destroyed')
     view='ranking'  # Search shares this page; old view=search links remain valid.
@@ -112,7 +113,7 @@ def page(request: Request):
     if excludes:
         base['exclude']=excludes
     def link(**changes):
-        return '/admin/debug/rankings?'+urlencode(dict(base,**changes),doseq=True)
+        return '/leaderboard?'+urlencode(dict(base,**changes),doseq=True)
     context.update(months=months,rows=rows,kind=kind,mode=mode,sort=sort,view=view,q=q,
         target_id=target_param,position=found_position if position_param and found_position else position_param,found_position=found_position,
         ranking_notice=ranking_notice,
@@ -121,27 +122,29 @@ def page(request: Request):
         ranking_link=link(view='ranking'),search_link=link(view='search'),
         entity_tabs=[dict(kind=k,label=label,url=link(kind=k),active=kind==k)
                      for k,label in [('character','Characters'),('corporation','Corporations'),('alliance','Alliances')]],
-        all_time_link='/admin/debug/rankings?'+urlencode({k:v for k,v in base.items() if k!='through'},doseq=True),
+        all_time_link='/leaderboard?'+urlencode({k:v for k,v in base.items() if k!='through'},doseq=True),
         last=last.strftime('%Y-%m') if last else '',custom_period=custom_period,
         ranking_years=sorted({m['month'].year for m in months},reverse=True),
         selected_year=last.year if last else None,
         period_from=first.strftime('%Y-%m') if first else '',period_through=last.strftime('%Y-%m') if last else '',
         membership_date=('end of '+affiliation_month.strftime('%B %Y')) if affiliation_month else 'today',
         lookup_default_through=lookup_default_through,
-        totals_ready=bool(months and months[0].get('totals_ready',True)),error=error,can_run='admin.jobs.run' in user.get('permissions',set()),
+        totals_ready=bool(months and months[0].get('totals_ready',True)),error=error,
+        can_view_jobs='admin.jobs.view' in user.get('permissions',set()),can_run='admin.jobs.run' in user.get('permissions',set()),
         selected=selected,missing=missing,cached=cached,elapsed=elapsed,page_number=page_number,offset=offset,
         previous=link(page=page_number-1) if not found_position and page_number>1 else None,
         next_page=link(page=page_number+1) if not found_position and more else None,
         compact_isk=rankings.compact_isk,full_isk=rankings.full_isk,
         coverage_kills=sum(m['killmails'] for m in selected),coverage_valued=sum(m['valued'] for m in selected),
         coverage_zero=sum(m['zero_damage'] for m in selected),dirty=sum(m['dirty'] for m in selected))
-    return templates.TemplateResponse(request=request,name='admin_rankings.html',context=context)
+    return templates.TemplateResponse(request=request,name='leaderboard.html',context=context)
 
 
-@router.get('/admin/debug/rankings/lookup')
+@router.get('/leaderboard/lookup')
+@router.get('/admin/debug/rankings/lookup', include_in_schema=False)
 def lookup(request: Request):
     user=require_login(request)
-    if 'admin.jobs.view' not in user.get('permissions',set()):
+    if not user.get('permissions',set()) & {'entities.view','admin.jobs.view'}:
         return JSONResponse({'error':'Access denied.'},status_code=403)
     kind=request.query_params.get('kind','character')
     purpose=request.query_params.get('purpose','target')
