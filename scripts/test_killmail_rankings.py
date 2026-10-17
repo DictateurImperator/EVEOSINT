@@ -1,5 +1,5 @@
 """Offline ranking checks, with optional disposable PostgreSQL integration tests."""
-from datetime import date
+from datetime import date, datetime, UTC
 from decimal import Decimal
 import os
 import json
@@ -156,6 +156,44 @@ class ControlTests(unittest.TestCase):
             months[0]['built_at']='version-2'
             self.assertFalse(rankings.ranking_rows('character','classic','destroyed',JAN,FEB,months)[1])
             self.assertEqual(query.call_count,2)
+
+    def test_lookup_receives_selected_month_and_rejects_invalid_month(self):
+        with patch.object(rankings,'lookup',return_value=[]) as lookup:
+            self.assertEqual(self.client.get('/admin/debug/rankings/lookup?q=Pilot&through=2026-01').status_code,200)
+            self.assertEqual(lookup.call_args.kwargs['as_of'],JAN)
+            self.assertEqual(self.client.get('/admin/debug/rankings/lookup?q=Pilot').status_code,200)
+            self.assertIsNone(lookup.call_args.kwargs['as_of'])
+            lookup.reset_mock()
+            self.assertEqual(self.client.get('/admin/debug/rankings/lookup?q=Pilot&through=invalid').status_code,400)
+            lookup.assert_not_called()
+
+    def test_cached_ranking_affiliations_are_reloaded_for_the_selected_month(self):
+        months=[dict(month=JAN,built_at='v',killmails=1,valued=1,zero_damage=0,entity_rows=1,dirty=False)]
+        row=dict(entity_id=1,name='Pilot',destroyed=Decimal(100),lost=Decimal(0),net=Decimal(100),efficiency=100,
+                 kills=1,losses=0,unvalued_kills=0,unvalued_losses=0,corporation_id=11,corporation_name='Current Corp',alliance_id=1001,alliance_name='Current Alliance')
+        def enrich(kind,rows,as_of):
+            self.assertEqual(as_of,JAN)
+            return [dict(r,corporation_id=10,corporation_name='Historical Corp',alliance_id=1000,alliance_name='Historical Alliance') for r in rows]
+        with patch.object(rankings,'catalog',return_value=months),patch.object(rankings,'ranking_rows',return_value=([row],True)),patch.object(rankings,'enrich_rows',side_effect=enrich):
+            response=self.client.get('/admin/debug/rankings?through=2026-01')
+            self.assertIn('Historical Corp',response.text)
+            self.assertIn('Historical Alliance',response.text)
+            self.assertNotIn('Current Corp',response.text)
+            self.assertIn('end of January 2026',response.text)
+
+    def test_default_ranking_uses_last_completed_month_until_build_catches_up(self):
+        months=[dict(month=JAN,built_at='v',killmails=1,valued=1,zero_damage=0,entity_rows=1,dirty=False)]
+        with patch.object(rankings,'catalog',return_value=months),patch.object(rankings,'ranking_rows',return_value=([],True)),patch.object(rankings,'enrich_rows',return_value=[]) as enrich:
+            response=self.client.get('/admin/debug/rankings')
+            self.assertEqual(enrich.call_args.args[2],JAN)
+            self.assertIn('Corporations and alliances as of end of January 2026',response.text)
+            self.assertIn('data-default-through="2026-01"',response.text)
+        current=datetime.now(UTC).date().replace(day=1)
+        months[0]['month']=current
+        with patch.object(rankings,'catalog',return_value=months),patch.object(rankings,'ranking_rows',return_value=([],True)),patch.object(rankings,'enrich_rows',return_value=[]) as enrich:
+            response=self.client.get('/admin/debug/rankings')
+            self.assertIsNone(enrich.call_args.args[2])
+            self.assertIn('Corporations and alliances as of today',response.text)
 
     def test_search_route_passes_target_and_filters_to_the_same_ranking(self):
         months=[dict(month=JAN,built_at='v',killmails=1,valued=1,zero_damage=0,entity_rows=1,dirty=False)]
@@ -507,7 +545,7 @@ class DatabaseTests(unittest.TestCase):
         self.assertEqual([r['entity_id'] for r in result['rows']],[r['entity_id'] for r in by_rank['rows']])
 
     def test_membership_filters_use_current_or_month_end_and_exclusions_win(self):
-        from datetime import date
+        from datetime import date, datetime, UTC
         self.build();self.build(FEB)
         engine=rankings.explorer()
         def query(**options):
@@ -524,7 +562,7 @@ class DatabaseTests(unittest.TestCase):
             query(includes=['alliance:1000'],target_id=1,around=True)
 
     def test_universe_and_no_alliance_filters_at_current_and_historical_dates(self):
-        from datetime import date
+        from datetime import date, datetime, UTC
         self.build();self.build(FEB)
         with self.conn.cursor() as cur:
             cur.execute('UPDATE entities.character_current_affiliation SET alliance_id=0 WHERE character_id=2')
@@ -561,6 +599,25 @@ class DatabaseTests(unittest.TestCase):
         self.assertIsNone(historical[1]['corporation_id'])
         with patch.object(rankings,'db',side_effect=lambda:psycopg2.connect(self.dsn)):
             self.assertEqual(rankings.scope_labels(['corporation:10','alliance:1000']),{'corporation:10':'Old Corp','alliance:1000':'Old Alliance'})
+
+    def test_lookup_historical_affiliations_use_month_end_and_never_current_fallback(self):
+        with self.conn.cursor() as cur:
+            cur.execute("INSERT INTO entities.characters VALUES(9,'Victim Pilot')")
+            # Membership that starts at midnight the following month must not leak backwards.
+            cur.execute("UPDATE entities.corporation_alliance_history SET end_date='2026-02-01' WHERE corporation_id=10")
+            cur.execute("INSERT INTO entities.corporation_alliance_history VALUES(10,2,3000,'2026-02-01',NULL,false)")
+        self.conn.commit()
+        with patch.object(rankings,'db',return_value=self.conn):
+            historical=rankings.lookup('Pilot One','character',as_of=JAN)[0]
+            self.assertEqual((historical['corporation_name'],historical['alliance_name']),('Old Corp','Old Alliance'))
+            later=rankings.lookup('Pilot One','character',as_of=FEB)[0]
+            self.assertEqual((later['corporation_name'],later['alliance_name']),('New Corp','New Alliance'))
+            corp=rankings.lookup('Old Corp','corporation',as_of=JAN)[0]
+            self.assertEqual(corp['alliance_name'],'Old Alliance')
+            self.assertEqual(rankings.lookup('Old Corp','corporation',as_of=FEB)[0]['alliance_name'],'Alliance Thirty')
+            unknown=rankings.lookup('Victim','character',as_of=JAN)[0]
+            self.assertIsNone(unknown['corporation_id'])
+            self.assertIsNone(unknown['alliance_id'])
 
     def test_transaction_rollback_preserves_previous_month(self):
         self.build()

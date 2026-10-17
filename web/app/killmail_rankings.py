@@ -133,7 +133,7 @@ def parse_scope(values):
     return result
 
 
-def lookup(query,kind,purpose='target'):
+def lookup(query,kind,purpose='target',as_of=None):
     query=str(query or '').strip()[:100]
     if len(query)<2:
         return []
@@ -169,7 +169,7 @@ def lookup(query,kind,purpose='target'):
                 cur.execute(statement,('%'+needle+'%',query.lower()))
                 rows=list(cur)
         results=[dict(entity_type=kind,entity_id=r[0],name=r[1]) for r in rows]
-        return explorer().enrich(conn,kind,results)
+        return explorer().enrich(conn,kind,results,as_of)
 
 
 def scope_logo(token):

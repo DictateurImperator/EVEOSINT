@@ -21,7 +21,7 @@
       timer=setTimeout(async()=>{
         controller=new AbortController();
         try{
-          const url=new URL('/admin/debug/rankings/lookup',location.origin);url.search=new URLSearchParams({kind:kind.value,purpose,q:input.value.trim()});
+          const url=new URL('/admin/debug/rankings/lookup',location.origin);url.search=new URLSearchParams({kind:kind.value,purpose,q:input.value.trim(),through:document.querySelector('input[name="through"]').value||document.querySelector('input[name="through"]').dataset.defaultThrough||''});
           const response=await fetch(url,{signal:controller.signal});
           if(current!==sequence)return;
           if(!response.ok){message('Search unavailable. Try again or type more letters.');return;}
@@ -50,6 +50,7 @@
       if(index>=0&&['ArrowDown','ArrowUp'].includes(event.key)){event.preventDefault();buttons[(index+(event.key==='ArrowDown'?1:-1)+buttons.length)%buttons.length].focus();}
     });
     kind.addEventListener('change',cancel);
+    document.querySelector('input[name="through"]').addEventListener('change',cancel);
     document.addEventListener('click',event=>{if(!input.parentElement.contains(event.target))cancel();});
   }
   autocomplete('rankName','rankNameResults','target',item=>{$('rankName').value=item.name;$('rankTarget').value=item.entity_id;});
