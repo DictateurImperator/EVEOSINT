@@ -68,8 +68,7 @@ Offline tests cover every bundled snapshot checksum, recipe changes and output y
 
 ## Diagnose and recover missing prices
 
-**Admin → Jobs → Market · Diagnose and recover missing item prices** is a manual
-job. Let the normal valuation pass finish first. The worker shares its advisory
+**Admin → Jobs → Market · Diagnose and recover missing item prices** runs last in the daily pipeline and can also be launched manually. Let the normal valuation pass finish first. The worker shares its advisory
 lock, so diagnosis and the normal calculator cannot run concurrently.
 
 It selects NULL-valued killmails and diagnoses their hulls, items and recipe
@@ -109,8 +108,9 @@ completed months normally. Progress includes its months and valued/unvalued
 counts. Stop cancels diagnosis SQL, interrupts request waits or terminates the
 child calculator with its normal rollback behavior. Saved prices and completed
 months are retained. Raw killmail data is retained; existing non-NULL values are
-not recalculated. No large HTML archives are stored, and this manual recovery
-job is not added to the daily pipeline.
+not recalculated. No large HTML archives are stored. The daily pipeline runs
+this job after its normal NULL-value pass; recovery then performs the final
+NULL-only recalculation automatically.
 
 ```bash
 python scripts/recover_killmail_prices.py

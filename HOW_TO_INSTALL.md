@@ -679,7 +679,10 @@ WantedBy=timers.target
 The ordered daily run starts with SDE sync and updated EVE Ref archives, then
 runs the existing SuperINTEL, skills, affiliations, entities, ships, population and
 sovereignty steps. Historical zKill price import runs next, followed by calculation
-of killmails whose ISK value is NULL. Steps run sequentially; a failure stops the run.
+of killmails whose ISK value is NULL. The last step diagnoses any remaining
+missing item prices, reads zKill item pages (0.01 ISK fallback when unavailable),
+and automatically recalculates NULL-valued killmails. Steps run sequentially; a
+failure stops the run.
 
 To update an existing timer from the deployed repository (Europe/Paris handles
 summer and winter time automatically):

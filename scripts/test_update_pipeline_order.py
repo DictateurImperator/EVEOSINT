@@ -43,8 +43,8 @@ class DailyPipelineTests(unittest.TestCase):
         steps = pipeline.weekly_steps()
         self.assertEqual(result, 0)
         self.assertEqual(executed, [step['id'] for step in steps])
-        self.assertEqual(executed[-2:], ['killmail_missing_prices', 'killmail_missing_values'])
-        self.assertEqual(steps[-2]['command'][-2:], ['--refresh-days', '0'])
+        self.assertEqual(executed[-3:], ['killmail_missing_prices', 'killmail_missing_values', 'killmail_price_recovery'])
+        self.assertEqual(steps[-3]['command'][-2:], ['--refresh-days', '0'])
         self.assertEqual(len(steps[1]['command']), 2)  # All imported history; no date limits.
         self.assertEqual(state['scheduled_time'], '14:30')
 
@@ -64,6 +64,12 @@ class DailyPipelineTests(unittest.TestCase):
         self.assertEqual(result, 1)
         self.assertEqual(executed[-1], 'killmail_missing_prices')
         self.assertNotIn('killmail_missing_values', executed)
+
+    def test_valuation_failure_does_not_start_recovery(self):
+        result, executed, _ = self.run_mock_pipeline(fail='killmail_missing_values')
+        self.assertEqual(result, 1)
+        self.assertEqual(executed[-1], 'killmail_missing_values')
+        self.assertNotIn('killmail_price_recovery', executed)
 
     def test_timer_uses_paris_timezone(self):
         timer = (Path(__file__).resolve().parents[1] / 'deploy/eveosint-update.timer').read_text()

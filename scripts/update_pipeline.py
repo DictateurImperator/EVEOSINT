@@ -556,6 +556,12 @@ def weekly_steps():
             "market",
             [py, str(SCRIPT_DIR / "calculate_killmail_values.py")],
         ),
+        step(
+            "killmail_price_recovery",
+            "Market · Diagnose and recover missing item prices",
+            "market",
+            [py, str(SCRIPT_DIR / "recover_killmail_prices.py")],
+        ),
     ]
 
 

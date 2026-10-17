@@ -1,5 +1,5 @@
 <section id="recovery-job">
-  <p class="small muted-line">Diagnose items blocking NULL killmail values, then read their zKill item pages and dated price tables. Missing prices default to 0.01 ISK. Finish or stop the valuation job first. After recovery, NULL killmail values are recalculated automatically using saved prices; existing killmail values are retained.</p>
+  <p class="small muted-line">Diagnose items blocking NULL killmail values, then read their zKill item pages and dated price tables. Missing prices default to 0.01 ISK. Runs last in the daily pipeline and can also be started manually after the valuation job finishes. After recovery, NULL killmail values are recalculated automatically using saved prices; existing killmail values are retained.</p>
   {% if 'admin.jobs.run' in user.permissions %}
   <button class="btn btn-primary" id="recovery-start" {% if not recovery_enabled %}disabled{% endif %}>Diagnose and recover missing prices</button>
   <button class="btn btn-outline-danger" id="recovery-stop" disabled>Stop</button>
