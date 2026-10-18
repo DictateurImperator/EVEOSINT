@@ -5,8 +5,8 @@
 .rank-summary{display:flex;gap:1rem;flex-wrap:wrap}.rank-summary>div{flex:1;min-width:160px;padding:1rem;background:rgba(15,23,42,.6);border:1px solid var(--border);border-radius:12px}.rank-number{font-variant-numeric:tabular-nums;white-space:nowrap}.rank-entity{display:flex;align-items:center;gap:.7rem;min-width:220px}.rank-entity img{width:40px;height:40px;border-radius:7px}.rank-table th,.rank-table td{vertical-align:middle;white-space:nowrap}.rank-net-positive{color:#50d8a3}.rank-net-negative{color:#ff7784}.rank-membership{font-size:.95rem;line-height:1.9;margin-top:.2rem}.rank-membership img{width:28px;height:28px;border-radius:4px;vertical-align:middle}.rank-target>td{background:rgba(13,110,253,.2)!important}.rank-lookup{position:absolute;z-index:20;max-height:260px;overflow:auto;min-width:260px}.rank-lookup button{text-align:left;white-space:normal}.rank-chip{display:inline-flex;align-items:center;gap:.4rem;margin:.2rem}.rank-chip button{border:0;background:none;color:inherit}
 .kb-search-result{width:100%;border:0;text-align:left;background:#0b1220}.kb-search-result:hover{background:rgba(13,110,253,.18)}.rank-filter .kb-term{grid-template-columns:auto 30px minmax(0,1fr) auto}.rank-filter-placeholder{display:flex;width:30px;height:30px;align-items:center;justify-content:center;border-radius:5px;background:rgba(255,255,255,.06);font-weight:700}.rank-filter .kb-family-default{font-size:.7rem}.rank-inline-search{border-color:var(--border)!important}
 </style>
-<div class="d-flex justify-content-between flex-wrap gap-2 mb-4"><div><h1 class="h3 mb-1">ISK rankings</h1><div class="muted-line">Who destroyed or lost the most ISK? Compare characters, corporations and alliances from the beginning through a chosen month.</div></div>{% if can_view_jobs %}<a href="/admin/jobs" class="btn btn-sm btn-outline-light align-self-start">Admin Jobs</a>{% endif %}</div>
-{% if months and not totals_ready and can_view_jobs %}<div class="alert alert-info">Fast rankings need a one-time totals initialization. Click <strong>Build / refresh rankings</strong> below to reuse the existing monthly results; killmails will not be recalculated.</div>{% endif %}
+<div class="d-flex justify-content-between flex-wrap gap-2 mb-4"><div><h1 class="h3 mb-1">ISK rankings</h1><div class="muted-line">Who destroyed or lost the most ISK? Compare characters, corporations and alliances from the beginning through a chosen month.</div></div></div>
+{% if months and not totals_ready %}<div class="alert alert-info">Cumulative rankings are awaiting initialization.</div>{% endif %}
 {% if error %}<div class="alert alert-warning">{{ error }}</div>{% endif %}
 <section class="content-card p-3 mb-4">
 <nav class="nav nav-tabs mb-3" aria-label="Ranking entity type">
@@ -51,7 +51,7 @@
 </form>
 
 </section>
-{% if not months %}<section class="content-card p-4 text-center"><h2 class="h5">Rankings have not been built yet</h2><p class="muted-line mb-0">{% if can_view_jobs %}Open the monthly ranking builder below. No killmail is changed by this job.{% else %}Rankings will appear once the first calculation is complete.{% endif %}</p></section>{% else %}
+{% if not months %}<section class="content-card p-4 text-center"><h2 class="h5">Rankings have not been built yet</h2><p class="muted-line mb-0">Rankings will appear once the first calculation is complete.</p></section>{% else %}
 {% if missing or coverage_valued<coverage_kills %}<div class="alert alert-warning py-2 small">Partial results: missing months and unvalued killmails are excluded from ISK totals. Kill/loss counts include unvalued killmails.</div>{% endif %}
 {% if ranking_notice %}<div class="alert alert-info py-2 small" role="status">{{ ranking_notice }}</div>{% endif %}
 <section class="content-card p-3"><div class="d-flex justify-content-between gap-2 mb-2"><span class="muted-line small">{{ 'Damage-weighted' if mode=='weighted' else 'Full-value' }} credit · Hover over an ISK amount for its full value.</span><span class="muted-line small">{{ 'Cached' if cached else 'Calculated' }} · {{ '%.2f'|format(elapsed) }} s</span></div>
@@ -62,7 +62,7 @@
 <div class="rank-membership muted-line" title="Membership as of {{ membership_date }}">{% if kind=='character' and row.corporation_id %}<a href="/corporation/{{ row.corporation_id }}" class="text-decoration-none"><img loading="lazy" src="https://images.evetech.net/corporations/{{ row.corporation_id }}/logo?size=64" alt=""> {{ row.corporation_name or 'Unknown corporation' }}</a>{% endif %}{% if row.alliance_id %}{% if kind=='character' and row.corporation_id %} · {% endif %}<a href="/alliance/{{ row.alliance_id }}" class="text-decoration-none"><img loading="lazy" src="https://images.evetech.net/alliances/{{ row.alliance_id }}/logo?size=64" alt=""> {{ row.alliance_name or 'Unknown alliance' }}</a>{% elif kind!='alliance' and not row.corporation_id %}Affiliation unavailable at this date{% endif %}</div></div></div></td>
 {% for field in ['destroyed','lost','net'] %}<td class="text-end rank-number {% if field=='net' %}{{ 'rank-net-positive' if row.net>=0 else 'rank-net-negative' }}{% endif %}" title="{{ full_isk(row[field]) }}">{{ compact_isk(row[field]) }}</td>{% endfor %}
 <td class="text-end rank-number">{{ ('%.1f%%'|format(row.efficiency)) if row.efficiency is not none else '—' }}</td><td class="text-end rank-number" title="{{ row.unvalued_kills }} unvalued kills">{{ '{:,}'.format(row.kills) }}</td><td class="text-end rank-number" title="{{ row.unvalued_losses }} unvalued losses">{{ '{:,}'.format(row.losses) }}</td></tr>
-{% else %}<tr><td colspan="8" class="muted-line text-center py-4">{{ 'Initialize fast rankings using the builder below.' if not totals_ready else 'No ranked entities in this selection.' }}</td></tr>{% endfor %}
+{% else %}<tr><td colspan="8" class="muted-line text-center py-4">{{ 'Rankings will appear once initialization is complete.' if not totals_ready else 'No ranked entities in this selection.' }}</td></tr>{% endfor %}
 </tbody></table></div><div class="d-flex justify-content-between align-items-center mt-3"><div>{% if previous %}<a class="btn btn-sm btn-outline-light" href="{{ previous }}">Previous</a>{% endif %}{% if next_page %}<a class="btn btn-sm btn-outline-light" href="{{ next_page }}">Next</a>{% endif %}</div><span class="small muted-line">{{ 'Neighbours in the selected ranking' if found_position else 'Page ' ~ page_number }}</span></div></section>
 {% endif %}
 {% if months %}<details class="content-card p-3 mt-4"><summary class="small fw-semibold">Source coverage (all entities) and calculation rules</summary><div class="mt-3"><div class="rank-summary mb-4">
@@ -71,18 +71,8 @@
  <div><div class="muted-line small">Killmails without usable damage</div><strong>{{ '{:,}'.format(coverage_zero) }}</strong><div class="muted-line small">Count in full mode; give no damage credit.</div></div>
 </div>
 <div class="muted-line small mt-3">Full value: each participating entity gets the kill value once. Damage share: kill value × its attackers’ damage / damage from all attackers, including NPCs. Losses always count in full. Affiliations are those recorded on each killmail.</div></div></details>{% endif %}
-{% if can_view_jobs %}
-<details class="content-card p-3 mt-4" {% if not months or not totals_ready %}open{% endif %}>
- <summary class="fw-semibold">Monthly ranking builder</summary>
- <div class="mt-3">
- <div class="d-flex justify-content-between gap-2 flex-wrap"><div><p class="muted-line small mb-2">Existing monthly results are reused to initialize cumulative totals. New runs rebuild only missing or changed months and update the affected totals. Completed months remain available when stopped.</p></div><div class="d-flex gap-2 align-items-start">{% if can_run %}<button class="btn btn-sm btn-primary" id="rankStart">Build / refresh rankings</button><button class="btn btn-sm btn-outline-danger" id="rankStop" disabled>Stop</button>{% endif %}<a class="btn btn-sm btn-outline-light" href="/admin/jobs/build_killmail_rankings/log">Job log</a></div></div>
- <div id="rankDetail" class="small mb-2"></div><div id="rankProgress" class="muted-line small" aria-live="polite">Checking job status…</div><div class="progress mt-2" style="height:6px"><div id="rankBar" class="progress-bar" style="width:0%"></div></div><div id="rankError" class="text-danger small mt-2" role="alert"></div>
- </div>
-</details>
-{% endif %}
 
 <script>
 {% include "ranking_controls.js" %}
-{% if can_view_jobs %}{% include "ranking_job_progress.js" %}{% endif %}
 </script>
 {% endblock %}

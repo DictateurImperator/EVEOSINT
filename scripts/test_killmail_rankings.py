@@ -210,7 +210,7 @@ class ControlTests(unittest.TestCase):
             r = self.client.get('/admin/debug/rankings')
             self.assertEqual(r.status_code,200)
             self.assertIn('Rankings have not been built yet',r.text)
-            self.assertIn('Build / refresh rankings',r.text)
+            self.assertNotIn('Build / refresh rankings',r.text)
             launch.assert_not_called()
 
     def test_populated_page_modes_and_values(self):
@@ -232,7 +232,8 @@ class ControlTests(unittest.TestCase):
             self.assertIn('>Go to rank</button>',r.text)
             self.assertIn('aria-label="Ranking entity type"',r.text)
             self.assertIn('data-rank-sign',r.text)
-            self.assertLess(r.text.index('class="table rank-table'),r.text.index('Monthly ranking builder'))
+            self.assertIn('class="table rank-table',r.text)
+            self.assertNotIn('Monthly ranking builder',r.text)
             for url in ('?from=&through=', '?page=2'):
                 response=self.client.get('/admin/debug/rankings'+url)
                 self.assertEqual(response.status_code,200)
@@ -306,6 +307,16 @@ class ControlTests(unittest.TestCase):
             with patch.object(routes,'audit_log'):
                 self.assertEqual(self.client.post('/admin/debug/rankings/start').status_code,200)
             launch.assert_called_once()
+
+    def test_leaderboard_has_no_rebuild_controls_even_for_administrators(self):
+        months=[dict(month=JAN,built_at='v',killmails=1,valued=1,zero_damage=0,entity_rows=1,dirty=False,totals_ready=False)]
+        with patch.object(rankings,'catalog',return_value=months),patch.object(rankings,'ranking_rows',return_value=([],True)),patch.object(routes,'run_killmail_rankings') as launch:
+            response=self.client.get('/leaderboard')
+            self.assertEqual(response.status_code,200)
+            for text in ['Monthly ranking builder','rankStart','rankStop','rankProgress','/admin/debug/rankings/status','builder below','Admin Jobs']:
+                self.assertNotIn(text,response.text)
+            self.assertIn('Cumulative rankings are awaiting initialization.',response.text)
+            launch.assert_not_called()
 
     def test_leaderboard_is_visible_to_entity_readers_without_admin_controls(self):
         self.user['permissions']={'entities.view'}
@@ -448,7 +459,7 @@ class ControlTests(unittest.TestCase):
         with patch.object(rankings,'catalog',return_value=months),patch.object(rankings,'ranking_rows') as query:
             response=self.client.get('/admin/debug/rankings')
             self.assertEqual(response.status_code,200)
-            self.assertIn('one-time totals initialization',response.text)
+            self.assertIn('Cumulative rankings are awaiting initialization.',response.text)
             query.assert_not_called()
 
     def test_special_scope_tokens_and_labels_do_not_need_entity_lookup(self):

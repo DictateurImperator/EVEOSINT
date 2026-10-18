@@ -130,7 +130,6 @@ def page(request: Request):
         membership_date=('end of '+affiliation_month.strftime('%B %Y')) if affiliation_month else 'today',
         lookup_default_through=lookup_default_through,
         totals_ready=bool(months and months[0].get('totals_ready',True)),error=error,
-        can_view_jobs='admin.jobs.view' in user.get('permissions',set()),can_run='admin.jobs.run' in user.get('permissions',set()),
         selected=selected,missing=missing,cached=cached,elapsed=elapsed,page_number=page_number,offset=offset,
         previous=link(page=page_number-1) if not found_position and page_number>1 else None,
         next_page=link(page=page_number+1) if not found_position and more else None,
