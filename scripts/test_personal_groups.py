@@ -61,7 +61,7 @@ class LocalRankingStateTests(unittest.TestCase):
         ranking=routes.local_rankings
         with ranking._LOCK:ranking._RUNS.clear()
         entered=threading.Event();release=threading.Event()
-        group=dict(id=9,revision=1);result=dict(period='all',built_at=datetime.now(UTC))
+        group=dict(id=9,revision=1);result=dict(period='all',built_at=datetime.now(UTC),from_date=JAN,through_date=date(2026,2,28))
         def scan(*args):
             entered.set();release.wait(2)
             args[-1](checked=1,total=1,rows=[dict(entity_id=1)])
@@ -83,15 +83,45 @@ class LocalRankingStateTests(unittest.TestCase):
             worker.assert_called_once()
 
 
+class OnDemandStateTests(unittest.TestCase):
+    def test_cache_is_bounded_expirable_and_identifies_the_actual_custom_dates(self):
+        with jobs._LOCK:jobs._RUNS.clear()
+        group=dict(id=1,revision=1);period=dict(period='custom',from_date=JAN,through_date=date(2026,1,31))
+        def calculate(*args):return dict(totals={},monthly=[])
+        with patch.object(jobs,'calculate',side_effect=calculate) as compute:
+            for index in range(10):
+                selected=dict(period,from_date=date(2026,1,index+1))
+                jobs.state(group,selected,'stats')
+                deadline=time.monotonic()+1
+                while jobs.state(group,selected,'stats')['status']=='running' and time.monotonic()<deadline:time.sleep(.001)
+            self.assertEqual(compute.call_count,10)
+            self.assertLessEqual(len(jobs._RUNS),jobs.MAX_RESULTS)
+            jobs.prune(jobs._LOCK,jobs._RUNS,jobs.TTL,now=time.monotonic()+jobs.TTL+1)
+            self.assertEqual(len(jobs._RUNS),0)
+
+    def test_a_scan_without_a_viewer_stops_at_its_next_checkpoint(self):
+        with jobs._LOCK:jobs._RUNS.clear()
+        entered=threading.Event();resume=threading.Event()
+        group=dict(id=77,revision=1);period=dict(period='all',from_date=JAN,through_date=date(2026,1,31))
+        def calculate(*args):
+            entered.set();resume.wait(1);args[-1](checked=1)
+            self.fail('Abandoned calculation should have stopped.')
+        with patch.object(jobs,'calculate',side_effect=calculate):
+            jobs.state(group,period,'stats');self.assertTrue(entered.wait(1))
+            with jobs._LOCK:
+                for run in jobs._RUNS.values():run['last_requested']-=61
+            resume.set();deadline=time.monotonic()+1
+            while jobs._RUNS and time.monotonic()<deadline:time.sleep(.001)
+            self.assertEqual(len(jobs._RUNS),0)
+
+
 class RouteTests(unittest.TestCase):
     def setUp(self):
         app=FastAPI();app.include_router(routes.router);self.client=TestClient(app)
         self.user=dict(id=1,username='Owner',permissions={'entities.view'})
         self.auth=patch.object(routes,'require_login',return_value=self.user);self.login=self.auth.start();self.addCleanup(self.auth.stop)
-        monthly=patch.object(store,'monthly_results',return_value=[]);self.monthly=monthly.start();self.addCleanup(monthly.stop)
         self.group=dict(id=9,owner_id=1,name='<Private group>',description='Description',definition=config(),
-                        revision=2,prepared_revision=2,prepared_rules={},public_token='a'*32,public_tabs=['stats'],
-                        progress={'state':'completed'},prepared_at=datetime.now(UTC))
+                        revision=2,public_token='a'*32,public_tabs=['stats'],updated_at=datetime.now(UTC))
         self.result=dict(group_id=9,revision=2,period='2026-01',from_date=JAN,through_date=date(2026,1,31),built_at=datetime.now(UTC),
                          totals=dict(kills=2,losses=1,destroyed_cents='10000',weighted_destroyed_cents='3000',lost_cents='5000',unvalued_kills=0,unvalued_losses=0),ship_counts={},roster_count=3,skills_count=2)
 
@@ -100,7 +130,7 @@ class RouteTests(unittest.TestCase):
             response=self.client.get('/public/groups/'+'a'*32+'?view=stats&period=2026-01')
             self.assertEqual(response.status_code,200)
             self.assertIn('&lt;Private group&gt;',response.text)
-            self.assertIn('30.000%',response.text)
+            self.assertIn('No group statistics',response.text)
             self.assertNotIn('groupEditor',response.text)
             self.assertNotIn('/account/groups',response.text)
             self.assertNotIn('Custom period (private)',response.text)
@@ -120,7 +150,7 @@ class RouteTests(unittest.TestCase):
 
     def test_private_group_is_never_selected_without_owner_id(self):
         with patch.object(store,'accessible',return_value=None) as lookup:
-            for path in ['/account/groups/9','/account/groups/9/edit','/account/groups/9/status','/account/groups/9/data']:
+            for path in ['/account/groups/9','/account/groups/9/edit','/account/groups/9/data']:
                 self.assertEqual(self.client.get(path).status_code,404)
                 lookup.assert_called_with(9,1)
             for path in ['prepare','stop','sharing','delete']:
@@ -130,12 +160,17 @@ class RouteTests(unittest.TestCase):
         self.login.return_value=None
         self.assertEqual(self.client.get('/account/groups').status_code,401)
 
-    def test_monthly_history_shows_ratio_and_private_save_handles_invalid_definitions(self):
-        self.monthly.return_value=[dict(period='2026-01',totals=self.result['totals'])]
-        with patch.object(store,'accessible',return_value=self.group),patch.object(store,'period_result',return_value=self.result),patch.object(store,'periods',return_value=[]):
+    def test_monthly_history_is_fetched_on_request_and_save_handles_invalid_definitions(self):
+        calculated=dict(self.result,monthly=[dict(period='2026-01',totals=self.result['totals'])])
+        with patch.object(store,'accessible',return_value=self.group),patch.object(store,'period_result',return_value=self.result),patch.object(store,'periods',return_value=[]),patch.object(jobs,'state',return_value=dict(status='completed',progress={'checked':1,'total':1},result=calculated)) as request_calculation:
             page=self.client.get('/account/groups/9?view=stats&period=2026-01')
-            self.assertIn('Monthly history',page.text)
-            self.assertEqual(page.text.count('30.000%'),2)
+            self.assertEqual(page.status_code,200);self.assertNotIn('prepareGroup',page.text)
+            request_calculation.assert_not_called()
+            response=self.client.get('/account/groups/9/data?view=stats&period=2026-01')
+            self.assertEqual(response.status_code,200)
+            self.assertIn('Monthly history',response.json()['html'])
+            self.assertEqual(response.json()['html'].count('30.000%'),2)
+            request_calculation.assert_called_once()
         with patch.object(store,'save',side_effect=ValueError('Choose at least one member.')):
             response=self.client.post('/account/groups/save',data={'name':'Test','definition':'{}'})
             self.assertEqual(response.status_code,400)
@@ -170,12 +205,12 @@ class RouteTests(unittest.TestCase):
             self.assertEqual(self.client.post('/account/groups/9/managers',data={'action':'add','user_id':'3'}).status_code,403)
             self.assertEqual(self.client.get('/account/groups/9/managers/lookup?q=Owner').status_code,403)
 
-    def test_delegated_preparation_does_not_increase_owner_ship_permissions(self):
+    def test_on_request_ship_results_honor_the_owner_permissions(self):
         self.user['id']=2;self.user['permissions'].add('superintel.view')
-        with patch.object(store,'accessible',return_value=self.group),patch.object(f.auth,'get_user_permissions',return_value={'entities.view'}),patch.object(jobs,'start') as start:
-            response=self.client.post('/account/groups/9/prepare')
-            self.assertEqual(response.status_code,200)
-            start.assert_called_once_with(self.group,False,custom=None,actor_id=2)
+        with patch.object(store,'accessible',return_value=self.group),patch.object(store,'period_result',return_value=self.result),patch.object(f.auth,'get_user_permissions',return_value={'entities.view'}),patch.object(jobs,'state',return_value=dict(status='running',progress={},result=None)) as calculate:
+            response=self.client.get('/account/groups/9/data?view=ships')
+            self.assertEqual(response.status_code,202)
+            calculate.assert_called_once_with(self.group,self.result,'ships',can_super=False)
 
     def test_member_search_returns_portraits_affiliations_and_an_entity_type_filter(self):
         coalitions=importlib.import_module(store.__package__+'.coalitions')
@@ -192,6 +227,25 @@ class RouteTests(unittest.TestCase):
             find.reset_mock()
             response=self.client.get('/account/groups/lookup?kind=member&entity_type=corporation&q=Co')
             find.assert_not_called();self.assertEqual([r['kind'] for r in response.json()['results']],['corporation'])
+
+    def test_private_custom_dates_are_on_demand_and_preparation_endpoints_are_gone(self):
+        with patch.object(store,'accessible',return_value=self.group),patch.object(store,'period_result',return_value=self.result) as period,patch.object(jobs,'state',return_value=dict(status='running',progress={},result=None)) as calculation:
+            response=self.client.get('/account/groups/9/data?view=stats&period=custom&from=2026-01-05&through=2026-01-20')
+            self.assertEqual(response.status_code,202)
+            period.assert_called_with(self.group,'custom',custom=(date(2026,1,5),date(2026,1,20)))
+            calculation.assert_called_once()
+            self.assertEqual(self.client.post('/account/groups/9/prepare').status_code,404)
+            self.assertEqual(self.client.post('/account/groups/9/stop').status_code,404)
+            self.assertEqual(self.client.get('/account/groups/9/status').status_code,404)
+
+    def test_managed_group_selection_includes_the_group_and_its_public_link(self):
+        self.user['id']=2
+        with patch.object(store,'listed',return_value=[]),patch.object(store,'delegated',return_value=[dict(self.group,owner_name='Owner')]):
+            response=self.client.get('/account/groups')
+            self.assertEqual(response.status_code,200)
+            self.assertIn('Groups you manage',response.text)
+            self.assertIn('/account/groups/9',response.text)
+            self.assertIn('/public/groups/'+'a'*32,response.text)
 
     def test_private_editor_and_result_controls_render(self):
         with patch.object(store,'accessible',return_value=self.group),patch.object(store,'period_result',return_value=self.result),patch.object(store,'periods',return_value=[dict(period='2026-01')]):
@@ -250,8 +304,6 @@ class DatabaseTests(unittest.TestCase):
         self.assertIsNone(store.owned(groups[0]['id'],2))
         with self.assertRaises(LookupError):store.remove(groups[0]['id'],2)
         group=groups[0]
-        with self.conn.cursor() as cur:cur.execute('UPDATE web.personal_groups SET prepared_revision=revision WHERE id=%s',(group['id'],))
-        self.conn.commit()
         token=store.sharing(group['id'],1,True,['stats'])
         self.assertIsNotNone(store.public(token))
         store.sharing(group['id'],1,False,[])
@@ -259,7 +311,8 @@ class DatabaseTests(unittest.TestCase):
         new_token=store.sharing(group['id'],1,True,['stats'])
         self.assertNotEqual(token,new_token)
         store.save(1,'Edited','',config(),group['id'])
-        self.assertIsNone(store.public(new_token))
+        self.assertIsNotNone(store.public(new_token))
+        self.assertEqual(store.public(new_token)['name'],'Edited')
         store.remove(group['id'],1)
         self.make_group()
         self.assertEqual(len(store.listed(1)),3)
@@ -301,17 +354,6 @@ class DatabaseTests(unittest.TestCase):
         data=q.pilotable_counts(self.conn,c,{},date(2026,1,16),FEB)
         self.assertEqual(data['roster_count'],2)
 
-    def test_interrupted_preparation_can_be_restarted_after_a_process_exit(self):
-        group=self.make_group()
-        with self.conn.cursor() as cur:
-            cur.execute("UPDATE web.personal_groups SET progress=%s WHERE id=%s",(psycopg2.extras.Json(dict(state='running')),group['id']))
-        self.conn.commit()
-        stale=store.owned(group['id'],1)
-        # An actual worker's advisory lock prevents incorrectly marking it interrupted.
-        with self.conn.cursor() as cur:cur.execute('SELECT pg_advisory_lock(%s)',(jobs.LOCK_ID,))
-        self.assertEqual(jobs.recover_interrupted(stale)['progress']['state'],'running')
-        with self.conn.cursor() as cur:cur.execute('SELECT pg_advisory_unlock(%s)',(jobs.LOCK_ID,))
-        self.assertEqual(jobs.recover_interrupted(stale)['progress']['state'],'interrupted')
 
     def test_union_dedup_exclusions_damage_and_geographical_scope(self):
         c=config([dict(kind='corporation',id=10,op='include'),dict(kind='character',id=1,op='include')])
@@ -395,25 +437,40 @@ class DatabaseTests(unittest.TestCase):
         self.assertIsNone(store.accessible(group['id'],2))
         with self.assertRaises(LookupError):store.save(1,'Forbidden','',config(),group['id'],actor_id=2)
 
-    def test_preparation_writes_only_aggregate_periods_and_publishes_after_completion(self):
+    def test_request_calculations_do_not_store_results_and_publishing_requires_no_preparation(self):
         group=self.make_group(config([dict(kind='coalition',id=2,op='include')]))
-        with self.assertRaises(ValueError):store.sharing(group['id'],1,True,['stats'])
-        jobs.prepare(psycopg2.connect(self.dsn),group,True)
-        group=store.owned(group['id'],1)
-        self.assertEqual(group['progress']['state'],'completed',group['progress'])
-        self.assertEqual(group['prepared_revision'],group['revision'])
-        periods=store.periods(group)
-        self.assertEqual({p['period'] for p in periods},{'all','2026','2026-01','2026-02'})
-        whole=store.period_result(group,'all')
-        self.assertEqual(whole['roster_count'],3)
-        self.assertEqual(whole['ship_counts'],{'638':2,'587':2})
-        self.assertEqual(Decimal(whole['totals']['destroyed_cents']),40000)
         token=store.sharing(group['id'],1,True,['stats'])
         self.assertIsNotNone(store.public(token))
-        jobs.prepare(psycopg2.connect(self.dsn),group,True,custom=(JAN,date(2026,1,31)))
-        custom=store.period_result(group,'custom')
-        self.assertEqual(Decimal(custom['totals']['destroyed_cents']),10000)
-        self.assertEqual(store.public(token)['prepared_revision'],group['revision'])
+        periods=store.periods(group)
+        self.assertEqual({p['period'] for p in periods},{'all','2026','2026-01','2026-02'})
+        whole=store.period_result(group,'all');progress=[]
+        data=jobs.calculate(group,whole,'stats',True,lambda **values:progress.append(values))
+        self.assertEqual(Decimal(data['totals']['destroyed_cents']),40000)
+        self.assertEqual(len(data['monthly']),2)
+        self.assertEqual(progress[-1]['checked'],2)
+        pilots=jobs.calculate(group,whole,'ships',True,lambda **values:None)
+        self.assertEqual(pilots['roster_count'],3)
+        self.assertEqual(pilots['ship_counts'],{'638':2,'587':2})
+        custom=store.period_result(group,'custom',(JAN,date(2026,1,31)))
+        data=jobs.calculate(group,custom,'stats',True,lambda **values:None)
+        self.assertEqual(data['totals']['destroyed_cents'],10000)
         with self.conn.cursor() as cur:
+            cur.execute("SELECT to_regclass('web.personal_group_periods')")
+            self.assertIsNone(cur.fetchone()[0])
             cur.execute('SELECT count(*) FROM rawkm.killmails')
             self.assertEqual(cur.fetchone()[0],5)
+        self.assertEqual(store.owned(group['id'],1)['revision'],group['revision'])
+
+    def test_schema_migration_removes_old_analysis_only_and_preserves_the_public_link(self):
+        group=self.make_group();token=store.sharing(group['id'],1,True,['stats'])
+        store.set_manager(group['id'],1,2)
+        with self.conn.cursor() as cur:
+            cur.execute("CREATE TABLE web.personal_group_periods(group_id bigint,totals jsonb);INSERT INTO web.personal_group_periods VALUES(%s,'{}')",(group['id'],))
+            cur.execute(store.schema_sql())
+        self.conn.commit()
+        self.assertEqual(store.owned(group['id'],1)['public_token'],token)
+        self.assertEqual(store.accessible(group['id'],2)['public_token'],token)
+        self.assertIsNotNone(store.public(token))
+        with self.conn.cursor() as cur:
+            cur.execute("SELECT to_regclass('web.personal_group_periods')")
+            self.assertIsNone(cur.fetchone()[0])

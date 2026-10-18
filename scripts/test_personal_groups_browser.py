@@ -15,7 +15,7 @@ case=RouteTests();case.setUp()
 group=case.group;group['name']='Imperial test group';group['public_tabs']=['stats','ships'];case.result['totals']['ships_ready']=True
 case.client.app.include_router(base.routes.router)
 periods=[dict(period='all'),dict(period='2026'),dict(period='2026-01')]
-patches=[patch.object(store,'accessible',return_value=group),patch.object(store,'listed',return_value=[group]),patch.object(store,'public',return_value=group),patch.object(store,'period_result',return_value=case.result),patch.object(store,'periods',return_value=periods),patch.object(store,'save',return_value=9),patch.object(store,'managers',return_value=[]),patch.object(store,'set_manager'),patch.object(base.routes,'require_login',return_value=case.user),patch.object(base.rankings,'catalog',return_value=[dict(month=m,built_at='v',killmails=1,valued=1,zero_damage=0,entity_rows=1,dirty=False) for m in (JAN,FEB)]),patch.object(base.rankings,'ranking_rows',return_value=([],True))]
+patches=[patch.object(store,'accessible',return_value=group),patch.object(store,'listed',return_value=[group]),patch.object(store,'delegated',return_value=[]),patch.object(store,'public',return_value=group),patch.object(store,'period_result',return_value=case.result),patch.object(store,'periods',return_value=periods),patch.object(store,'save',return_value=9),patch.object(store,'managers',return_value=[]),patch.object(store,'set_manager'),patch.object(base.routes,'require_login',return_value=case.user),patch.object(base.rankings,'catalog',return_value=[dict(month=m,built_at='v',killmails=1,valued=1,zero_damage=0,entity_rows=1,dirty=False) for m in (JAN,FEB)]),patch.object(base.rankings,'ranking_rows',return_value=([],True))]
 for p in patches:p.start()
 
 class Bridge(BaseHTTPRequestHandler):
@@ -48,14 +48,15 @@ try:
     route.fulfill(json={'results':[dict(item,entity_type=item['kind'],url=f"/{item['kind']}/{item['id']}") for item in choices]});return
    if '/lookup?' in path:
     data={'results':choices};route.fulfill(json=data);return
-   if path.endswith('/status'):
-    route.fulfill(json={'progress':dict(state='running',phase='Scanning killmails',checked=3,total=10,current_period='2026-01',kills_examined=1234),'periods':['2026-01'],'ready':False});return
    if '/data?' in path and 'view=ranking' in path:
     html=routes.templates.get_template('personal_group_ranking.html').render(rows=[dict(rank=1,entity_id=1,name='Local pilot',raw=10000,weighted=2000,lost=0,kills=1,losses=0,net=10000,efficiency=100,unvalued_kills=0,unvalued_losses=0)],public='/public/' in path,kind='character',compact_isk=base.rankings.compact_isk,full_isk=base.rankings.full_isk,previous=None,next_page=None)
     route.fulfill(json={'html':html,'status':'completed','progress':{'checked':1,'total':1}});return
+   if '/data?' in path and 'view=stats' in path:
+    html=routes.templates.get_template('personal_group_stats.html').render(result=dict(case.result,monthly=[]),base_url='/account/groups/9',compact_isk=base.rankings.compact_isk,full_isk=base.rankings.full_isk,ratio_for=routes.ratio_label)
+    route.fulfill(json={'html':html,'status':'completed','progress':dict(checked=1,total=1)});return
    if '/data?' in path:
     html=routes.templates.get_template('personal_group_ships.html').render(ships=[dict(name='Raven',group_name='Battleship',pilot_count=2,image_url=None)],result=case.result)
-    route.fulfill(json={'html':html});return
+    route.fulfill(json={'html':html,'status':'completed','progress':dict(checked=1,total=1)});return
    if path.startswith('/account/groups') or path.startswith('/public/groups') or path.startswith('/leaderboard'):
     response=case.client.request(req.method,path,content=req.post_data_buffer,headers={k:v for k,v in req.headers.items() if k in ('content-type','origin','referer')},follow_redirects=False)
     route.fulfill(status=response.status_code,headers=dict(response.headers),body=response.content);return
@@ -85,9 +86,10 @@ try:
   assert payload['members'][0]['from']=='2026-01-05' and payload['members'][0]['through']=='2026-01-20'
   assert payload['ships'][0]['role']=='victim' and payload['ships'][0]['id']=='Destroyer'
 
-  page.locator('summary',has_text='Group controls').click()
-  expect(page.locator('#groupProgress')).to_contain_text('Months 3 / 10')
-  expect(page.locator('#groupProgress')).to_contain_text('1,234')
+  page.locator('summary',has_text='Group settings').click()
+  expect(page.locator('#groupResultProgress')).to_contain_text('Complete')
+  expect(page.locator('#prepareGroup')).to_have_count(0)
+  expect(page.locator('#stopGroup')).to_have_count(0)
   expect(page.locator('[name=tabs]')).to_have_count(4)
   expect(page.locator('[name=tabs][value=killboard]')).not_to_be_checked()
   page.get_by_role('link',name='Management',exact=True).click();expect(page.locator('#managerForm')).to_be_visible()
@@ -99,7 +101,11 @@ try:
   expect(page.locator('h1')).to_have_text('Imperial test group');expect(page.locator('#shareGroup')).to_have_count(0);expect(page.locator('.account-menu')).to_have_count(0)
   expect(page.get_by_role('link',name='Killboard',exact=True)).to_have_count(0)
   page.get_by_role('link',name='Pilotable ships',exact=True).click();expect(page.get_by_role('cell',name='Raven',exact=True)).to_be_visible()
-  page.get_by_role('link',name='Local ranking',exact=True).click();expect(page.locator('#localRankingProgress')).to_contain_text('Complete · Months 1 / 1');expect(page.get_by_role('cell',name='Local pilot',exact=True)).to_be_visible()
+  page.get_by_role('link',name='Local ranking',exact=True).click();expect(page.locator('#groupResultProgress')).to_contain_text('Complete');expect(page.get_by_role('cell',name='Local pilot',exact=True)).to_be_visible()
+  case.user['id']=2;store.listed.return_value=[];store.delegated.return_value=[dict(group,owner_name='Owner')]
+  page.goto(origin+'/account/groups');expect(page.get_by_text('Groups you manage',exact=True)).to_be_visible()
+  expect(page.get_by_role('link',name='Public page',exact=True)).to_have_attribute('href','/public/groups/'+'a'*32)
+  case.user['id']=1
   page.goto(origin+'/leaderboard');page.locator('[name=aggregation]').select_option('monthly');page.locator('#rankMonth').select_option('2026-02')
   with page.expect_navigation():page.get_by_role('button',name='Show rankings',exact=True).click()
   assert parse_qs(urlparse(page.url).query)['aggregation']==['monthly']
@@ -107,7 +113,7 @@ try:
   expect(page.get_by_text('Month only · 2026-02',exact=True)).to_be_visible()
   assert not errors,errors
   browser.close()
- print('Browser PASS: username menu, editor autocomplete/dates/area/save, member portraits/individual dates/ship filters, owner progress, manager delegation, public local ranking, standard monthly mode; no JavaScript errors.')
+ print('Browser PASS: username menu, editor autocomplete/dates/area/save, member portraits/individual dates/ship filters, on-request results without preparation, delegated-group public links, manager delegation, public local ranking, standard monthly mode; no JavaScript errors.')
 finally:
  server.shutdown();server.server_close()
  for p in reversed(patches):p.stop()

@@ -22,6 +22,7 @@ from .killmail_rankings import compact_isk,full_isk
 router=APIRouter()
 LOG=logging.getLogger(__name__)
 _CACHE=OrderedDict();_LOCK=threading.Lock();_SLOTS=threading.BoundedSemaphore(2)
+jobs.start_reaper(_LOCK,_CACHE,120)
 PRIVATE='/account/groups'
 
 
@@ -146,39 +147,6 @@ async def sharing(request:Request,id:int):
     return RedirectResponse(f'{PRIVATE}/{id}',status_code=303)
 
 
-@router.post(PRIVATE+'/{id}/prepare')
-async def prepare(request:Request,id:int):
-    user,group=group_for(request,id);form=await request.form()
-    try:
-        custom=None
-        if form.get('from') or form.get('through'):
-            start=store.day(form.get('from'));end=store.day(form.get('through'))
-            if not start or not end or start>end:raise ValueError('Choose both dates, in chronological order.')
-            custom=(start,end)
-        can_super=has_permission(user,'superintel.view')
-        if user['id']!=group['owner_id'] and can_super:
-            from .auth import get_user_permissions
-            can_super='superintel.view' in get_user_permissions(group['owner_id'])
-        jobs.start(group,can_super,custom=custom,actor_id=user['id'])
-    except ValueError as exc:return JSONResponse({'error':str(exc)},status_code=409)
-    except LookupError:raise HTTPException(404)
-    return no_store(JSONResponse({'ok':True}))
-
-
-@router.post(PRIVATE+'/{id}/stop')
-def stop(request:Request,id:int):
-    user,group=group_for(request,id)
-    try:jobs.stop(group,actor_id=user['id'])
-    except LookupError:raise HTTPException(404)
-    return no_store(JSONResponse({'ok':True}))
-
-
-@router.get(PRIVATE+'/{id}/status')
-def status(request:Request,id:int):
-    user,group=group_for(request,id)
-    group=jobs.recover_interrupted(group)
-    return no_store(JSONResponse({'progress':group['progress'],'periods':[p['period'] for p in store.periods(group)],'ready':group['prepared_revision']==group['revision']}))
-
 
 def ranking_options(request):
     kind=request.query_params.get('kind','character');mode=request.query_params.get('mode','classic');sort=request.query_params.get('sort','destroyed')
@@ -212,8 +180,8 @@ async def manage(request:Request,id:int):
 
 
 def selection(request,group,public=False):
-    allowed={'period','view','cursor','kind','mode','sort','page'}
-    if set(request.query_params)-allowed:raise HTTPException(400,'Only prepared periods, page selection and pagination are accepted.')
+    allowed={'period','view','cursor','kind','mode','sort','page'} | ({'from','through'} if not public else set())
+    if set(request.query_params)-allowed:raise HTTPException(400,'Only saved-scope periods, page selection and pagination are accepted.')
     view=request.query_params.get('view') or (group['public_tabs'][0] if public and group['public_tabs'] else 'stats')
     if view not in store.TABS and not (view=='management' and not public):raise HTTPException(400)
     if view!='ranking' and set(request.query_params)&{'kind','mode','sort','page'}:raise HTTPException(400)
@@ -221,8 +189,15 @@ def selection(request,group,public=False):
     if public and view not in group['public_tabs']:raise HTTPException(403)
     period=request.query_params.get('period','all')
     if public and period=='custom':raise HTTPException(403)
-    try:result=store.period_result(group,period)
-    except ValueError:raise HTTPException(400)
+    custom=None
+    try:
+        if period=='custom' and not public:
+            start=store.day(request.query_params.get('from'));end=store.day(request.query_params.get('through'))
+            if not start or not end or start>end:raise ValueError('Choose both dates in chronological order.')
+            custom=(start,end)
+        elif set(request.query_params)&{'from','through'}:raise ValueError('Dates are only accepted for a private custom period.')
+        result=None if view=='management' else store.period_result(group,period,custom=custom)
+    except ValueError as exc:raise HTTPException(400,str(exc))
     return view,period,result
 
 
@@ -233,7 +208,7 @@ def ratio_label(totals):
 
 def render_page(request,group,user=None,public=False):
     view,period,result=selection(request,group,public)
-    available=[p for p in store.periods(group) if not public or p['period']!='custom']
+    available=store.periods(group) if view!='management' else []
     if public and not result:raise HTTPException(404)
     base=f"/public/groups/{group['public_token']}" if public else f"{PRIVATE}/{group['id']}"
     ctx=dict(request=request,title=group['name'],show_app_layout=False,username=None) if public else context(request,user,group['name'])
@@ -243,8 +218,7 @@ def render_page(request,group,user=None,public=False):
         managers=store.managers(group['id'],user['id']) if not public and view=='management' and user['id']==group['owner_id'] else [],
         ranking=ranking_options(request) if view=='ranking' else None,
         available=available,tabs=group['public_tabs'] if public else list(store.TABS),compact_isk=compact_isk,full_isk=full_isk,
-        ratio_label=ratio_label(result['totals']) if result else '—',ratio_for=ratio_label)
-    ctx['monthly_results']=store.monthly_results(group,result['from_date'],result['through_date']) if result and view=='stats' and period!='custom' else []
+        ratio_for=ratio_label,custom_from=request.query_params.get('from',''),custom_through=request.query_params.get('through',''))
     return no_store(templates.TemplateResponse(request=request,name='personal_group.html',context=ctx))
 
 
@@ -263,7 +237,7 @@ def public_page(request:Request,token:str):
 
 def data_result(request,group,public=False):
     view,period,result=selection(request,group,public)
-    if not result:raise HTTPException(404,'This period has not been prepared.')
+    if not result:raise HTTPException(404,'This period does not overlap available group history.')
     if view!='killboard' and request.query_params.get('cursor'):raise HTTPException(400)
     if view=='ranking':
         if request.query_params.get('cursor'):raise HTTPException(400)
@@ -271,41 +245,54 @@ def data_result(request,group,public=False):
         state=local_rankings.state(group,result,options['kind'],options['mode'],options['sort'])
         start=(options['page']-1)*50;rows=state['rows'][start:start+50]
         base=f"/public/groups/{group['public_token']}" if public else f"{PRIVATE}/{group['id']}"
-        def link(page):return base+'?'+urlencode(dict(view='ranking',period=period,**dict(options,page=page)))
+        def link(page):return base+'?'+urlencode(dict(view='ranking',period=period,**dict(options,page=page),**({'from':request.query_params['from'],'through':request.query_params['through']} if period=='custom' else {})))
         html=templates.get_template('personal_group_ranking.html').render(rows=rows,public=public,kind=options['kind'],compact_isk=compact_isk,
             full_isk=full_isk,previous=link(options['page']-1) if options['page']>1 else None,next_page=link(options['page']+1) if start+50<len(state['rows']) else None)
         return no_store(JSONResponse(dict(html=html,status=state['status'],progress=state['progress'],error=state.get('error')),status_code=202 if state['status'] in ('running','busy') else 200))
-    if view=='stats':
-        return no_store(JSONResponse({'totals':result['totals']}))
-    key=(group['id'],group['revision'],str(result['built_at']),public,view,period,request.query_params.get('cursor',''))
+    if view in ('stats','ships'):
+        can_super=False
+        if view=='ships':
+            from .auth import get_user_permissions
+            can_super='superintel.view' in get_user_permissions(group['owner_id'])
+        state=jobs.state(group,result,view,can_super=can_super)
+        calculated=state['result'];html=''
+        if calculated:
+            if view=='stats':
+                base=f"/public/groups/{group['public_token']}" if public else f"{PRIVATE}/{group['id']}"
+                html=templates.get_template('personal_group_stats.html').render(result=calculated,base_url=base,compact_isk=compact_isk,full_isk=full_isk,ratio_for=ratio_label)
+            else:
+                with closing(db()) as conn:
+                    conn.set_session(readonly=True)
+                    with conn:
+                        from .entities import _ship_counts_to_payload
+                        ships=_ship_counts_to_payload(conn,calculated['ship_counts'])
+                html=templates.get_template('personal_group_ships.html').render(result=calculated,ships=ships)
+        return no_store(JSONResponse(dict(html=html,status=state['status'],progress=state['progress'],error=state.get('error')),status_code=202 if state['status'] in ('running','busy') else 200))
+    key=(group['id'],group['revision'],str(result['built_at']),public,view,period,result['from_date'],result['through_date'],request.query_params.get('cursor',''))
     with _LOCK:
         hit=_CACHE.get(key)
-        if hit and time.monotonic()-hit[0]<120:
+        if hit and time.monotonic()-hit['updated']<120:
             _CACHE.move_to_end(key)
-            return no_store(JSONResponse(hit[1]))
+            return no_store(JSONResponse(hit['payload']))
     if not _SLOTS.acquire(blocking=False):return no_store(JSONResponse({'error':'Two result pages are loading. Please retry in a moment.'},status_code=429))
     try:
         with closing(db()) as conn:
             conn.set_session(readonly=True)
             with conn,conn.cursor() as cur:
                 cur.execute("SET LOCAL statement_timeout='8s'");cur.execute('SET LOCAL jit=off')
-                if view=='ships':
-                    from .entities import _ship_counts_to_payload
-                    ships=_ship_counts_to_payload(conn,result['ship_counts'])
-                    html=templates.get_template('personal_group_ships.html').render(ships=ships,result=result)
-                    payload={'html':html}
-                else:
-                    try:kb=queries.killboard(conn,group,result,request.query_params.get('cursor',''))
-                    except ValueError:raise HTTPException(400,'Invalid cursor.')
-                    html=templates.get_template('personal_group_killboard.html').render(rows=kb['rows'],public=public)
-                    payload=dict(html=html,next_cursor=kb['next_cursor'],scanned=kb['scanned'],total=kb['total'])
+                if view!='killboard':raise HTTPException(400)
+                transient=dict(group,membership_rules=queries.load_rules(conn))
+                try:kb=queries.killboard(conn,transient,result,request.query_params.get('cursor',''))
+                except ValueError:raise HTTPException(400,'Invalid cursor.')
+                html=templates.get_template('personal_group_killboard.html').render(rows=kb['rows'],public=public)
+                payload=dict(html=html,next_cursor=kb['next_cursor'],scanned=kb['scanned'],total=kb['total'])
         with _LOCK:
-            _CACHE[key]=(time.monotonic(),payload);_CACHE.move_to_end(key)
+            _CACHE[key]=dict(updated=time.monotonic(),status='completed',payload=payload);_CACHE.move_to_end(key)
             while len(_CACHE)>32:_CACHE.popitem(last=False)
         return no_store(JSONResponse(payload))
     except QueryCanceled:
         LOG.warning('Personal group page exceeded query limit group=%s period=%s',group['id'],period)
-        return no_store(JSONResponse({'error':'This historical scan reached the query time limit. Choose a prepared month or year to narrow it.'},status_code=504))
+        return no_store(JSONResponse({'error':'This historical scan reached the query time limit. Choose a month or year to narrow it.'},status_code=504))
     finally:_SLOTS.release()
 
 

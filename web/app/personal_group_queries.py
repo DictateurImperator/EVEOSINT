@@ -270,10 +270,12 @@ def killboard(conn,group,result,cursor='',limit=50):
             if not at.tzinfo or not 0<id<2**63:raise ValueError('Invalid cursor.')
             before=(at,id)
         if not 0<=index<len(parts):raise ValueError('Invalid cursor.')
+    rules=group.get('membership_rules')
+    if rules is None:rules=load_rules(conn)
     zones=zone_ids(conn,group['definition']);entries=[];values={};credits={};scanned=0;next_cursor=''
     while index<len(parts) and len(entries)<limit and scanned<3:
         relation=parts[index];month,kills,attackers=relation
-        query,params=match_sql(group['definition'],group['prepared_rules'],kills,attackers,max(start,month),min(end,next_month(month)),zones,cursor=before,ship_terms=ship_terms(conn,group['definition']))
+        query,params=match_sql(group['definition'],rules,kills,attackers,max(start,month),min(end,next_month(month)),zones,cursor=before,ship_terms=ship_terms(conn,group['definition']))
         query+=sql.SQL(" SELECT CASE WHEN is_loss THEN 'loss' ELSE 'kill' END,killmail_id,killmail_time,estimated_value_cents FROM matches ORDER BY killmail_time DESC,killmail_id DESC LIMIT %s")
         remaining=limit-len(entries)
         with conn.cursor() as cur:
@@ -283,7 +285,7 @@ def killboard(conn,group,result,cursor='',limit=50):
             entries.append((side,id,at));values[(id,at)]=cents
         if page:
             # Weighted credit is summed across the group, never once per selected rule.
-            actor,ap=actor_predicate(group['definition'],group['prepared_rules'],'a')
+            actor,ap=actor_predicate(group['definition'],rules,'a')
             placeholders=','.join(['(%s::bigint,%s::timestamptz)']*len(page))
             args=[v for side,id,at,cents in page for v in (id,at)]
             query=sql.SQL('''SELECT p.id,p.at,d.total,d.own FROM (VALUES {values}) p(id,at) CROSS JOIN LATERAL (

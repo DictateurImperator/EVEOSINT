@@ -7,6 +7,7 @@ import threading
 import time
 from psycopg2 import sql
 from .db import db
+from .personal_group_jobs import start_reaper,NoDemand
 from . import personal_group_queries as q
 from .killmail_rankings import KINDS,SORTS
 
@@ -15,13 +16,14 @@ LIMIT=1000
 LOCK_ID=920134802
 _LOCK=threading.Lock()
 _RUNS=OrderedDict()
+start_reaper(_LOCK,_RUNS,300)
 
 
 def month_scores(conn,group,relation,start,end,zones,kind):
     month,kills,attackers=relation
-    query,params=q.match_sql(group['definition'],group['prepared_rules'],kills,attackers,start,end,zones,
+    query,params=q.match_sql(group['definition'],group['membership_rules'],kills,attackers,start,end,zones,
                              ship_terms=q.ship_terms(conn,group['definition']))
-    actor,ap=q.actor_predicate(group['definition'],group['prepared_rules'],'a')
+    actor,ap=q.actor_predicate(group['definition'],group['membership_rules'],'a')
     attack_id=q.actor_fields('a')[kind];victim_id=q.actor_fields('v',victim=True)[kind]
     query+=sql.SQL(''', attacks AS MATERIALIZED (
         SELECT m.killmail_id,m.killmail_time,m.estimated_value_cents,{attack_id} AS entity_id,
@@ -81,6 +83,7 @@ def scan(group,result,kind,mode,sort,report):
         conn.commit();score_table(conn)
         with conn,conn.cursor() as cur:
             cur.execute("SET LOCAL timezone='UTC';SET LOCAL statement_timeout='120s';SET LOCAL work_mem='32MB';SET LOCAL jit=off")
+            group=dict(group,membership_rules=q.load_rules(conn))
             start=result['from_date'];end=result['through_date']+timedelta(days=1)
             parts=[r for r in q.relations(conn) if r[0]<end and q.next_month(r[0])>start]
             zones=q.zone_ids(conn,group['definition'])
@@ -97,27 +100,31 @@ def scan(group,result,kind,mode,sort,report):
 
 def state(group,result,kind,mode,sort):
     if kind not in KINDS or mode not in ('classic','weighted') or sort not in SORTS:raise ValueError('Invalid ranking selection.')
-    key=(group['id'],group['revision'],str(result['built_at']),result['period'],kind,mode,sort)
+    key=(group['id'],group['revision'],str(result['built_at']),result['period'],result['from_date'],result['through_date'],kind,mode,sort)
     with _LOCK:
         now=time.monotonic()
         previous=_RUNS.get(key)
         if previous and (previous['status']=='running' or now-previous['updated']<(10 if previous['status']=='failed' else 300)):
+            previous['last_requested']=now
             return dict(previous,progress=dict(previous['progress']),rows=list(previous['rows']))
         if any(run['status']=='running' for run in _RUNS.values()):
             return dict(status='busy',progress={},rows=[],error='Another local ranking is scanning history. Please retry shortly.')
-        run=dict(status='running',progress=dict(checked=0,total=0,phase='Starting'),rows=[],updated=now)
+        run=dict(status='running',progress=dict(checked=0,total=0,phase='Starting'),rows=[],updated=now,last_requested=now)
         _RUNS[key]=run;_RUNS.move_to_end(key)
         while len(_RUNS)>8:_RUNS.popitem(last=False)
         def report(**values):
             with _LOCK:
+                if time.monotonic()-run['last_requested']>60:raise NoDemand()
                 if 'rows' in values:run['rows']=values.pop('rows')
                 run['progress'].update(values);run['updated']=time.monotonic()
         def worker():
             try:
                 rows=scan(group,result,kind,mode,sort,report)
                 with _LOCK:run.update(status='completed',rows=rows,updated=time.monotonic())
+            except NoDemand:
+                with _LOCK:_RUNS.pop(key,None)
             except Exception as exc:
                 LOG.exception('Group ranking failed group=%s',group['id'])
-                with _LOCK:run.update(status='failed',error=str(exc) if isinstance(exc,ValueError) else 'This scan could not complete. Try a prepared month to narrow the period.',updated=time.monotonic())
+                with _LOCK:run.update(status='failed',error=str(exc) if isinstance(exc,ValueError) else 'This scan could not complete. Try a month to narrow the period.',updated=time.monotonic())
         threading.Thread(target=worker,name=f"group-ranking-{group['id']}",daemon=True).start()
         return dict(run,progress=dict(run['progress']),rows=list(run['rows']))

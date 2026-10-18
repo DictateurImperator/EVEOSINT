@@ -1,6 +1,6 @@
 """Ownership, three-slot quota and result-only public sharing for personal groups."""
 from contextlib import closing
-from datetime import date
+from datetime import UTC,date,datetime,timedelta
 from pathlib import Path
 import re
 import secrets
@@ -102,8 +102,7 @@ def listed(owner_id):
 def public(token):
     if not re.fullmatch(r'[A-Za-z0-9_-]{32}',token):return None
     with closing(db()) as conn,conn,conn.cursor(cursor_factory=RealDictCursor) as cur:
-        cur.execute('''SELECT * FROM web.personal_groups WHERE public_token=%s
-                       AND prepared_revision=revision''',(token,))
+        cur.execute('SELECT * FROM web.personal_groups WHERE public_token=%s',(token,))
         return _row(cur)
 
 
@@ -132,12 +131,10 @@ def save(owner_id,name,description,payload,group_id=None,*,actor_id=None):
                            VALUES(%s,%s,%s,%s,%s) RETURNING id''',(owner_id,available,name,description,Json(config)))
         else:
             cur.execute('''UPDATE web.personal_groups SET name=%s,description=%s,definition=%s,revision=revision+1,
-                           prepared_revision=NULL,prepared_rules='{}',public_token=NULL,prepared_at=NULL,
-                           progress='{"state":"idle"}',updated_at=now()
+                           updated_at=now()
                            WHERE id=%s AND owner_id=%s RETURNING id''',(name,description,Json(config),group_id,owner_id))
         result=cur.fetchone()
         if not result:raise LookupError('Group not found.')
-        if group_id is not None:cur.execute('DELETE FROM web.personal_group_periods WHERE group_id=%s',(group_id,))
         return result[0]
 
 
@@ -152,39 +149,49 @@ def sharing(group_id,owner_id,enabled,tabs,*,actor_id=None):
     if any(t not in TABS for t in tabs) or (enabled and not tabs):raise ValueError('Select at least one public page.')
     with closing(db()) as conn,conn,conn.cursor() as cur:
         if actor_id is not None and actor_id!=owner_id:_assert_manager(cur,group_id,owner_id,actor_id)
-        cur.execute('SELECT revision,prepared_revision,public_token FROM web.personal_groups WHERE id=%s AND owner_id=%s FOR UPDATE',(group_id,owner_id))
+        cur.execute('SELECT public_token FROM web.personal_groups WHERE id=%s AND owner_id=%s FOR UPDATE',(group_id,owner_id))
         row=cur.fetchone()
         if not row:raise LookupError('Group not found.')
-        if enabled and row[0]!=row[1]:raise ValueError('Prepare the complete group before publishing it.')
-        token=(row[2] or secrets.token_urlsafe(24)) if enabled else None
+        token=(row[0] or secrets.token_urlsafe(24)) if enabled else None
         cur.execute('UPDATE web.personal_groups SET public_token=%s,public_tabs=%s,updated_at=now() WHERE id=%s',(token,Json(tabs),group_id))
         return token
 
 
 def periods(group):
-    with closing(db()) as conn,conn,conn.cursor(cursor_factory=RealDictCursor) as cur:
-        cur.execute('''SELECT period,from_date,through_date,built_at FROM web.personal_group_periods
-                       WHERE group_id=%s AND revision=%s ORDER BY from_date DESC,period''',(group['id'],group['revision']))
-        return [dict(r) for r in cur]
+    """Derive available periods from partition metadata, never from saved group results."""
+    from . import personal_group_queries as q
+    with closing(db()) as conn:
+        conn.set_session(readonly=True)
+        with conn,conn.cursor() as cur:
+            cur.execute("SET LOCAL statement_timeout='5s'")
+            parts=q.relations(conn)
+    if not parts:return []
+    config=group['definition'];today=datetime.now(UTC).date()
+    first=max(day(config.get('from')) or parts[-1][0],parts[-1][0])
+    end=min((day(config.get('through'))+timedelta(days=1)) if config.get('through') else q.next_month(parts[0][0]),q.next_month(parts[0][0]),today+timedelta(days=1))
+    if first>=end:return []
+    result=[dict(period='all',from_date=first,through_date=end-timedelta(days=1),built_at=group['updated_at'])]
+    for year in sorted({r[0].year for r in parts if r[0]<end and q.next_month(r[0])>first},reverse=True):
+        result.append(dict(period=str(year),from_date=max(first,date(year,1,1)),through_date=min(end,date(year+1,1,1))-timedelta(days=1),built_at=group['updated_at']))
+    for month,*_ in parts:
+        if month<end and q.next_month(month)>first:
+            result.append(dict(period=month.strftime('%Y-%m'),from_date=max(first,month),through_date=min(end,q.next_month(month))-timedelta(days=1),built_at=group['updated_at']))
+    return result
 
 
-def period_result(group,period):
-    if period!='all' and period!='custom' and not re.fullmatch(r'\d{4}(-\d{2})?',period):raise ValueError('Choose a prepared year or month.')
-    with closing(db()) as conn,conn,conn.cursor(cursor_factory=RealDictCursor) as cur:
-        cur.execute('SELECT * FROM web.personal_group_periods WHERE group_id=%s AND revision=%s AND period=%s',(group['id'],group['revision'],period))
-        return _row(cur)
+def period_result(group,period,custom=None):
+    if period!='all' and period!='custom' and not re.fullmatch(r'\d{4}(-\d{2})?',period):raise ValueError('Choose an available year or month.')
+    available=periods(group)
+    if period=='custom':
+        if not custom or not available:raise ValueError('Choose both dates for a private custom period.')
+        start=max(custom[0],available[0]['from_date']);end=min(custom[1],available[0]['through_date'])
+        if start>end:raise ValueError('This period does not overlap imported history and the group dates.')
+        return dict(period='custom',from_date=start,through_date=end,built_at=group['updated_at'])
+    return next((p for p in available if p['period']==period),None)
 
 
 def schema_sql():
     return Path(__file__).with_name('personal_groups_schema.sql').read_text()
-
-
-def monthly_results(group,start,end):
-    with closing(db()) as conn,conn,conn.cursor(cursor_factory=RealDictCursor) as cur:
-        cur.execute(r'''SELECT period,totals FROM web.personal_group_periods
-          WHERE group_id=%s AND revision=%s AND period ~ '^\d{4}-\d{2}$'
-            AND from_date>=%s AND through_date<=%s ORDER BY period DESC''',(group['id'],group['revision'],start,end))
-        return [dict(row) for row in cur]
 
 
 def _assert_manager(cur,group_id,owner_id,actor_id):

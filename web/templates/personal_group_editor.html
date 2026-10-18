@@ -4,7 +4,7 @@
 <h1 class="h3">{{ 'Edit group' if group else 'Create group' }}</h1>
 <p class="muted-line">Membership follows history at the date studied. Include rules are combined; exclusions win. Overlapping rules never multiply a pilot or a kill.</p>
 {% if error %}<div class="alert alert-danger" role="alert">{{ error }}</div>{% endif %}
-{% if group %}<div class="alert alert-warning">Saving edits clears prepared results and revokes the current public link. Prepare and publish again after editing.</div>{% endif %}
+{% if group %}<div class="alert alert-warning">Saving edits updates the group definition. Its public link stays the same; subsequent requests use the new definition.</div>{% endif %}
 <form id="groupEditor" method="post" action="/account/groups/save" class="content-card p-4">
 <input type="hidden" name="group_id" value="{{ group.id if group else '' }}"><input type="hidden" name="definition" id="definition">
 <div class="row g-3"><label class="col-md-6">Name<input class="form-control" name="name" value="{{ form_name }}" maxlength="80" required></label><label class="col-md-6">Description<input class="form-control" name="description" value="{{ form_description }}" maxlength="1000"></label><label class="col-md-6">From (UTC, optional)<input class="form-control" id="groupFrom" type="date" value="{{ form_definition['from'] or '' }}"></label><label class="col-md-6">Through (UTC, optional)<input class="form-control" id="groupThrough" type="date" value="{{ form_definition.through or '' }}"></label></div>

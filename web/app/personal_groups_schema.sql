@@ -1,4 +1,4 @@
--- Small group definitions and prepared summaries only; never copies source killmails.
+-- Definitions and access rights only. Group results are computed on request.
 CREATE TABLE IF NOT EXISTS web.personal_groups (
  id bigserial PRIMARY KEY,
  owner_id bigint NOT NULL REFERENCES web.users(id) ON DELETE CASCADE,
@@ -7,29 +7,19 @@ CREATE TABLE IF NOT EXISTS web.personal_groups (
  description text NOT NULL DEFAULT '',
  definition jsonb NOT NULL,
  revision bigint NOT NULL DEFAULT 1,
- prepared_revision bigint,
- prepared_rules jsonb NOT NULL DEFAULT '{}',
- prepared_at timestamptz,
  public_token text UNIQUE,
  public_tabs jsonb NOT NULL DEFAULT '["killboard","stats","ships","ranking"]',
- progress jsonb NOT NULL DEFAULT '{"state":"idle"}',
  created_at timestamptz NOT NULL DEFAULT now(),
  updated_at timestamptz NOT NULL DEFAULT now(),
  UNIQUE(owner_id,slot)
 );
-CREATE TABLE IF NOT EXISTS web.personal_group_periods (
- group_id bigint NOT NULL REFERENCES web.personal_groups(id) ON DELETE CASCADE,
- revision bigint NOT NULL,
- period text NOT NULL CHECK(period='all' OR period='custom' OR period ~ '^\d{4}(-\d{2})?$'),
- from_date date NOT NULL,
- through_date date NOT NULL,
- totals jsonb NOT NULL,
- ship_counts jsonb NOT NULL DEFAULT '{}',
- roster_count bigint NOT NULL DEFAULT 0,
- skills_count bigint NOT NULL DEFAULT 0,
- built_at timestamptz NOT NULL DEFAULT now(),
- PRIMARY KEY(group_id,period)
-);
+-- Retire only the old derived group summaries; preserve definitions, links and delegates.
+DROP TABLE IF EXISTS web.personal_group_periods;
+ALTER TABLE web.personal_groups
+ DROP COLUMN IF EXISTS prepared_revision,
+ DROP COLUMN IF EXISTS prepared_rules,
+ DROP COLUMN IF EXISTS prepared_at,
+ DROP COLUMN IF EXISTS progress;
 
 CREATE TABLE IF NOT EXISTS web.personal_group_managers (
  group_id bigint NOT NULL REFERENCES web.personal_groups(id) ON DELETE CASCADE,
