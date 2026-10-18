@@ -5195,6 +5195,10 @@ def _group_entity_mer_killmails(conn, entity_type, entity_id, page=1, per_page=1
         else:
             params = list(victim_scope_params) + list(victim_scope_params) + list(killer_scope_params)
 
+    if scope.get('personal_group_scope') and participation=='kills':
+        clauses.append(f'NOT ({victim_scope_predicate})')
+        params.extend(victim_scope_params)
+
     if hidden_only:
         clauses.append("m.resolved_km IS NULL")
 

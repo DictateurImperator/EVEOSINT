@@ -30,7 +30,7 @@ def month_scores(conn,group,relation,start,end,zones,kind):
         SELECT m.killmail_id,m.killmail_time,m.estimated_value_cents,{attack_id} AS entity_id,
           {actor} AS own,GREATEST(COALESCE(a.damage_done,0),0)::numeric AS damage,
           sum(GREATEST(COALESCE(a.damage_done,0),0)::numeric) OVER(PARTITION BY m.killmail_id,m.killmail_time) AS total
-        FROM matches m JOIN {attackers} a USING(killmail_id,killmail_time)
+        FROM matches m JOIN {attackers} a USING(killmail_id,killmail_time) WHERE NOT m.is_loss
       ), per_kill AS (
         SELECT entity_id,killmail_id,killmail_time,max(estimated_value_cents) AS cents,sum(damage) AS damage,max(total) AS total
         FROM attacks WHERE own AND entity_id>0 GROUP BY entity_id,killmail_id,killmail_time

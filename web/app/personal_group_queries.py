@@ -134,7 +134,7 @@ def month_totals(conn,config,rules,relation,start,end,zones):
     actor,ap=actor_predicate(config,rules,'a')
     query+=sql.SQL(''', scored AS (
         SELECT k.*,d.* FROM matches k CROSS JOIN LATERAL (
-            SELECT COALESCE(bool_or({actor}),false) AS is_kill,
+            SELECT (COALESCE(bool_or({actor}),false) AND NOT k.is_loss) AS is_kill,
                    sum(GREATEST(COALESCE(a.damage_done,0),0)::numeric) AS total_damage,
                    sum(GREATEST(COALESCE(a.damage_done,0),0)::numeric) FILTER(WHERE {actor}) AS own_damage
             FROM {attackers} a WHERE a.killmail_id=k.killmail_id AND a.killmail_time=k.killmail_time) d)
@@ -285,7 +285,7 @@ def killboard(conn,group,result,cursor='',limit=100,participation='both',mode='a
             where=sql.SQL(' WHERE is_loss')
         elif participation=='kills':
             actor,ap=actor_predicate(group['definition'],rules,'a')
-            where=sql.SQL(' WHERE EXISTS(SELECT 1 FROM {attackers} a WHERE a.killmail_id=matches.killmail_id AND a.killmail_time=matches.killmail_time AND {actor})').format(attackers=attackers,actor=sql.SQL(actor))
+            where=sql.SQL(' WHERE NOT is_loss AND EXISTS(SELECT 1 FROM {attackers} a WHERE a.killmail_id=matches.killmail_id AND a.killmail_time=matches.killmail_time AND {actor})').format(attackers=attackers,actor=sql.SQL(actor))
             params+=ap
         else:where=sql.SQL('')
         side=sql.SQL("'kill'" if participation=='kills' else "'loss'" if participation=='losses' else "CASE WHEN is_loss THEN 'loss' ELSE 'kill' END")
@@ -343,7 +343,7 @@ def month_top_kills(conn,group,relation,start,end,zones):
          SELECT bool_or({actor}) AS is_kill,sum(GREATEST(COALESCE(a.damage_done,0),0)::numeric) AS total,
           sum(GREATEST(COALESCE(a.damage_done,0),0)::numeric) FILTER(WHERE {actor}) AS own
          FROM {attackers} a WHERE a.killmail_id=m.killmail_id AND a.killmail_time=m.killmail_time) d
-       WHERE m.estimated_value_cents IS NOT NULL AND d.is_kill)
+       WHERE m.estimated_value_cents IS NOT NULL AND NOT m.is_loss AND d.is_kill)
        (SELECT 'raw' AS mode,* FROM scored ORDER BY raw_cents DESC,killmail_time DESC,killmail_id DESC LIMIT 20)
        UNION ALL
        (SELECT 'weighted' AS mode,* FROM scored ORDER BY true_cents DESC,killmail_time DESC,killmail_id DESC LIMIT 20)

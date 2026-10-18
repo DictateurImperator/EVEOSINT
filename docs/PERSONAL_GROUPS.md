@@ -23,7 +23,9 @@ Public visitors cannot supply arbitrary dates or change the saved scope.
 - Combat stats scan the selected months and display provisional totals and
   monthly history as each month completes. Kills/losses include unvalued entries;
   incomplete ISK totals are identified. True ISK divides matching group damage
-  by damage from all attackers, including NPCs. Losses count in full.
+  by damage from all attackers, including NPCs. Losses count in full. A victim
+  belonging to the group makes the event a loss only: friendly fire never adds
+  kill credit, Raw/True ISK destroyed, top kills or local-ranking attack credit.
 - Top kills are a separate explicit Combat stats request. The scan keeps only
   the best 20 raw and True candidates per month and merges these bounded lists,
   using the standard top-kills renderer. Opening monthly history does not run it.
@@ -77,7 +79,11 @@ choose Killboard, Combat stats, Pilotable ships and Local ranking independently.
 Blocked pages are denied on HTML and data endpoints. The anonymous public link
 accepts only saved-scope all/year/month periods, fixed ranking enums and bounded
 pagination, with no arbitrary member/date/area/ship parameters. There is no public
-directory or link into account-only entity pages. Definitions, owner metadata and
+directory. Anonymous visitors have no links into account-only entity pages;
+signed-in visitors can follow the normal entity, killmail, ship and location
+links, with each destination enforcing its own access permissions. Rendered
+killboard caches distinguish anonymous and signed-in responses, and login state
+is checked on every data request. Definitions, owner metadata and
 management controls are never passed to the public template. Anonymous pages
 show an EVEOSINT link to login; signed-in viewers get their usual app navigation. Responses are
 no-store/noindex, with no-referrer.

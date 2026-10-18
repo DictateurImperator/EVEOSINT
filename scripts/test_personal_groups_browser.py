@@ -49,20 +49,20 @@ try:
    if '/lookup?' in path:
     data={'results':choices};route.fulfill(json=data);return
    if '/data?' in path and 'view=ranking' in path:
-    html=routes.templates.get_template('personal_group_ranking.html').render(rows=[dict(rank=1,entity_id=1,name='Local pilot',destroyed=10000,raw=10000,weighted=2000,lost=0,kills=1,losses=0,net=10000,efficiency=100,unvalued_kills=0,unvalued_losses=0)],public_group='/public/' in path,kind='character',compact_isk=base.rankings.compact_isk,full_isk=base.rankings.full_isk,previous=None,next_page=None)
+    html=routes.templates.get_template('personal_group_ranking.html').render(rows=[dict(rank=1,entity_id=1,name='Local pilot',destroyed=10000,raw=10000,weighted=2000,lost=0,kills=1,losses=0,net=10000,efficiency=100,unvalued_kills=0,unvalued_losses=0)],public_group=not bool(case.login.return_value),kind='character',compact_isk=base.rankings.compact_isk,full_isk=base.rankings.full_isk,previous=None,next_page=None)
     route.fulfill(json={'html':html,'status':'completed','progress':{'checked':1,'total':1}});return
    if '/data?' in path and 'view=killboard' in path:
-    html=routes.templates.get_template('personal_group_killboard.html').render(killmail_page=dict(killmail_groups=[{'date':'2026-01-02','items':[sample_killmail()]}],killmail_pagination={},global_context=True),killmail_public=True,killmail_mode='api',error=None)
+    html=routes.templates.get_template('personal_group_killboard.html').render(killmail_page=dict(killmail_groups=[{'date':'2026-01-02','items':[sample_killmail()]}],killmail_pagination={},global_context=True),killmail_public=not bool(case.login.return_value),killmail_mode='api',error=None)
     route.fulfill(json={'html':html,'scanned':1,'total':1});return
    if '/data?' in path and 'stats_view=top-kills' in path:
     row=dict(killmail_id=100,killmail_time=sample_killmail()['killmail_time'],ship_id=638,ship_name='Raven',victim_name='Victim',system_name='Jita',raw_cents=10000,true_cents=5000,damage_percent=50)
-    html=routes.templates.get_template('combat_top_kills_fragment.html').render(top_kills={'raw':[row],'weighted':[row]},public_group=True,compact_isk=base.rankings.compact_isk,full_isk=base.rankings.full_isk)
+    html=routes.templates.get_template('combat_top_kills_fragment.html').render(top_kills={'raw':[row],'weighted':[row]},public_group=not bool(case.login.return_value),compact_isk=base.rankings.compact_isk,full_isk=base.rankings.full_isk)
     route.fulfill(json={'html':html,'status':'completed','progress':dict(checked=1,total=1)});return
    if '/data?' in path and 'view=stats' in path:
     html=routes.templates.get_template('personal_group_stats.html').render(combat_stats=dict(rows=[dict(case.result['totals'],month=JAN,ratio=30)],totals=dict(case.result['totals'],ratio=30)),compact_isk=base.rankings.compact_isk,full_isk=base.rankings.full_isk)
     route.fulfill(json={'html':html,'status':'completed','progress':dict(checked=1,total=1)});return
    if '/data?' in path:
-    html=routes.templates.get_template('personal_group_ships.html').render(recent_entities=[dict(name='Raven',faction_name='Caldari',ship_tree_row='combat',ship_size='Battleship',ship_display_size='L',ship_tier='T1',group_name='Battleship',pilot_count=2,image_url=None)],result=case.result,entity_index={'entity_type':'ship'},pilotable_page={'entity_type':'group','ready':True},public_group=True,error=None)
+    html=routes.templates.get_template('personal_group_ships.html').render(recent_entities=[dict(name='Raven',faction_name='Caldari',ship_tree_row='combat',ship_size='Battleship',ship_display_size='L',ship_tier='T1',group_name='Battleship',pilot_count=2,image_url=None)],result=case.result,entity_index={'entity_type':'ship'},pilotable_page={'entity_type':'group','ready':True},public_group=not bool(case.login.return_value),error=None)
     route.fulfill(json={'html':html,'status':'completed','progress':dict(checked=1,total=1)});return
    if path.startswith('/account/groups') or path.startswith('/public/groups') or path.startswith('/leaderboard'):
     response=case.client.request(req.method,path,content=req.post_data_buffer,headers=dict({k:v for k,v in req.headers.items() if k in ('content-type','origin','referer')},host=urlparse(origin).netloc),follow_redirects=False)
@@ -120,12 +120,16 @@ try:
   page.get_by_role('button',name='Highest true ISK').click();expect(page.locator('[data-combat-top-panel=weighted]')).to_be_visible();expect(page.locator('[data-combat-top-panel=raw]')).to_be_hidden()
   group['public_tabs'].append('killboard');page.reload();page.get_by_role('link',name='Killboard',exact=True).click()
   expect(page.locator('.killmail-table')).to_be_visible();expect(page.locator('.killmail-row-kill')).to_have_count(1)
+  expect(page.locator('.killmail-table a')).to_have_count(0)
   page.get_by_role('link',name='Only hidden',exact=True).click();expect(page.locator('.killmail-table')).to_be_visible()
   page.get_by_role('link',name='VICTIM',exact=True).click();expect(page.locator('.killmail-table')).to_be_visible()
   query=parse_qs(urlparse(page.url).query);assert query['participation']==['losses'] and query['kb_mode']==['hidden']
   data_requests=[path for path in requests if '/data?' in path];assert all('scan_client=' in path and 'scan_generation=' in path for path in data_requests)
   assert any('/cancel' in path for path in requests)
   case.login.return_value=case.user;page.reload();expect(page.locator('.account-menu')).to_be_visible();expect(page.locator('#shareGroup')).to_have_count(0)
+  expect(page.locator('.killmail-table').get_by_role('link',name='Attacker',exact=True).last).to_have_attribute('href','/character/1')
+  with page.expect_navigation():page.locator('.killmail-table').get_by_role('link',name='Attacker',exact=True).last.click()
+  expect(page).to_have_url(origin+'/character/1')
   assert not any('/account/groups/9/data' in path for path in requests)
   case.user['id']=2;store.listed.return_value=[];store.delegated.return_value=[dict(group,owner_name='Owner')]
   page.goto(origin+'/account/groups');expect(page.get_by_text('Groups you manage',exact=True)).to_be_visible()

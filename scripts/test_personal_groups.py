@@ -14,7 +14,7 @@ import threading
 import time
 import importlib
 import unittest
-from unittest.mock import patch,Mock
+from unittest.mock import patch,Mock,MagicMock
 
 import psycopg2
 from fastapi import FastAPI
@@ -361,6 +361,43 @@ class RouteTests(unittest.TestCase):
             self.assertEqual(self.client.post(url+'/cancel',data={'scan_client':'d'*32,'scan_generation':'2'}).status_code,200)
             self.assertEqual(self.client.get(base+'2').status_code,409)
 
+    def test_killboard_links_follow_login_state_and_never_cross_html_cache(self):
+        self.group['public_tabs']=['killboard']
+        row=sample_killmail()
+        row['final_corporation']=dict(entity_id=10,name='Attacker corp',url='/corporation/10')
+        row['final_alliance']=dict(entity_id=20,name='Attacker alliance',url='/alliance/20')
+        data=dict(rows=[row],next_cursor='',scanned=1,total=1)
+        with routes._LOCK:routes._CACHE.clear()
+        with patch.object(store,'public',return_value=self.group),patch.object(store,'period_result',return_value=self.result),patch.object(routes,'db',return_value=MagicMock()),patch.object(q,'load_rules',return_value={}),patch.object(q,'killboard',return_value=data) as scan:
+            url='/public/groups/'+'a'*32+'/data?view=killboard'
+            for signed_in in [True,False,True,False]:
+                self.login.return_value=self.user if signed_in else None
+                response=self.client.get(url)
+                self.assertEqual(response.status_code,200)
+                html=response.json()['html']
+                for target in ['/character/1','/corporation/10','/alliance/20','/system/7','/kill/100']:
+                    if signed_in:self.assertIn('href="'+target+'"',html)
+                    else:self.assertNotIn('href="'+target+'"',html)
+            self.assertEqual(scan.call_count,2) # One fragment per login state; later requests reuse the correct one.
+
+    def test_other_group_result_links_follow_login_state(self):
+        self.group['public_tabs']=['stats','ranking','ships']
+        top=dict(killmail_id=100,killmail_time=sample_killmail()['killmail_time'],ship_id=638,ship_name='Raven',victim_id=9,victim_name='Victim',system_id=7,system_name='Jita',raw_cents=10000,true_cents=5000,damage_percent=50)
+        ship=dict(entity_id=638,url='/ship/638',name='Raven',faction_name='Caldari',ship_tree_row='combat',ship_size='Battleship',ship_display_size='L',ship_tier='T1',pilot_count=1)
+        rank=dict(rank=1,entity_id=1,name='Pilot',destroyed=10000,lost=0,net=10000,efficiency=100,kills=1,losses=0,corporation_id=10,corporation_name='Corp',alliance_id=20,alliance_name='Alliance',unvalued_kills=0,unvalued_losses=0)
+        def calculated(group,result,view,can_super=False):
+            result=dict(top_kills={'raw':[top],'weighted':[top]}) if view=='top-kills' else dict(ship_counts={'638':1},roster_count=1,skills_count=1,totals={'ships_ready':True})
+            return dict(status='completed',progress={},result=result)
+        with patch.object(store,'public',return_value=self.group),patch.object(store,'period_result',return_value=self.result),patch.object(jobs,'state',side_effect=calculated),patch.object(routes.local_rankings,'state',return_value=dict(status='completed',progress={},rows=[rank])),patch.object(routes,'db',return_value=MagicMock()),patch.object(q.entities,'_ship_counts_to_payload',return_value=[ship]),patch.object(f.auth,'get_user_permissions',return_value={'entities.view'}):
+            for query,targets in [('view=stats&stats_view=top-kills',['/kill/100','/character/9','/system/7']),('view=ranking',['/character/1','/corporation/10','/alliance/20']),('view=ships',['/ship/638'])]:
+                for signed_in in [True,False]:
+                    self.login.return_value=self.user if signed_in else None
+                    response=self.client.get('/public/groups/'+'a'*32+'/data?'+query)
+                    self.assertEqual(response.status_code,200)
+                    for target in targets:
+                        if signed_in:self.assertIn('href="'+target+'"',response.json()['html'])
+                        else:self.assertNotIn('href="'+target+'"',response.json()['html'])
+
     def test_member_search_returns_portraits_affiliations_and_an_entity_type_filter(self):
         coalitions=importlib.import_module(store.__package__+'.coalitions')
         pilot=dict(entity_type='character',entity_id=42,name='Pilot',corporation_name='Corp',alliance_name='Alliance')
@@ -585,6 +622,16 @@ class DatabaseTests(unittest.TestCase):
                 pilots=dict(group,definition=config([dict(kind='character',id=1,op='include')]))
                 self.assertEqual(q.killboard(self.conn,pilots,period,mode='hidden')['rows'],[])
                 with self.assertRaises(ValueError):q.killboard(self.conn,group,period,mode='hidden',cursor='bad')
+                with self.conn.cursor() as cur:
+                    cur.execute("INSERT INTO mer.killmails(source_month,source_row,kill_datetime,solar_system_id,victim_ship_type_id,victim_corporation_id,killer_ship_type_id,killer_corporation_id,ccp_isk_lost) VALUES('2026-01-01',6,'2026-01-05 12:00Z',7,638,10,587,10,700)")
+                for mode in ['hidden','total']:
+                    both=q.killboard(self.conn,group,period,mode=mode)['rows']
+                    internal=next(r for r in both if r['source_row']==6)
+                    self.assertTrue(internal['is_loss']);self.assertFalse(internal['is_kill'])
+                    kills=q.killboard(self.conn,group,period,mode=mode,participation='kills')['rows']
+                    self.assertEqual([r['source_row'] for r in kills],[1])
+                    losses=q.killboard(self.conn,group,period,mode=mode,participation='losses')['rows']
+                    self.assertIn(6,[r['source_row'] for r in losses])
         finally:
             self.conn.rollback()
             with self.conn.cursor() as cur:cur.execute('DROP SCHEMA mer CASCADE')
@@ -617,6 +664,30 @@ class DatabaseTests(unittest.TestCase):
         thread.join(2)
         self.assertFalse(thread.is_alive());self.assertTrue(cancelled.is_set())
 
+    def test_friendly_fire_counts_only_as_a_group_loss_in_every_result(self):
+        group=self.make_group();group['membership_rules']=q.load_rules(self.conn)
+        period=dict(period='2026-01',built_at='v',from_date=JAN,through_date=date(2026,1,31))
+        with self.conn.cursor() as cur:
+            cur.execute("INSERT INTO rawkm.killmail_attackers(killmail_id,killmail_time,character_id,corporation_id,alliance_id,damage_done) VALUES(101,'2026-01-03 12:00Z',2,10,1000,500)")
+        self.conn.commit()
+        jan=next(r for r in q.relations(self.conn) if r[0]==JAN)
+        totals=q.month_totals(self.conn,group['definition'],group['membership_rules'],jan,JAN,FEB,(None,[]))
+        self.assertEqual(totals['kills'],1);self.assertEqual(totals['losses'],2)
+        self.assertEqual(totals['destroyed_cents'],10000);self.assertEqual(totals['weighted_destroyed_cents'],5000)
+        self.assertEqual(totals['lost_cents'],20000)
+        def hydrate(conn,entries):return [dict(sample_killmail(id),killmail_time=at) for side,id,at in entries]
+        with patch.object(q.entities,'_hydrate_global_killmail_entries',side_effect=hydrate):
+            kills=q.killboard(self.conn,group,period,participation='kills')['rows']
+            self.assertEqual([r['killmail_id'] for r in kills],[100])
+            all_rows=q.killboard(self.conn,group,period)['rows']
+            internal=next(r for r in all_rows if r['killmail_id']==101)
+            self.assertTrue(internal['is_loss']);self.assertFalse(internal['is_kill'])
+        candidates=q.month_top_kills(self.conn,group,jan,JAN,FEB,(None,[]))
+        self.assertEqual({r['killmail_id'] for r in candidates},{100})
+        rankings=routes.local_rankings.scan(group,period,'corporation','classic','destroyed',lambda **values:None)
+        self.assertEqual(rankings[0]['raw'],10000);self.assertEqual(rankings[0]['kills'],1)
+        self.assertEqual(rankings[0]['lost'],20000);self.assertEqual(rankings[0]['losses'],2)
+
     def test_direct_inactive_member_and_dated_exclusion(self):
         c=config([dict(kind='character',id=9,op='include')])
         data=q.pilotable_counts(self.conn,c,{},JAN,FEB)
@@ -632,7 +703,7 @@ class DatabaseTests(unittest.TestCase):
         c=config([dict(kind='corporation',id=10,op='include'),dict(kind='character',id=1,op='include')])
         relations=q.relations(self.conn);jan=next(r for r in relations if r[0]==JAN)
         result=q.month_totals(self.conn,c,{},jan,JAN,FEB,(None,[]))
-        self.assertEqual(result['kills'],2)
+        self.assertEqual(result['kills'],1) # An internal loss is never also a group kill.
         self.assertEqual(result['losses'],2)
         self.assertEqual(result['destroyed_cents'],10000)
         self.assertEqual(result['weighted_destroyed_cents'],5000)

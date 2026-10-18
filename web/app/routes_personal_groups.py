@@ -268,6 +268,7 @@ def data_result(request,group,public=False):
 
 
 def selected_data(request,group,view,period,result,public):
+    read_only=public and not bool(require_login(request))
     if view!='killboard' and request.query_params.get('cursor'):raise HTTPException(400)
     if view=='ranking':
         if request.query_params.get('cursor'):raise HTTPException(400)
@@ -277,7 +278,7 @@ def selected_data(request,group,view,period,result,public):
         base=f"/public/groups/{group['public_token']}" if public else f"{PRIVATE}/{group['id']}"
         def link(page):return base+'?'+urlencode(dict(view='ranking',period=period,**dict(options,page=page)))
         html=templates.get_template('personal_group_ranking.html').render(rows=rows,public=public,kind=options['kind'],compact_isk=compact_isk,
-            full_isk=full_isk,public_group=public,totals_ready=True,membership_date=result['through_date'],previous=link(options['page']-1) if options['page']>1 else None,next_page=link(options['page']+1) if start+50<len(state['rows']) else None)
+            full_isk=full_isk,public_group=read_only,totals_ready=True,membership_date=result['through_date'],previous=link(options['page']-1) if options['page']>1 else None,next_page=link(options['page']+1) if start+50<len(state['rows']) else None)
         return no_store(JSONResponse(dict(html=html,status=state['status'],progress=state['progress'],error=state.get('error')),status_code=202 if state['status'] in ('running','busy') else 200))
     if view in ('stats','ships'):
         can_super=False
@@ -289,7 +290,7 @@ def selected_data(request,group,view,period,result,public):
         calculated=state['result'];html=''
         if calculated:
             if calculation=='top-kills':
-                html=templates.get_template('combat_top_kills_fragment.html').render(top_kills=calculated['top_kills'],provisional=state['status']!='completed',public_group=public,compact_isk=compact_isk,full_isk=full_isk)
+                html=templates.get_template('combat_top_kills_fragment.html').render(top_kills=calculated['top_kills'],provisional=state['status']!='completed',public_group=read_only,compact_isk=compact_isk,full_isk=full_isk)
             elif view=='stats':
                 base=f"/public/groups/{group['public_token']}" if public else f"{PRIVATE}/{group['id']}"
                 rows=[dict(m['totals'],month=date.fromisoformat(m['period']+'-01'),ratio=ratio_number(m['totals'])) for m in calculated['monthly'] if m['totals']['kills'] or m['totals']['losses']]
@@ -301,9 +302,9 @@ def selected_data(request,group,view,period,result,public):
                     with conn:
                         from .entities import _ship_counts_to_payload
                         ships=_ship_counts_to_payload(conn,calculated['ship_counts'])
-                html=templates.get_template('personal_group_ships.html').render(result=calculated,recent_entities=ships,entity_index={'entity_type':'ship'},pilotable_page={'entity_type':'group','ready':True},public_group=public,error=None)
+                html=templates.get_template('personal_group_ships.html').render(result=calculated,recent_entities=ships,entity_index={'entity_type':'ship'},pilotable_page={'entity_type':'group','ready':True},public_group=read_only,error=None)
         return no_store(JSONResponse(dict(html=html,status=state['status'],progress=state['progress'],error=state.get('error')),status_code=202 if state['status'] in ('running','busy') else 200))
-    key=(group['id'],group['revision'],str(result['built_at']),public,view,period,result['from_date'],result['through_date'],request.query_params.get('cursor',''),request.query_params.get('participation','both'),request.query_params.get('kb_mode','api'))
+    key=(group['id'],group['revision'],str(result['built_at']),public,read_only,view,period,result['from_date'],result['through_date'],request.query_params.get('cursor',''),request.query_params.get('participation','both'),request.query_params.get('kb_mode','api'))
     with _LOCK:
         hit=_CACHE.get(key)
         if hit and time.monotonic()-hit['updated']<120:
@@ -325,7 +326,7 @@ def selected_data(request,group,view,period,result,public):
                 from .entities import _group_killmails_by_date
                 html=templates.get_template('personal_group_killboard.html').render(
                     killmail_page=dict(killmail_groups=_group_killmails_by_date(kb['rows']),killmail_pagination={},global_context=True),
-                    killmail_public=public,killmail_mode=request.query_params.get('kb_mode','api'),error=None)
+                    killmail_public=read_only,killmail_mode=request.query_params.get('kb_mode','api'),error=None)
                 payload=dict(html=html,next_cursor=kb['next_cursor'],scanned=kb['scanned'],total=kb['total'],scan_end_label=kb.get('scan_end_label'))
         with _LOCK:
             _CACHE[key]=dict(updated=time.monotonic(),status='completed',payload=payload);_CACHE.move_to_end(key)
