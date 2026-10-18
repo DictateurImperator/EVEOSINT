@@ -1,7 +1,7 @@
 """Progressive local rankings. Source is read-only; only connection-local score totals are accumulated."""
 from collections import OrderedDict
 from contextlib import closing
-from datetime import timedelta
+from datetime import UTC,datetime,timedelta
 import logging
 import threading
 import time
@@ -94,6 +94,9 @@ def scan(group,result,kind,mode,sort,report):
                 report(checked=index,current_month=month.strftime('%Y-%m'))
                 month_scores(conn,group,relation,max(start,month),min(end,q.next_month(month)),zones,kind)
                 rows=top_rows(conn,kind,mode,sort)
+                from .killmail_rankings import explorer
+                month=result['through_date'].replace(day=1)
+                rows=explorer().enrich(conn,kind,rows,None if month==datetime.now(UTC).date().replace(day=1) else month)
                 report(checked=index+1,rows=rows)
             return rows
 

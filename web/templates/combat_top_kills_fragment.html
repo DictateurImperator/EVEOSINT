@@ -15,14 +15,14 @@
         {% for row in top_kills[mode] %}
           <tr>
             <td>{{ loop.index }}</td>
-            <td class="text-nowrap"><a href="/kill/{{ row.killmail_id }}">{{ row.killmail_time.strftime('%Y-%m-%d %H:%M') }}</a></td>
+            <td class="text-nowrap"><{{ 'span' if public_group else 'a' }} {% if not public_group %}href="/kill/{{ row.killmail_id }}"{% endif %}>{{ row.killmail_time.strftime('%Y-%m-%d %H:%M') }}</{{ 'span' if public_group else 'a' }}></td>
             <td>
               <div class="d-flex gap-2 align-items-center">
-                {% if row.ship_id %}<a href="/kill/{{ row.killmail_id }}"><img src="https://images.evetech.net/types/{{ row.ship_id }}/icon?size=64" width="40" height="40" alt="" loading="lazy"></a>{% endif %}
-                <div><a href="/kill/{{ row.killmail_id }}">{{ row.ship_name }}</a><div class="muted-line">{% if row.victim_id %}<a href="/character/{{ row.victim_id }}">{{ row.victim_name }}</a>{% elif row.victim_corporation_id %}<a href="/corporation/{{ row.victim_corporation_id }}">{{ row.victim_name }}</a>{% else %}{{ row.victim_name }}{% endif %}</div></div>
+                {% if row.ship_id %}<{{ 'span' if public_group else 'a' }} {% if not public_group %}href="/kill/{{ row.killmail_id }}"{% endif %}><img src="https://images.evetech.net/types/{{ row.ship_id }}/icon?size=64" width="40" height="40" alt="" loading="lazy"></{{ 'span' if public_group else 'a' }}>{% endif %}
+                <div><{{ 'span' if public_group else 'a' }} {% if not public_group %}href="/kill/{{ row.killmail_id }}"{% endif %}>{{ row.ship_name }}</{{ 'span' if public_group else 'a' }}><div class="muted-line">{% if row.victim_id %}<{{ 'span' if public_group else 'a' }} {% if not public_group %}href="/character/{{ row.victim_id }}"{% endif %}>{{ row.victim_name }}</{{ 'span' if public_group else 'a' }}>{% elif row.victim_corporation_id %}<{{ 'span' if public_group else 'a' }} {% if not public_group %}href="/corporation/{{ row.victim_corporation_id }}"{% endif %}>{{ row.victim_name }}</{{ 'span' if public_group else 'a' }}>{% else %}{{ row.victim_name }}{% endif %}</div></div>
               </div>
             </td>
-            <td>{% if row.system_id %}<a href="/system/{{ row.system_id }}">{{ row.system_name }}</a>{% else %}{{ row.system_name }}{% endif %}</td>
+            <td>{% if row.system_id %}<{{ 'span' if public_group else 'a' }} {% if not public_group %}href="/system/{{ row.system_id }}"{% endif %}>{{ row.system_name }}</{{ 'span' if public_group else 'a' }}>{% else %}{{ row.system_name }}{% endif %}</td>
             <td class="text-end text-nowrap{% if mode == 'raw' %} fw-bold text-success{% endif %}" title="{{ full_isk(row.raw_cents) }}">{{ compact_isk(row.raw_cents) }}</td>
             <td class="text-end text-nowrap{% if mode == 'weighted' %} fw-bold text-success{% endif %}" title="{{ full_isk(row.true_cents) }}">{{ compact_isk(row.true_cents) }}</td>
             <td class="text-end text-nowrap">{% if row.damage_percent is not none %}{{ '%.3f'|format(row.damage_percent) }}%{% else %}<span title="No positive attacker damage recorded">—</span>{% endif %}</td>

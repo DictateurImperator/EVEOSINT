@@ -31,6 +31,16 @@ def config(members=None,**extra):
     return store.definition(dict(members=members or [dict(kind='corporation',id=10,op='include')],zones=[],**extra))
 
 
+def sample_killmail(id=100,loss=False):
+    ref=lambda kind,id,name:dict(entity_id=id,name=name,url=f'/{kind}/{id}',image_url=f'https://images.evetech.net/{kind}/{id}',ticker=None)
+    return dict(killmail_id=id,killmail_time=datetime(2026,1,2,12,tzinfo=UTC),date_key='2026-01-02',time_label='12:00',is_loss=loss,is_kill=not loss,
+        location=dict(system=ref('system',7,'Jita'),constellation=None,region=None),solar_system_id=7,
+        victim_ship=dict(type_id=638,name='Raven',image_url='https://images.evetech.net/types/638/icon?size=64'),
+        victim_character=ref('character',9,'Victim'),victim_corporation=ref('corporation',11,'Victim corp'),victim_alliance=None,
+        final_character=ref('character',1,'Attacker'),final_corporation=None,final_alliance=None,pilot_ship=None,pilot_weapon=None,
+        pilot_damage_done='50',pilot_damage_percent='50%',value_label='100',value_source=True,value_title='100 ISK',true_value_label='50',true_value_title='Group damage share',attackers_count=2)
+
+
 class DefinitionTests(unittest.TestCase):
     def test_dates_limits_types_and_exclusions(self):
         good=config();self.assertEqual(good['members'][0]['id'],10)
@@ -119,6 +129,7 @@ class RouteTests(unittest.TestCase):
     def setUp(self):
         app=FastAPI();app.include_router(routes.router);self.client=TestClient(app)
         self.user=dict(id=1,username='Owner',permissions={'entities.view'})
+        managers=patch.object(store,'managers',return_value=[]);managers.start();self.addCleanup(managers.stop)
         self.auth=patch.object(routes,'require_login',return_value=self.user);self.login=self.auth.start();self.addCleanup(self.auth.stop)
         self.group=dict(id=9,owner_id=1,name='<Private group>',description='Description',definition=config(),
                         revision=2,public_token='a'*32,public_tabs=['stats'],updated_at=datetime.now(UTC))
@@ -130,7 +141,7 @@ class RouteTests(unittest.TestCase):
             response=self.client.get('/public/groups/'+'a'*32+'?view=stats&period=2026-01')
             self.assertEqual(response.status_code,200)
             self.assertIn('&lt;Private group&gt;',response.text)
-            self.assertIn('No group statistics',response.text)
+            self.assertIn('Only the requested view is calculated',response.text)
             self.assertNotIn('groupEditor',response.text)
             self.assertNotIn('/account/groups',response.text)
             self.assertNotIn('Custom period (private)',response.text)
@@ -162,11 +173,11 @@ class RouteTests(unittest.TestCase):
 
     def test_monthly_history_is_fetched_on_request_and_save_handles_invalid_definitions(self):
         calculated=dict(self.result,monthly=[dict(period='2026-01',totals=self.result['totals'])])
-        with patch.object(store,'accessible',return_value=self.group),patch.object(store,'period_result',return_value=self.result),patch.object(store,'periods',return_value=[]),patch.object(jobs,'state',return_value=dict(status='completed',progress={'checked':1,'total':1},result=calculated)) as request_calculation:
+        with patch.object(store,'public',return_value=self.group),patch.object(store,'accessible',return_value=self.group),patch.object(store,'period_result',return_value=self.result),patch.object(store,'periods',return_value=[]),patch.object(jobs,'state',return_value=dict(status='completed',progress={'checked':1,'total':1},result=calculated)) as request_calculation:
             page=self.client.get('/account/groups/9?view=stats&period=2026-01')
             self.assertEqual(page.status_code,200);self.assertNotIn('prepareGroup',page.text)
             request_calculation.assert_not_called()
-            response=self.client.get('/account/groups/9/data?view=stats&period=2026-01')
+            response=self.client.get('/public/groups/'+'a'*32+'/data?view=stats&period=2026-01')
             self.assertEqual(response.status_code,200)
             self.assertIn('Monthly history',response.json()['html'])
             self.assertEqual(response.json()['html'].count('30.000%'),2)
@@ -194,7 +205,7 @@ class RouteTests(unittest.TestCase):
             self.assertEqual(self.client.get(url+'/data?view=ranking').status_code,403)
 
     def test_delegates_cannot_delete_or_delegate_and_owners_get_management_tab(self):
-        with patch.object(store,'accessible',return_value=self.group),patch.object(store,'period_result',return_value=None),patch.object(store,'periods',return_value=[]),patch.object(store,'managers',return_value=[]):
+        with patch.object(store,'public',return_value=self.group),patch.object(store,'accessible',return_value=self.group),patch.object(store,'period_result',return_value=None),patch.object(store,'periods',return_value=[]),patch.object(store,'managers',return_value=[]):
             response=self.client.get('/account/groups/9?view=management')
             self.assertEqual(response.status_code,200);self.assertIn('Add a manager',response.text)
             self.user['id']=2
@@ -206,11 +217,31 @@ class RouteTests(unittest.TestCase):
             self.assertEqual(self.client.get('/account/groups/9/managers/lookup?q=Owner').status_code,403)
 
     def test_on_request_ship_results_honor_the_owner_permissions(self):
-        self.user['id']=2;self.user['permissions'].add('superintel.view')
-        with patch.object(store,'accessible',return_value=self.group),patch.object(store,'period_result',return_value=self.result),patch.object(f.auth,'get_user_permissions',return_value={'entities.view'}),patch.object(jobs,'state',return_value=dict(status='running',progress={},result=None)) as calculate:
-            response=self.client.get('/account/groups/9/data?view=ships')
+        self.user['id']=2;self.user['permissions'].add('superintel.view');self.group['public_tabs']=['ships']
+        with patch.object(store,'public',return_value=self.group),patch.object(store,'accessible',return_value=self.group),patch.object(store,'period_result',return_value=self.result),patch.object(f.auth,'get_user_permissions',return_value={'entities.view'}),patch.object(jobs,'state',return_value=dict(status='running',progress={},result=None)) as calculate:
+            response=self.client.get('/public/groups/'+'a'*32+'/data?view=ships')
             self.assertEqual(response.status_code,202)
             calculate.assert_called_once_with(self.group,self.result,'ships',can_super=False)
+
+    def test_group_killboard_uses_the_exact_standard_renderer(self):
+        args=dict(killmail_page=dict(killmail_groups=[{'date':'2026-01-02','items':[sample_killmail(),sample_killmail(101,True)]}],killmail_pagination={},global_context=True),killmail_public=True,killmail_mode='api',error=None)
+        standard=routes.templates.get_template('entity_killmails_fragment.html').render(**args).strip()
+        group=routes.templates.get_template('personal_group_killboard.html').render(**args).strip()
+        self.assertEqual(group,standard)
+        for text in ['killmail-date-row','killmail-row-loss','killmail-row-kill','True ISK','Victim corp','Final Blow']:self.assertIn(text,group)
+        self.assertNotIn('href=',group)
+        signed_in=routes.templates.get_template('entity_killmails_fragment.html').render(**dict(args,killmail_public=False))
+        self.assertIn('href="/character/9"',signed_in)
+
+    def test_top_kills_is_separate_from_history_and_uses_existing_renderer(self):
+        calculated=dict(top_kills={'raw':[],'weighted':[]})
+        with patch.object(store,'public',return_value=self.group),patch.object(store,'period_result',return_value=self.result),patch.object(jobs,'state',return_value=dict(status='completed',progress={},result=calculated)) as calculation,patch.object(routes.queries,'killboard') as kb,patch.object(routes.local_rankings,'state') as ranking:
+            response=self.client.get('/public/groups/'+'a'*32+'/data?view=stats&stats_view=top-kills')
+            self.assertEqual(response.status_code,200)
+            calculation.assert_called_once_with(self.group,self.result,'top-kills',can_super=False)
+            kb.assert_not_called();ranking.assert_not_called()
+            self.assertIn('No valued kills',response.json()['html'])
+            self.assertEqual(self.client.get('/public/groups/'+'a'*32+'/data?view=stats&stats_view=forged').status_code,400)
 
     def test_member_search_returns_portraits_affiliations_and_an_entity_type_filter(self):
         coalitions=importlib.import_module(store.__package__+'.coalitions')
@@ -228,15 +259,30 @@ class RouteTests(unittest.TestCase):
             response=self.client.get('/account/groups/lookup?kind=member&entity_type=corporation&q=Co')
             find.assert_not_called();self.assertEqual([r['kind'] for r in response.json()['results']],['corporation'])
 
-    def test_private_custom_dates_are_on_demand_and_preparation_endpoints_are_gone(self):
-        with patch.object(store,'accessible',return_value=self.group),patch.object(store,'period_result',return_value=self.result) as period,patch.object(jobs,'state',return_value=dict(status='running',progress={},result=None)) as calculation:
-            response=self.client.get('/account/groups/9/data?view=stats&period=custom&from=2026-01-05&through=2026-01-20')
-            self.assertEqual(response.status_code,202)
-            period.assert_called_with(self.group,'custom',custom=(date(2026,1,5),date(2026,1,20)))
-            calculation.assert_called_once()
+    def test_private_pages_only_manage_and_never_read_or_calculate_results(self):
+        with patch.object(store,'accessible',return_value=self.group),patch.object(store,'period_result') as period,patch.object(store,'periods') as periods,patch.object(jobs,'state') as calculation,patch.object(routes.local_rankings,'state') as ranking,patch.object(routes.queries,'killboard') as kb:
+            for suffix in ['', '?view=stats', '?view=killboard', '?view=ranking', '?period=2026-01']:
+                response=self.client.get('/account/groups/9'+suffix)
+                self.assertEqual(response.status_code,200)
+                self.assertIn('id="shareGroup"',response.text)
+                self.assertNotIn('id="groupResult"',response.text)
+                self.assertNotIn('id="groupPeriod"',response.text)
+            for view in ['stats','ships','ranking','killboard']:
+                self.assertEqual(self.client.get('/account/groups/9/data?view='+view).status_code,404)
+            for mock in [period,periods,calculation,ranking,kb]:mock.assert_not_called()
             self.assertEqual(self.client.post('/account/groups/9/prepare').status_code,404)
             self.assertEqual(self.client.post('/account/groups/9/stop').status_code,404)
             self.assertEqual(self.client.get('/account/groups/9/status').status_code,404)
+
+    def test_public_landing_is_idle_until_a_view_is_requested(self):
+        with patch.object(store,'public',return_value=self.group),patch.object(store,'period_result') as period,patch.object(store,'periods') as periods,patch.object(jobs,'state') as calculation:
+            url='/public/groups/'+'a'*32
+            response=self.client.get(url)
+            self.assertEqual(response.status_code,200)
+            self.assertNotIn('id="groupResult"',response.text)
+            self.assertIn('?view=stats',response.text)
+            self.assertEqual(self.client.get(url+'/data').status_code,400)
+            for mock in [period,periods,calculation]:mock.assert_not_called()
 
     def test_managed_group_selection_includes_the_group_and_its_public_link(self):
         self.user['id']=2
@@ -246,9 +292,11 @@ class RouteTests(unittest.TestCase):
             self.assertIn('Groups you manage',response.text)
             self.assertIn('/account/groups/9',response.text)
             self.assertIn('/public/groups/'+'a'*32,response.text)
+            self.assertIn('data-copy-public-link',response.text)
+            self.assertIn('aria-label="Public link"',response.text)
 
     def test_private_editor_and_result_controls_render(self):
-        with patch.object(store,'accessible',return_value=self.group),patch.object(store,'period_result',return_value=self.result),patch.object(store,'periods',return_value=[dict(period='2026-01')]):
+        with patch.object(store,'public',return_value=self.group),patch.object(store,'accessible',return_value=self.group),patch.object(store,'period_result',return_value=self.result),patch.object(store,'periods',return_value=[dict(period='2026-01')]):
             self.assertEqual(self.client.get('/account/groups/9/edit').status_code,200)
             response=self.client.get('/account/groups/9?period=2026-01')
             self.assertEqual(response.status_code,200)
@@ -343,6 +391,27 @@ class DatabaseTests(unittest.TestCase):
             self.assertFalse(pages[2]['is_loss']);self.assertEqual(pages[2]['true_value_label'],'50')
             for bad in ['-1','999','0|2026-01-02T12:00:00|100','0|bad|100','0|2026-01-02T12:00:00+00:00|-1']:
                 with self.assertRaises(ValueError):q.killboard(self.conn,group,result,bad)
+
+    def test_killboard_participation_and_top_kills_use_same_saved_scope(self):
+        group=self.make_group();group['membership_rules']=q.load_rules(self.conn)
+        result=dict(from_date=JAN,through_date=date(2026,1,31))
+        def hydrate(conn,entries):return [dict(sample_killmail(id),killmail_time=at) for side,id,at in entries]
+        with patch.object(q.entities,'_hydrate_global_killmail_entries',side_effect=hydrate):
+            kills=q.killboard(self.conn,group,result,participation='kills')['rows']
+            losses=q.killboard(self.conn,group,result,participation='losses')['rows']
+            self.assertEqual([r['killmail_id'] for r in kills],[100])
+            self.assertEqual([r['killmail_id'] for r in losses],[102,101])
+            self.assertEqual(kills[0]['pilot_damage_percent'],'50.00%')
+            self.assertIsNone(kills[0]['pilot_ship']) # Final blow may belong to someone outside the group.
+            part=next(r for r in q.relations(self.conn) if r[0]==JAN)
+            candidates=q.month_top_kills(self.conn,group,part,JAN,FEB,q.zone_ids(self.conn,group['definition']))
+            self.assertEqual({r['killmail_id'] for r in candidates},{100})
+            self.assertEqual(len(candidates),2)
+            self.assertEqual(candidates[0]['raw_cents'],10000)
+            self.assertEqual(candidates[0]['true_cents'],5000)
+            top=q.hydrate_top_kills(self.conn,{'raw':[r for r in candidates if r['mode']=='raw'],'weighted':[r for r in candidates if r['mode']=='weighted']})
+            self.assertEqual(top['raw'][0]['ship_id'],638)
+            self.assertEqual(top['weighted'][0]['damage_percent'],50)
 
     def test_direct_inactive_member_and_dated_exclusion(self):
         c=config([dict(kind='character',id=9,op='include')])

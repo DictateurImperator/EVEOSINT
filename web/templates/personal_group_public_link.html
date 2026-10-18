@@ -1,0 +1,7 @@
+{% if group.public_token %}
+<div class="mt-3" data-public-link>
+  <label class="form-label small mb-1">Public link</label>
+  <div class="input-group"><input class="form-control" aria-label="Public link" readonly value="{{ request.url_for('public_page',token=group.public_token) }}"><button class="btn btn-outline-primary" type="button" data-copy-public-link>Copy</button></div>
+  <span class="muted-line small" data-copy-status role="status" aria-live="polite"></span>
+</div>
+{% else %}<p class="muted-line mt-3 mb-0">Enable public sharing in the group settings to get a public link.</p>{% endif %}

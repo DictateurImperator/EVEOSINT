@@ -1,10 +1,11 @@
 """Account-owned groups and a deliberately read-only anonymous publication surface."""
 from collections import OrderedDict
 from contextlib import closing
-from datetime import timedelta
+from datetime import date,timedelta
 from decimal import Decimal
 import json
 import logging
+import re
 import threading
 import time
 from psycopg2.errors import QueryCanceled
@@ -180,25 +181,27 @@ async def manage(request:Request,id:int):
 
 
 def selection(request,group,public=False):
-    allowed={'period','view','cursor','kind','mode','sort','page'} | ({'from','through'} if not public else set())
+    allowed={'period','view','cursor','kind','mode','sort','page','stats_view','participation'}
     if set(request.query_params)-allowed:raise HTTPException(400,'Only saved-scope periods, page selection and pagination are accepted.')
     view=request.query_params.get('view') or (group['public_tabs'][0] if public and group['public_tabs'] else 'stats')
     if view not in store.TABS and not (view=='management' and not public):raise HTTPException(400)
     if view!='ranking' and set(request.query_params)&{'kind','mode','sort','page'}:raise HTTPException(400)
+    if view!='stats' and 'stats_view' in request.query_params:raise HTTPException(400)
+    if request.query_params.get('stats_view','history') not in ('history','top-kills'):raise HTTPException(400)
+    if view!='killboard' and 'participation' in request.query_params:raise HTTPException(400)
+    if request.query_params.get('participation','both') not in ('both','kills','losses'):raise HTTPException(400)
     if view=='ranking':ranking_options(request)
     if public and view not in group['public_tabs']:raise HTTPException(403)
     period=request.query_params.get('period','all')
     if public and period=='custom':raise HTTPException(403)
-    custom=None
-    try:
-        if period=='custom' and not public:
-            start=store.day(request.query_params.get('from'));end=store.day(request.query_params.get('through'))
-            if not start or not end or start>end:raise ValueError('Choose both dates in chronological order.')
-            custom=(start,end)
-        elif set(request.query_params)&{'from','through'}:raise ValueError('Dates are only accepted for a private custom period.')
-        result=None if view=='management' else store.period_result(group,period,custom=custom)
+    try:result=store.period_result(group,period)
     except ValueError as exc:raise HTTPException(400,str(exc))
     return view,period,result
+
+
+def ratio_number(totals):
+    raw=Decimal(str(totals['destroyed_cents']))
+    return 100*Decimal(str(totals['weighted_destroyed_cents']))/raw if raw else None
 
 
 def ratio_label(totals):
@@ -207,9 +210,18 @@ def ratio_label(totals):
 
 
 def render_page(request,group,user=None,public=False):
-    view,period,result=selection(request,group,public)
-    available=store.periods(group) if view!='management' else []
-    if public and not result:raise HTTPException(404)
+    if not public:
+        # Private URLs are definition/access management, including legacy result URLs.
+        view='management';period='all';result=None;available=[]
+    elif not request.query_params.get('view'):
+        if set(request.query_params)-{'period'}:raise HTTPException(400)
+        period=request.query_params.get('period','all')
+        if period!='all' and not re.fullmatch(r'\d{4}(-\d{2})?',period):raise HTTPException(400)
+        view='overview';result=None;available=[]
+    else:
+        view,period,result=selection(request,group,public)
+        available=store.periods(group)
+        if not result:raise HTTPException(404)
     base=f"/public/groups/{group['public_token']}" if public else f"{PRIVATE}/{group['id']}"
     ctx=dict(request=request,title=group['name'],show_app_layout=False,username=None) if public else context(request,user,group['name'])
     # Never pass definitions, private rules, owner IDs or account metadata to public templates.
@@ -217,8 +229,9 @@ def render_page(request,group,user=None,public=False):
         group=None if public else group,base_url=base,view=view,period=period,result=result,is_owner=not public and user['id']==group['owner_id'],
         managers=store.managers(group['id'],user['id']) if not public and view=='management' and user['id']==group['owner_id'] else [],
         ranking=ranking_options(request) if view=='ranking' else None,
-        available=available,tabs=group['public_tabs'] if public else list(store.TABS),compact_isk=compact_isk,full_isk=full_isk,
-        ratio_for=ratio_label,custom_from=request.query_params.get('from',''),custom_through=request.query_params.get('through',''))
+        stats_view=request.query_params.get('stats_view','history'),participation=request.query_params.get('participation','both'),
+        available=available,tabs=group['public_tabs'] if public else [],compact_isk=compact_isk,full_isk=full_isk,
+        ratio_for=ratio_label)
     return no_store(templates.TemplateResponse(request=request,name='personal_group.html',context=ctx))
 
 
@@ -236,6 +249,8 @@ def public_page(request:Request,token:str):
 
 
 def data_result(request,group,public=False):
+    if not public:raise HTTPException(404)
+    if not request.query_params.get('view'):raise HTTPException(400,'Choose a result page first.')
     view,period,result=selection(request,group,public)
     if not result:raise HTTPException(404,'This period does not overlap available group history.')
     if view!='killboard' and request.query_params.get('cursor'):raise HTTPException(400)
@@ -245,30 +260,35 @@ def data_result(request,group,public=False):
         state=local_rankings.state(group,result,options['kind'],options['mode'],options['sort'])
         start=(options['page']-1)*50;rows=state['rows'][start:start+50]
         base=f"/public/groups/{group['public_token']}" if public else f"{PRIVATE}/{group['id']}"
-        def link(page):return base+'?'+urlencode(dict(view='ranking',period=period,**dict(options,page=page),**({'from':request.query_params['from'],'through':request.query_params['through']} if period=='custom' else {})))
+        def link(page):return base+'?'+urlencode(dict(view='ranking',period=period,**dict(options,page=page)))
         html=templates.get_template('personal_group_ranking.html').render(rows=rows,public=public,kind=options['kind'],compact_isk=compact_isk,
-            full_isk=full_isk,previous=link(options['page']-1) if options['page']>1 else None,next_page=link(options['page']+1) if start+50<len(state['rows']) else None)
+            full_isk=full_isk,public_group=public,totals_ready=True,membership_date=result['through_date'],previous=link(options['page']-1) if options['page']>1 else None,next_page=link(options['page']+1) if start+50<len(state['rows']) else None)
         return no_store(JSONResponse(dict(html=html,status=state['status'],progress=state['progress'],error=state.get('error')),status_code=202 if state['status'] in ('running','busy') else 200))
     if view in ('stats','ships'):
         can_super=False
         if view=='ships':
             from .auth import get_user_permissions
             can_super='superintel.view' in get_user_permissions(group['owner_id'])
-        state=jobs.state(group,result,view,can_super=can_super)
+        calculation='top-kills' if view=='stats' and request.query_params.get('stats_view')=='top-kills' else view
+        state=jobs.state(group,result,calculation,can_super=can_super)
         calculated=state['result'];html=''
         if calculated:
-            if view=='stats':
+            if calculation=='top-kills':
+                html=templates.get_template('combat_top_kills_fragment.html').render(top_kills=calculated['top_kills'],provisional=state['status']!='completed',public_group=public,compact_isk=compact_isk,full_isk=full_isk)
+            elif view=='stats':
                 base=f"/public/groups/{group['public_token']}" if public else f"{PRIVATE}/{group['id']}"
-                html=templates.get_template('personal_group_stats.html').render(result=calculated,base_url=base,compact_isk=compact_isk,full_isk=full_isk,ratio_for=ratio_label)
+                rows=[dict(m['totals'],month=date.fromisoformat(m['period']+'-01'),ratio=ratio_number(m['totals'])) for m in calculated['monthly'] if m['totals']['kills'] or m['totals']['losses']]
+                combat=dict(rows=rows,totals=dict(calculated['totals'],ratio=ratio_number(calculated['totals'])))
+                html=templates.get_template('personal_group_stats.html').render(combat_stats=combat,compact_isk=compact_isk,full_isk=full_isk)
             else:
                 with closing(db()) as conn:
                     conn.set_session(readonly=True)
                     with conn:
                         from .entities import _ship_counts_to_payload
                         ships=_ship_counts_to_payload(conn,calculated['ship_counts'])
-                html=templates.get_template('personal_group_ships.html').render(result=calculated,ships=ships)
+                html=templates.get_template('personal_group_ships.html').render(result=calculated,recent_entities=ships,entity_index={'entity_type':'ship'},pilotable_page={'entity_type':'group','ready':True},public_group=public,error=None)
         return no_store(JSONResponse(dict(html=html,status=state['status'],progress=state['progress'],error=state.get('error')),status_code=202 if state['status'] in ('running','busy') else 200))
-    key=(group['id'],group['revision'],str(result['built_at']),public,view,period,result['from_date'],result['through_date'],request.query_params.get('cursor',''))
+    key=(group['id'],group['revision'],str(result['built_at']),public,view,period,result['from_date'],result['through_date'],request.query_params.get('cursor',''),request.query_params.get('participation','both'))
     with _LOCK:
         hit=_CACHE.get(key)
         if hit and time.monotonic()-hit['updated']<120:
@@ -282,9 +302,12 @@ def data_result(request,group,public=False):
                 cur.execute("SET LOCAL statement_timeout='8s'");cur.execute('SET LOCAL jit=off')
                 if view!='killboard':raise HTTPException(400)
                 transient=dict(group,membership_rules=queries.load_rules(conn))
-                try:kb=queries.killboard(conn,transient,result,request.query_params.get('cursor',''))
+                try:kb=queries.killboard(conn,transient,result,request.query_params.get('cursor',''),participation=request.query_params.get('participation','both'))
                 except ValueError:raise HTTPException(400,'Invalid cursor.')
-                html=templates.get_template('personal_group_killboard.html').render(rows=kb['rows'],public=public)
+                from .entities import _group_killmails_by_date
+                html=templates.get_template('personal_group_killboard.html').render(
+                    killmail_page=dict(killmail_groups=_group_killmails_by_date(kb['rows']),killmail_pagination={},global_context=True),
+                    killmail_public=public,killmail_mode='api',error=None)
                 payload=dict(html=html,next_cursor=kb['next_cursor'],scanned=kb['scanned'],total=kb['total'])
         with _LOCK:
             _CACHE[key]=dict(updated=time.monotonic(),status='completed',payload=payload);_CACHE.move_to_end(key)
@@ -294,12 +317,6 @@ def data_result(request,group,public=False):
         LOG.warning('Personal group page exceeded query limit group=%s period=%s',group['id'],period)
         return no_store(JSONResponse({'error':'This historical scan reached the query time limit. Choose a month or year to narrow it.'},status_code=504))
     finally:_SLOTS.release()
-
-
-@router.get(PRIVATE+'/{id}/data')
-def data(request:Request,id:int):
-    user,group=group_for(request,id)
-    return data_result(request,group)
 
 
 @router.get('/public/groups/{token}/data')

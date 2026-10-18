@@ -64,19 +64,27 @@ def calculate(group,period,view,can_super,report):
                 report(checked=1,total=1,result=result)
                 return result
             parts=[r for r in q.relations(source) if r[0]<end and q.next_month(r[0])>start]
-            zones=q.zone_ids(source,config);monthly=[]
+            zones=q.zone_ids(source,config);monthly=[];top={'raw':[],'weighted':[]}
+            group=dict(group,membership_rules=rules)
             for index,relation in enumerate(parts):
                 month=relation[0]
                 report(phase='Scanning killmails',checked=index,total=len(parts),current_month=month.strftime('%Y-%m'))
+                if view=='top-kills':
+                    candidates=q.month_top_kills(source,group,relation,max(start,month),min(end,q.next_month(month)),zones)
+                    for mode,field in [('raw','raw_cents'),('weighted','true_cents')]:
+                        top[mode]=sorted(top[mode]+[r for r in candidates if r['mode']==mode],key=lambda r:(r[field],r['killmail_time'],r['killmail_id']),reverse=True)[:20]
+                    report(checked=index+1,result=dict(period,top_kills=q.hydrate_top_kills(source,top)))
+                    continue
                 totals=q.month_totals(source,config,rules,relation,max(start,month),min(end,q.next_month(month)),zones)
                 monthly.append(dict(period=month.strftime('%Y-%m'),totals=totals))
                 result=dict(period,totals=_sum([m['totals'] for m in monthly]),monthly=list(monthly))
                 report(checked=index+1,result=result)
+            if view=='top-kills':return dict(period,top_kills=q.hydrate_top_kills(source,top))
             return dict(period,totals=_sum([m['totals'] for m in monthly]),monthly=monthly)
 
 
 def state(group,period,view,can_super=False):
-    if view not in ('stats','ships'):raise ValueError('Invalid group result.')
+    if view not in ('stats','ships','top-kills'):raise ValueError('Invalid group result.')
     key=(group['id'],group['revision'],period['from_date'],period['through_date'],view,can_super)
     with _LOCK:
         now=time.monotonic()

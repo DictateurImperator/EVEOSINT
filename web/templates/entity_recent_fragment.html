@@ -237,23 +237,23 @@
           <div class="ship-filter-card">
             <div class="ship-filter-main">
               {% if entity.faction_logo_url %}
-                <a class="ship-filter-faction-link" href="{{ ship_filter_base_url }}faction={{ entity.faction_name|urlencode }}" title="{{ entity.faction_name or 'Other' }}" aria-label="{{ entity.faction_name or 'Other' }}">
+                <{{ 'span' if public_group else 'a' }} class="ship-filter-faction-link" {% if not public_group %}href="{{ ship_filter_base_url }}faction={{ entity.faction_name|urlencode }}"{% endif %} title="{{ entity.faction_name or 'Other' }}" aria-label="{{ entity.faction_name or 'Other' }}">
                   <img class="ship-filter-faction-icon" src="{{ entity.faction_logo_url }}" alt="{{ entity.faction_name or 'Other' }}" loading="lazy" onerror="this.style.display='none'">
-                </a>
+                </{{ 'span' if public_group else 'a' }}>
               {% endif %}
 
-              <a class="ship-tree-link" href="{{ entity.url }}">
+              <{{ 'span' if public_group else 'a' }} class="ship-tree-link" {% if not public_group %}href="{{ entity.url }}"{% endif %}>
                 {% if entity.image_url %}
                   <img class="ship-tree-icon" src="{{ entity.image_url }}" alt="" loading="lazy" onerror="this.style.display='none'">
                 {% endif %}
                 <span>{{ entity.name }}{% if entity.pilot_count is defined %} <span class="muted-line">({{ entity.pilot_count }})</span>{% endif %}</span>
-              </a>
+              </{{ 'span' if public_group else 'a' }}>
             </div>
             <div class="ship-filter-meta">
               {{ entity.faction_name or "Other" }}
-              {% if entity.ship_display_size %} · <a class="ship-tree-title-link" href="{{ ship_filter_base_url }}size={{ entity.ship_display_size|urlencode }}">{{ entity.ship_display_size }}</a>{% endif %}
-              {% if entity.ship_tier %} · <a class="ship-tree-title-link" href="{{ ship_filter_base_url }}tier={{ entity.ship_tier|urlencode }}">{{ entity.ship_tier }}</a>{% endif %}
-              {% if entity.ship_size %} · <a class="ship-tree-title-link" href="{{ ship_filter_base_url }}group={{ entity.ship_size|urlencode }}">{{ entity.ship_size }}</a>{% endif %}
+              {% if entity.ship_display_size %} · <{{ 'span' if public_group else 'a' }} class="ship-tree-title-link" {% if not public_group %}href="{{ ship_filter_base_url }}size={{ entity.ship_display_size|urlencode }}"{% endif %}>{{ entity.ship_display_size }}</{{ 'span' if public_group else 'a' }}>{% endif %}
+              {% if entity.ship_tier %} · <{{ 'span' if public_group else 'a' }} class="ship-tree-title-link" {% if not public_group %}href="{{ ship_filter_base_url }}tier={{ entity.ship_tier|urlencode }}"{% endif %}>{{ entity.ship_tier }}</{{ 'span' if public_group else 'a' }}>{% endif %}
+              {% if entity.ship_size %} · <{{ 'span' if public_group else 'a' }} class="ship-tree-title-link" {% if not public_group %}href="{{ ship_filter_base_url }}group={{ entity.ship_size|urlencode }}"{% endif %}>{{ entity.ship_size }}</{{ 'span' if public_group else 'a' }}>{% endif %}
               {% if entity.group_name %} · {{ entity.group_name }}{% endif %}
             </div>
           </div>
@@ -293,7 +293,7 @@
     {% for faction in factions %}
       <section class="ship-tree-faction {% if loop.first %}active{% endif %}" data-ship-faction-panel="{{ loop.index0 }}">
         <div class="ship-tree-faction-title">
-          <a class="ship-tree-title-link" href="{{ ship_filter_base_url }}faction={{ faction|urlencode }}">{{ faction or "Other" }}{{ pilot_count_suffix('faction', faction or 'Other') }}</a>
+          <{{ 'span' if public_group else 'a' }} class="ship-tree-title-link" {% if not public_group %}href="{{ ship_filter_base_url }}faction={{ faction|urlencode }}"{% endif %}>{{ faction or "Other" }}{{ pilot_count_suffix('faction', faction or 'Other') }}</{{ 'span' if public_group else 'a' }}>
         </div>
 
         {% set combat_sizes = [] %}
@@ -331,7 +331,7 @@
                 {% if label_sizes %}
                   <div class="ship-tree-size-block" data-size-label="{{ size_label }}">
                     <div class="ship-tree-size-block-header">
-                      <a class="ship-tree-title-link" href="{{ ship_filter_base_url }}size={{ size_label|urlencode }}">{{ size_label }}{{ pilot_count_suffix('ship_display_size', size_label) }}</a>
+                      <{{ 'span' if public_group else 'a' }} class="ship-tree-title-link" {% if not public_group %}href="{{ ship_filter_base_url }}size={{ size_label|urlencode }}"{% endif %}>{{ size_label }}{{ pilot_count_suffix('ship_display_size', size_label) }}</{{ 'span' if public_group else 'a' }}>
                       {% if size_label == "S" %}
                         <small>Small</small>
                       {% elif size_label == "M" %}
@@ -348,7 +348,7 @@
                     <div class="ship-tree-size-inner">
                       {% for size in label_sizes %}
                         <div class="ship-tree-size">
-                          <div class="ship-tree-size-title"><a class="ship-tree-title-link" href="{{ ship_filter_base_url }}group={{ size|urlencode }}">{{ size }}{{ pilot_count_suffix('filter_group', size) }}</a></div>
+                          <div class="ship-tree-size-title"><{{ 'span' if public_group else 'a' }} class="ship-tree-title-link" {% if not public_group %}href="{{ ship_filter_base_url }}group={{ size|urlencode }}"{% endif %}>{{ size }}{{ pilot_count_suffix('filter_group', size) }}</{{ 'span' if public_group else 'a' }}></div>
 
                           {% set tiers = [] %}
                           {% for entity in recent_entities %}
@@ -359,7 +359,7 @@
 
                           {% for tier in tiers %}
                             <div class="ship-tree-tier">
-                              <div class="ship-tree-tier-title"><a class="ship-tree-title-link" href="{{ ship_filter_base_url }}tier={{ tier|urlencode }}">{{ tier }}{{ pilot_count_suffix('ship_tier', tier) }}</a></div>
+                              <div class="ship-tree-tier-title"><{{ 'span' if public_group else 'a' }} class="ship-tree-title-link" {% if not public_group %}href="{{ ship_filter_base_url }}tier={{ tier|urlencode }}"{% endif %}>{{ tier }}{{ pilot_count_suffix('ship_tier', tier) }}</{{ 'span' if public_group else 'a' }}></div>
 
                               {% set groups = [] %}
                               {% for entity in recent_entities %}
@@ -369,17 +369,17 @@
                               {% endfor %}
 
                               {% for group in groups %}
-                                <div class="ship-tree-subgroup-title"><a class="ship-tree-title-link" href="{{ ship_filter_base_url }}group={{ group|urlencode }}">{{ group or "Other" }}{{ pilot_count_suffix('filter_group', group or 'Other') }}</a></div>
+                                <div class="ship-tree-subgroup-title"><{{ 'span' if public_group else 'a' }} class="ship-tree-title-link" {% if not public_group %}href="{{ ship_filter_base_url }}group={{ group|urlencode }}"{% endif %}>{{ group or "Other" }}{{ pilot_count_suffix('filter_group', group or 'Other') }}</{{ 'span' if public_group else 'a' }}></div>
 
                                 <div class="ship-tree-list">
                                   {% for entity in recent_entities %}
                                     {% if entity.faction_name == faction and entity.ship_size == size and (entity.ship_display_size or "UNKNOWN SIZE") == size_label and entity.ship_tier == tier and entity.group_name == group %}
-                                      <a class="ship-tree-link" href="{{ entity.url }}">
+                                      <{{ 'span' if public_group else 'a' }} class="ship-tree-link" {% if not public_group %}href="{{ entity.url }}"{% endif %}>
                                         {% if entity.image_url %}
                                           <img class="ship-tree-icon" src="{{ entity.image_url }}" alt="" loading="lazy" onerror="this.style.display='none'">
                                         {% endif %}
                                         <span>{{ entity.name }}{% if entity.pilot_count is defined %} <span class="muted-line">({{ entity.pilot_count }})</span>{% endif %}</span>
-                                      </a>
+                                      </{{ 'span' if public_group else 'a' }}>
                                     {% endif %}
                                   {% endfor %}
                                 </div>
@@ -418,13 +418,13 @@
           {% for entity in recent_entities %}
             <tr>
               <td>
-                <a class="text-decoration-none fw-semibold d-inline-flex align-items-center gap-2" href="{{ entity.url }}">
+                <{{ 'span' if public_group else 'a' }} class="text-decoration-none fw-semibold d-inline-flex align-items-center gap-2" {% if not public_group %}href="{{ entity.url }}"{% endif %}>
                   {% if entity.image_url %}
                     <img src="{{ entity.image_url }}" alt="" loading="lazy" onerror="this.style.display='none'" style="width:32px;height:32px;border-radius:50%;object-fit:cover;background:rgba(255,255,255,0.06);">
                   {% endif %}
                   <span>{{ entity.name }}{% if entity.pilot_count is defined %} <span class="muted-line">({{ entity.pilot_count }})</span>{% endif %}</span>
                   {% if entity.ticker %}<span class="muted-line">[{{ entity.ticker }}]</span>{% endif %}
-                </a>
+                </{{ 'span' if public_group else 'a' }}>
               </td>
               {% if entity_index.entity_type == "constellation" %}
                 <td class="muted-line">{{ entity.region_name or "-" }}</td>

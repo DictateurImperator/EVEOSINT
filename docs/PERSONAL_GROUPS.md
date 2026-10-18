@@ -13,28 +13,35 @@ The editor uses the same grouped search renderer as the top bar.
 
 There is no preparation button, preparation endpoint, scheduled group job,
 precomputed monthly group table, persistent result or saved member roster.
-Opening a result page fetches its data endpoint, which calculates only the
-requested view and period. Available all/year/month choices are derived from
+Private group pages are management only, including legacy private result URLs.
+They do not load result data or query source-period metadata; private data endpoints
+return 404. Opening the bare public link is also idle. Clicking an allowed result
+page fetches its data endpoint, which calculates only the requested view and period. Available all/year/month choices are derived from
 imported partition metadata and clipped to the group dates and current UTC day.
-Managers can also request a private custom range with GET dates; this saves no
-new analysis or configuration. Public visitors cannot supply those dates.
+Public visitors cannot supply arbitrary dates or change the saved scope.
 
 - Combat stats scan the selected months and display provisional totals and
   monthly history as each month completes. Kills/losses include unvalued entries;
   incomplete ISK totals are identified. True ISK divides matching group damage
   by damage from all attackers, including NPCs. Losses count in full.
+- Top kills are a separate explicit Combat stats request. The scan keeps only
+  the best 20 raw and True candidates per month and merges these bounded lists,
+  using the standard top-kills renderer. Opening monthly history does not run it.
 - Pilotable ships calculate only the requested interval's distinct known members,
   including inactive members, and read existing latest inferred skills. Combat
   areas and ship filters restrict killmails, not this roster. Historical skill
   levels and uncollected inactive members cannot be reconstructed. Coverage is
-  shown. Supercapital visibility follows the owner's current permission.
-- Killboards reread fixed-scope source data in pages of 50, checking at most three
+  shown. The ship tree uses the same component as standard entity pages.
+  Supercapital visibility follows the owner's current permission.
+- Killboards use the standard shared renderer and styles, KILL / VICTIM / ALL
+  selection and fixed-scope source data in pages of 100, checking at most three
   months per request, with continuation cursor and visible progress.
 - Local rankings scan the requested period in the background. Characters,
   corporations and alliances get credit only for group members' contributions.
   A corporation/alliance gets full value once per kill, regardless of how many
   matching pilots participate. True credit uses their combined matching damage.
   A month is ranked without lifetime cumulative scores. Top 1,000, paged by 50.
+  Results use the same ranking table and styles as the standard leaderboard.
   Exact running scores use a connection-local PostgreSQL temporary table that
   disappears on connection close; no permanent source table is changed.
 
@@ -70,7 +77,7 @@ access and cascades only to its definition/access data.
 The owner can appoint up to 20 active site accounts as managers. They can edit
 and manage publication; only the owner may delete the group or change delegates.
 Delegated groups appear separately in the manager's **My groups**, with direct
-private and public-page links, and do not use that manager's owned-group quota.
+private and public-page links, a visible public URL with a Copy button, and do not use that manager's owned-group quota.
 All private operations require login, entity-read access and current ownership
 or delegation. Every mutation is covered by the application CSRF guard.
 

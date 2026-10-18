@@ -255,8 +255,9 @@ def pilotable_counts(conn,config,rules,start,end,check=lambda:None):
     return dict(counts=counts,roster_count=total,skills_count=known,ready=True)
 
 
-def killboard(conn,group,result,cursor='',limit=50):
+def killboard(conn,group,result,cursor='',limit=100,participation='both'):
     """Bounded fixed-scope pagination; at most three historical months per request."""
+    if participation not in ('both','kills','losses'):raise ValueError('Invalid participation.')
     start=result['from_date'];end=result['through_date']+timedelta(days=1)
     parts=[r for r in relations(conn) if r[0]<end and next_month(r[0])>start]
     index=0;before=None
@@ -276,7 +277,14 @@ def killboard(conn,group,result,cursor='',limit=50):
     while index<len(parts) and len(entries)<limit and scanned<3:
         relation=parts[index];month,kills,attackers=relation
         query,params=match_sql(group['definition'],rules,kills,attackers,max(start,month),min(end,next_month(month)),zones,cursor=before,ship_terms=ship_terms(conn,group['definition']))
-        query+=sql.SQL(" SELECT CASE WHEN is_loss THEN 'loss' ELSE 'kill' END,killmail_id,killmail_time,estimated_value_cents FROM matches ORDER BY killmail_time DESC,killmail_id DESC LIMIT %s")
+        if participation=='losses':
+            where=sql.SQL(' WHERE is_loss')
+        elif participation=='kills':
+            actor,ap=actor_predicate(group['definition'],rules,'a')
+            where=sql.SQL(' WHERE EXISTS(SELECT 1 FROM {attackers} a WHERE a.killmail_id=matches.killmail_id AND a.killmail_time=matches.killmail_time AND {actor})').format(attackers=attackers,actor=sql.SQL(actor))
+            params+=ap
+        else:where=sql.SQL('')
+        query+=sql.SQL(" SELECT CASE WHEN is_loss THEN 'loss' ELSE 'kill' END,killmail_id,killmail_time,estimated_value_cents FROM matches {where} ORDER BY killmail_time DESC,killmail_id DESC LIMIT %s").format(where=where)
         remaining=limit-len(entries)
         with conn.cursor() as cur:
             cur.execute(query,params+[remaining+1]);rows=cur.fetchall()
@@ -310,4 +318,46 @@ def killboard(conn,group,result,cursor='',limit=50):
             total,own=credits.get(key,(0,0))
             credit=Decimal(cents) if row['is_loss'] else Decimal(cents)*own/total if total else Decimal(0)
             row['true_value_label']=entities._killmail_value_fields(credit)['value_label']
+            row['true_value_title']='Full loss value' if row['is_loss'] else 'Group damage share of this kill, including NPC damage in the total'
+        total,own=credits.get(key,(0,0))
+        row.update(pilot_damage_done=str(own),pilot_damage_percent=f'{100*own/total:.2f}%' if total else '—',
+                   pilot_ship=None,pilot_weapon=None,pilot_final_blow=False)
     return dict(rows=rows,next_cursor=next_cursor,scanned=index,total=len(parts))
+
+
+def month_top_kills(conn,group,relation,start,end,zones):
+    """Keep at most 20 candidates per credit mode per month, never a full kill list."""
+    month,kills,attackers=relation
+    query,params=match_sql(group['definition'],group['membership_rules'],kills,attackers,start,end,zones,ship_terms=ship_terms(conn,group['definition']))
+    actor,ap=actor_predicate(group['definition'],group['membership_rules'],'a')
+    query+=sql.SQL(''' , scored AS MATERIALIZED (
+       SELECT m.killmail_id,m.killmail_time,m.estimated_value_cents AS raw_cents,
+        CASE WHEN d.total>0 THEN m.estimated_value_cents*d.own/d.total ELSE 0 END AS true_cents,
+        100*d.own/NULLIF(d.total,0) AS damage_percent
+       FROM matches m CROSS JOIN LATERAL (
+         SELECT bool_or({actor}) AS is_kill,sum(GREATEST(COALESCE(a.damage_done,0),0)::numeric) AS total,
+          sum(GREATEST(COALESCE(a.damage_done,0),0)::numeric) FILTER(WHERE {actor}) AS own
+         FROM {attackers} a WHERE a.killmail_id=m.killmail_id AND a.killmail_time=m.killmail_time) d
+       WHERE m.estimated_value_cents IS NOT NULL AND d.is_kill)
+       (SELECT 'raw' AS mode,* FROM scored ORDER BY raw_cents DESC,killmail_time DESC,killmail_id DESC LIMIT 20)
+       UNION ALL
+       (SELECT 'weighted' AS mode,* FROM scored ORDER BY true_cents DESC,killmail_time DESC,killmail_id DESC LIMIT 20)
+    ''').format(actor=sql.SQL(actor),attackers=attackers)
+    with conn.cursor() as cur:
+        cur.execute(query,params+ap+ap)
+        names=[c.name for c in cur.description]
+        return [dict(zip(names,row)) for row in cur]
+
+
+def hydrate_top_kills(conn,top):
+    scores={(r['killmail_id'],r['killmail_time']):r for rows in top.values() for r in rows}
+    hydrated=entities._hydrate_global_killmail_entries(conn,[('kill',id,at) for id,at in scores])
+    details={}
+    for row in hydrated:
+        key=row['killmail_id'],row['killmail_time']
+        victim=row.get('victim_character') or row.get('victim_corporation') or {}
+        ship=row.get('victim_ship') or {};system=(row.get('location') or {}).get('system') or {}
+        details[key]=dict(scores[key],ship_id=ship.get('type_id'),ship_name=ship.get('name','Unknown ship'),
+            victim_id=(row.get('victim_character') or {}).get('entity_id'),victim_corporation_id=(row.get('victim_corporation') or {}).get('entity_id'),
+            victim_name=victim.get('name','Unknown victim'),system_id=row.get('solar_system_id'),system_name=system.get('name','Unknown system'))
+    return {mode:[details[(r['killmail_id'],r['killmail_time'])] for r in rows if (r['killmail_id'],r['killmail_time']) in details] for mode,rows in top.items()}
