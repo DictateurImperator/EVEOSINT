@@ -7,6 +7,7 @@ import threading
 import time
 from psycopg2 import sql
 from .db import db
+from . import personal_group_scans as scans
 from .personal_group_jobs import start_reaper,NoDemand
 from . import personal_group_queries as q
 from .killmail_rankings import KINDS,SORTS
@@ -77,9 +78,15 @@ def top_rows(conn,kind,mode,sort):
 
 def scan(group,result,kind,mode,sort,report):
     with closing(db()) as conn:
+        control=getattr(report,'control',None)
+        if control:control.bind(conn)
         with conn.cursor() as cur:
-            cur.execute('SELECT pg_try_advisory_lock(%s)',(LOCK_ID,))
-            if not cur.fetchone()[0]:raise ValueError('Another local ranking is scanning history. Retry when it finishes.')
+            while True:
+                if control:control.check()
+                cur.execute('SELECT pg_try_advisory_lock(%s)',(LOCK_ID,))
+                if cur.fetchone()[0]:break
+                report(phase='Waiting for previous scan to stop')
+                time.sleep(.1)
         conn.commit();score_table(conn)
         with conn,conn.cursor() as cur:
             cur.execute("SET LOCAL timezone='UTC';SET LOCAL statement_timeout='120s';SET LOCAL work_mem='32MB';SET LOCAL jit=off")
@@ -107,27 +114,41 @@ def state(group,result,kind,mode,sort):
     with _LOCK:
         now=time.monotonic()
         previous=_RUNS.get(key)
+        if previous and previous.get('control') and previous['control'].cancelled.is_set():previous=None
         if previous and (previous['status']=='running' or now-previous['updated']<(10 if previous['status']=='failed' else 300)):
+            previous['control'].subscribe()
             previous['last_requested']=now
             return dict(previous,progress=dict(previous['progress']),rows=list(previous['rows']))
-        if any(run['status']=='running' for run in _RUNS.values()):
+        if any(run['status']=='running' and not run['control'].cancelled.is_set() for run in _RUNS.values()):
             return dict(status='busy',progress={},rows=[],error='Another local ranking is scanning history. Please retry shortly.')
         run=dict(status='running',progress=dict(checked=0,total=0,phase='Starting'),rows=[],updated=now,last_requested=now)
+        control=scans.Control();control.subscribe();run['control']=control
         _RUNS[key]=run;_RUNS.move_to_end(key)
         while len(_RUNS)>8:_RUNS.popitem(last=False)
         def report(**values):
             with _LOCK:
+                control.check()
                 if time.monotonic()-run['last_requested']>60:raise NoDemand()
                 if 'rows' in values:run['rows']=values.pop('rows')
                 run['progress'].update(values);run['updated']=time.monotonic()
+        report.control=control
         def worker():
             try:
                 rows=scan(group,result,kind,mode,sort,report)
-                with _LOCK:run.update(status='completed',rows=rows,updated=time.monotonic())
-            except NoDemand:
-                with _LOCK:_RUNS.pop(key,None)
+                with _LOCK:
+                    control.check()
+                    control.unbind()
+                    run.update(status='completed',rows=rows,updated=time.monotonic())
+            except (NoDemand,scans.Cancelled):
+                with _LOCK:
+                    if _RUNS.get(key) is run:_RUNS.pop(key,None)
             except Exception as exc:
+                if control.cancelled.is_set():
+                    with _LOCK:
+                        if _RUNS.get(key) is run:_RUNS.pop(key,None)
+                    return
                 LOG.exception('Group ranking failed group=%s',group['id'])
                 with _LOCK:run.update(status='failed',error=str(exc) if isinstance(exc,ValueError) else 'This scan could not complete. Try a month to narrow the period.',updated=time.monotonic())
+            finally:control.unbind()
         threading.Thread(target=worker,name=f"group-ranking-{group['id']}",daemon=True).start()
         return dict(run,progress=dict(run['progress']),rows=list(run['rows']))

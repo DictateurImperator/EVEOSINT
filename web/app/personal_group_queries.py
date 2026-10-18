@@ -31,9 +31,9 @@ def actor_fields(alias,victim=False,history=True):
     return dict(character=char,corporation=corp,alliance=ally)
 
 
-def actor_predicate(config,rules,alias,victim=False,history=True):
-    at=f'{alias}.killmail_time'
-    fields=actor_fields(alias,victim,history)
+def actor_predicate(config,rules,alias,victim=False,history=True,fields=None,at=None):
+    at=at or f'{alias}.killmail_time'
+    fields=fields or actor_fields(alias,victim,history)
     budget=[0]
     def combine(parts,operator,empty='false'):
         if not parts:return empty,[]
@@ -255,8 +255,11 @@ def pilotable_counts(conn,config,rules,start,end,check=lambda:None):
     return dict(counts=counts,roster_count=total,skills_count=known,ready=True)
 
 
-def killboard(conn,group,result,cursor='',limit=100,participation='both'):
+def killboard(conn,group,result,cursor='',limit=100,participation='both',mode='api',check=lambda:None):
     """Bounded fixed-scope pagination; at most three historical months per request."""
+    if mode not in ('api','total','hidden'):raise ValueError('Invalid killboard mode.')
+    if mode!='api':return mer_killboard(conn,group,result,cursor,limit,participation,mode,check)
+    check()
     if participation not in ('both','kills','losses'):raise ValueError('Invalid participation.')
     start=result['from_date'];end=result['through_date']+timedelta(days=1)
     parts=[r for r in relations(conn) if r[0]<end and next_month(r[0])>start]
@@ -275,6 +278,7 @@ def killboard(conn,group,result,cursor='',limit=100,participation='both'):
     if rules is None:rules=load_rules(conn)
     zones=zone_ids(conn,group['definition']);entries=[];values={};credits={};scanned=0;next_cursor=''
     while index<len(parts) and len(entries)<limit and scanned<3:
+        check()
         relation=parts[index];month,kills,attackers=relation
         query,params=match_sql(group['definition'],rules,kills,attackers,max(start,month),min(end,next_month(month)),zones,cursor=before,ship_terms=ship_terms(conn,group['definition']))
         if participation=='losses':
@@ -284,7 +288,8 @@ def killboard(conn,group,result,cursor='',limit=100,participation='both'):
             where=sql.SQL(' WHERE EXISTS(SELECT 1 FROM {attackers} a WHERE a.killmail_id=matches.killmail_id AND a.killmail_time=matches.killmail_time AND {actor})').format(attackers=attackers,actor=sql.SQL(actor))
             params+=ap
         else:where=sql.SQL('')
-        query+=sql.SQL(" SELECT CASE WHEN is_loss THEN 'loss' ELSE 'kill' END,killmail_id,killmail_time,estimated_value_cents FROM matches {where} ORDER BY killmail_time DESC,killmail_id DESC LIMIT %s").format(where=where)
+        side=sql.SQL("'kill'" if participation=='kills' else "'loss'" if participation=='losses' else "CASE WHEN is_loss THEN 'loss' ELSE 'kill' END")
+        query+=sql.SQL(" SELECT {side},killmail_id,killmail_time,estimated_value_cents FROM matches {where} ORDER BY killmail_time DESC,killmail_id DESC LIMIT %s").format(where=where,side=side)
         remaining=limit-len(entries)
         with conn.cursor() as cur:
             cur.execute(query,params+[remaining+1]);rows=cur.fetchall()
@@ -361,3 +366,33 @@ def hydrate_top_kills(conn,top):
             victim_id=(row.get('victim_character') or {}).get('entity_id'),victim_corporation_id=(row.get('victim_corporation') or {}).get('entity_id'),
             victim_name=victim.get('name','Unknown victim'),system_id=row.get('solar_system_id'),system_name=system.get('name','Unknown system'))
     return {mode:[details[(r['killmail_id'],r['killmail_time'])] for r in rows if (r['killmail_id'],r['killmail_time']) in details] for mode,rows in top.items()}
+
+
+def mer_actor_predicate(group,side):
+    """MER identifies whole corps/alliances, never individual characters."""
+    fields=dict(character='NULL::bigint',corporation=f'm.{side}_corporation_id',alliance=f'm.{side}_alliance_id')
+    return actor_predicate(group['definition'],group['membership_rules'],'m',fields=fields,at='m.kill_datetime')
+
+
+def mer_killboard(conn,group,result,cursor,limit,participation,mode,check):
+    filters={'date_from':result['from_date'].isoformat(),'date_to':result['through_date'].isoformat(),'participation':participation}
+    if cursor:
+        if len(cursor)>220 or not cursor.startswith('mer:'):raise ValueError('Invalid cursor.')
+        pieces=cursor[4:].split('|')
+        if len(pieces)!=3:raise ValueError('Invalid cursor.')
+        filters.update(scan_before=pieces[0],scan_month=pieces[1],scan_row=pieces[2])
+    try:normalized=entities._normalize_killmail_filters(filters)
+    except entities.EntityError as exc:raise ValueError('Invalid MER cursor.') from exc
+    if normalized['scan_row'] is not None and normalized['scan_row']<0:raise ValueError('Invalid MER cursor.')
+    if normalized['scan_before'] and normalized['scan_before']>ts(result['through_date']+timedelta(days=1)):raise ValueError('Invalid MER cursor.')
+    for op in ('include','exclude'):
+        normalized['builder_ship_'+op]=[dict(role=r['role'],type_ids=r['type_ids']) for r in ship_terms(conn,group['definition']) if r['op']==op]
+        normalized['builder_zone_'+op]=[dict(entity_type=r['kind'],entity_id=r['id']) for r in group['definition']['zones'] if r['op']==op]
+    normalized['_scan_check']=check
+    rows,pagination=entities._group_entity_mer_killmails(conn,'personal_group',group,per_page=limit,
+        hidden_only=mode=='hidden',progressive=True,normalized_filters=normalized)
+    check()
+    following=''
+    if pagination.get('scan_has_more'):
+        following='mer:'+ '|'.join(str(pagination[key]) if pagination.get(key) is not None else '' for key in ('scan_before','scan_month','scan_row'))
+    return dict(rows=rows,next_cursor=following,scanned=0,total=0,scan_end_label=pagination.get('scan_end_label'))

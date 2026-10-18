@@ -14,7 +14,7 @@ import threading
 import time
 import importlib
 import unittest
-from unittest.mock import patch
+from unittest.mock import patch,Mock
 
 import psycopg2
 from fastapi import FastAPI
@@ -125,6 +125,98 @@ class OnDemandStateTests(unittest.TestCase):
             self.assertEqual(len(jobs._RUNS),0)
 
 
+class ScanReplacementTests(unittest.TestCase):
+    def setUp(self):
+        self.scans=routes.scans
+        with self.scans._LOCK:self.scans._CLIENTS.clear()
+        with jobs._LOCK:jobs._RUNS.clear()
+        with routes.local_rankings._LOCK:routes.local_rankings._RUNS.clear()
+
+    def enter(self,client,generation,signature):
+        return self.scans.CURRENT.set(self.scans.select(client,generation,signature))
+
+    def test_replacing_selection_cancels_running_sql_and_rejects_late_polls(self):
+        scans=self.scans;client='c'*32
+        token=self.enter(client,1,'old')
+        try:
+            control=scans.Control();control.subscribe();connection=Mock();control.bind(connection)
+        finally:scans.CURRENT.reset(token)
+        scans.select(client,2,'new')
+        connection.cancel.assert_called_once()
+        self.assertTrue(control.cancelled.is_set())
+        with self.assertRaises(scans.StaleSelection):scans.select(client,1,'old')
+        scans.leave(client,1)
+        new=scans.Control();token=self.enter(client,2,'new')
+        try:new.subscribe()
+        finally:scans.CURRENT.reset(token)
+        self.assertFalse(new.cancelled.is_set())
+        scans.leave(client,2)
+        with self.assertRaises(scans.StaleSelection):scans.select(client,2,'new')
+
+    def test_shared_work_is_not_cancelled_while_another_visitor_needs_it(self):
+        scans=self.scans;control=scans.Control();connection=Mock();control.bind(connection)
+        for client in ['a'*32,'b'*32]:
+            token=self.enter(client,1,'same')
+            try:control.subscribe()
+            finally:scans.CURRENT.reset(token)
+        scans.select('a'*32,2,'other')
+        connection.cancel.assert_not_called();self.assertFalse(control.cancelled.is_set())
+        scans.leave('b'*32,1)
+        connection.cancel.assert_called_once()
+
+    def test_completed_results_survive_navigation_and_can_be_reused(self):
+        scans=self.scans;client='b'*32;token=self.enter(client,1,'page1')
+        try:control=scans.Control();control.subscribe();control.unbind()
+        finally:scans.CURRENT.reset(token)
+        scans.leave(client,1)
+        self.assertFalse(control.cancelled.is_set())
+        token=self.enter(client,2,'page2')
+        try:control.subscribe()
+        finally:scans.CURRENT.reset(token)
+        self.assertFalse(control.cancelled.is_set())
+
+    def test_changed_ranking_starts_replacement_instead_of_busy(self):
+        scans=self.scans;ranking=routes.local_rankings;entered=threading.Event();released=threading.Event();new_entered=threading.Event()
+        group=dict(id=9,revision=1);period=dict(period='all',built_at='version',from_date=JAN,through_date=FEB)
+        def worker(group,period,kind,mode,sort,report):
+            if mode=='classic':
+                report.control.bind(Mock(cancel=lambda:released.set()))
+                entered.set();released.wait(2);report(checked=1)
+                self.fail('Cancelled scan must not publish its old results')
+            new_entered.set();return []
+        with patch.object(ranking,'scan',side_effect=worker):
+            token=self.enter('a'*32,1,'classic')
+            try:ranking.state(group,period,'character','classic','destroyed')
+            finally:scans.CURRENT.reset(token)
+            self.assertTrue(entered.wait(1))
+            token=self.enter('a'*32,2,'weighted')
+            try:self.assertNotEqual(ranking.state(group,period,'character','weighted','destroyed')['status'],'busy')
+            finally:scans.CURRENT.reset(token)
+            self.assertTrue(released.wait(1));self.assertTrue(new_entered.wait(1))
+            deadline=time.monotonic()+1
+            while time.monotonic()<deadline:
+                with ranking._LOCK:running=[run for run in ranking._RUNS.values() if run['status']=='running']
+                if not running:break
+                time.sleep(.001)
+            self.assertFalse(running)
+
+    def test_changing_between_stats_and_rankings_cancels_the_old_stats(self):
+        scans=self.scans;entered=threading.Event();released=threading.Event()
+        group=dict(id=9,revision=1);period=dict(period='all',built_at='v',from_date=JAN,through_date=FEB)
+        def calculate(*args):
+            report=args[-1];report.control.bind(Mock(cancel=lambda:released.set()));entered.set();released.wait(2);report(checked=1)
+        with patch.object(jobs,'calculate',side_effect=calculate),patch.object(routes.local_rankings,'scan',return_value=[]):
+            token=self.enter('f'*32,1,'stats')
+            try:jobs.state(group,period,'stats')
+            finally:scans.CURRENT.reset(token)
+            self.assertTrue(entered.wait(1))
+            token=self.enter('f'*32,2,'ranking')
+            try:routes.local_rankings.state(group,period,'character','classic','destroyed')
+            finally:scans.CURRENT.reset(token)
+            self.assertTrue(released.wait(1))
+
+
+
 class RouteTests(unittest.TestCase):
     def setUp(self):
         app=FastAPI();app.include_router(routes.router);self.client=TestClient(app)
@@ -137,6 +229,7 @@ class RouteTests(unittest.TestCase):
                          totals=dict(kills=2,losses=1,destroyed_cents='10000',weighted_destroyed_cents='3000',lost_cents='5000',unvalued_kills=0,unvalued_losses=0),ship_counts={},roster_count=3,skills_count=2)
 
     def test_public_has_no_account_controls_and_enforces_page_blocks(self):
+        self.login.return_value=None
         with patch.object(store,'public',return_value=self.group),patch.object(store,'period_result',return_value=self.result),patch.object(store,'periods',return_value=[dict(period='2026-01'),dict(period='custom')]):
             response=self.client.get('/public/groups/'+'a'*32+'?view=stats&period=2026-01')
             self.assertEqual(response.status_code,200)
@@ -242,6 +335,31 @@ class RouteTests(unittest.TestCase):
             kb.assert_not_called();ranking.assert_not_called()
             self.assertIn('No valued kills',response.json()['html'])
             self.assertEqual(self.client.get('/public/groups/'+'a'*32+'/data?view=stats&stats_view=forged').status_code,400)
+
+    def test_public_header_follows_the_visitors_login_state(self):
+        with patch.object(store,'public',return_value=self.group):
+            self.login.return_value=None
+            response=self.client.get('/public/groups/'+'a'*32)
+            self.assertIn('href="/login">EVEOSINT</a>',response.text)
+            self.assertNotIn('class="account-menu"',response.text)
+            self.login.return_value=self.user
+            response=self.client.get('/public/groups/'+'a'*32)
+            self.assertIn('class="account-menu"',response.text)
+            self.assertIn('/logout',response.text)
+            self.assertNotIn('id="shareGroup"',response.text)
+
+    def test_scan_parameters_are_validated_and_unload_cancels_only_its_generation(self):
+        with patch.object(store,'public',return_value=self.group),patch.object(store,'period_result',return_value=self.result),patch.object(jobs,'state',return_value=dict(status='running',result=None,progress={})):
+            url='/public/groups/'+'a'*32
+            base=url+'/data?view=stats&scan_client='+'d'*32+'&scan_generation='
+            self.assertEqual(self.client.get(base+'1').status_code,202)
+            self.assertEqual(self.client.get(base+'2').status_code,202)
+            self.assertEqual(self.client.get(base+'1').status_code,409)
+            self.assertEqual(self.client.get(base+'NaN').status_code,400)
+            self.assertEqual(self.client.post(url+'/cancel',data={'scan_client':'d'*32,'scan_generation':'1'}).status_code,200)
+            self.assertEqual(self.client.get(base+'2').status_code,202)
+            self.assertEqual(self.client.post(url+'/cancel',data={'scan_client':'d'*32,'scan_generation':'2'}).status_code,200)
+            self.assertEqual(self.client.get(base+'2').status_code,409)
 
     def test_member_search_returns_portraits_affiliations_and_an_entity_type_filter(self):
         coalitions=importlib.import_module(store.__package__+'.coalitions')
@@ -412,6 +530,92 @@ class DatabaseTests(unittest.TestCase):
             top=q.hydrate_top_kills(self.conn,{'raw':[r for r in candidates if r['mode']=='raw'],'weighted':[r for r in candidates if r['mode']=='weighted']})
             self.assertEqual(top['raw'][0]['ship_id'],638)
             self.assertEqual(top['weighted'][0]['damage_percent'],50)
+
+    def test_mer_hidden_total_and_historical_coalition_scope(self):
+        with self.conn.cursor() as cur:
+            cur.execute("""CREATE SCHEMA mer;CREATE TABLE mer.killmails(
+              source_month date,source_row bigint,kill_datetime timestamptz,solar_system_id bigint,solar_system_name text,
+              region_id bigint,region_name text,victim_ship_type_id bigint,victim_ship_type_name text,victim_ship_group_name text,
+              victim_corporation_id bigint,victim_corporation_name text,victim_alliance_id bigint,victim_alliance_name text,
+              killer_ship_type_id bigint,killer_corporation_id bigint,killer_corporation_name text,killer_alliance_id bigint,killer_alliance_name text,
+              resolved_km bigint[],resolved_km_ambiguous boolean,ccp_isk_lost numeric,ccp_isk_destroyed numeric,zkb_isk_lost numeric,zkb_isk_destroyed numeric);
+              INSERT INTO mer.killmails(source_month,source_row,kill_datetime,solar_system_id,victim_ship_type_id,victim_corporation_id,killer_ship_type_id,killer_corporation_id,resolved_km,ccp_isk_lost) VALUES
+              ('2026-01-01',0,'2026-01-03 12:00Z',7,638,10,587,99,NULL,100),
+              ('2026-01-01',1,'2026-01-03 12:00Z',7,638,99,587,10,NULL,200),
+              ('2026-01-01',2,'2026-01-02 12:00Z',7,638,10,587,99,ARRAY[100]::bigint[],300),
+              ('2026-01-01',3,'2026-01-04 12:00Z',7,638,99,587,99,NULL,400),
+              ('2026-02-01',4,'2026-02-03 12:00Z',7,638,11,587,99,NULL,500),
+              ('2026-02-01',5,'2026-02-03 12:00Z',7,638,10,587,99,NULL,600);""")
+        self.conn.commit()
+        try:
+            group=self.make_group(config([dict(kind='coalition',id=1,op='include'),dict(kind='corporation',id=10,op='include',through='2026-01-31')]))
+            group['membership_rules']=q.load_rules(self.conn)
+            period=dict(from_date=JAN,through_date=date(2026,1,31))
+            with patch.object(q.entities,'_lookup_type_names',return_value={}),patch.object(q.entities,'_lookup_system_locations',return_value={}),patch.object(q.entities,'_lookup_entity_names',return_value={}):
+                hidden=q.killboard(self.conn,group,period,mode='hidden')
+                self.assertEqual([r['source_row'] for r in hidden['rows']],[1,0])
+                self.assertTrue(all(r['source_tag']=='HID' for r in hidden['rows']))
+                self.assertTrue(all('true_value_label' not in r for r in hidden['rows']))
+                total=q.killboard(self.conn,group,period,mode='total')
+                self.assertEqual([r['source_row'] for r in total['rows']],[1,0,2])
+                self.assertEqual(total['rows'][-1]['source_tag'],'API')
+                cursor='';paged=[]
+                for _ in range(4):
+                    chunk=q.killboard(self.conn,group,period,mode='total',limit=1,cursor=cursor)
+                    paged.extend(r['source_row'] for r in chunk['rows']);cursor=chunk['next_cursor']
+                    if not cursor:break
+                self.assertEqual(paged,[1,0,2])
+                excluded=dict(group,definition=config([dict(kind='corporation',id=10,op='include'),dict(kind='character',id=1,op='exclude')]))
+                self.assertEqual(q.killboard(self.conn,excluded,period,mode='hidden')['rows'],[])
+                ship_filtered=dict(group,definition=config(ships=[dict(kind='ship',id=587,op='include',role='victim')]))
+                self.assertEqual(q.killboard(self.conn,ship_filtered,period,mode='hidden')['rows'],[])
+                with patch.object(q.entities,'_killmail_builder_zone_system_ids',return_value=[8]):
+                    zone_config=config();zone_config['zones']=[dict(kind='system',id=8,op='include')]
+                    zone_filtered=dict(group,definition=zone_config)
+                    self.assertEqual(q.killboard(self.conn,zone_filtered,period,mode='hidden')['rows'],[])
+                kills=q.killboard(self.conn,group,period,mode='hidden',participation='kills')
+                self.assertEqual([r['source_row'] for r in kills['rows']],[1])
+                losses=q.killboard(self.conn,group,period,mode='hidden',participation='losses')
+                self.assertEqual([r['source_row'] for r in losses['rows']],[0])
+                feb=q.killboard(self.conn,group,dict(from_date=FEB,through_date=date(2026,2,28)),mode='hidden')
+                self.assertEqual([r['source_row'] for r in feb['rows']],[4])
+                page=q.killboard(self.conn,group,period,mode='hidden',limit=1)
+                second=q.killboard(self.conn,group,period,mode='hidden',limit=1,cursor=page['next_cursor'])
+                self.assertEqual([r['source_row'] for r in page['rows']+second['rows']],[1,0])
+                pilots=dict(group,definition=config([dict(kind='character',id=1,op='include')]))
+                self.assertEqual(q.killboard(self.conn,pilots,period,mode='hidden')['rows'],[])
+                with self.assertRaises(ValueError):q.killboard(self.conn,group,period,mode='hidden',cursor='bad')
+        finally:
+            self.conn.rollback()
+            with self.conn.cursor() as cur:cur.execute('DROP SCHEMA mer CASCADE')
+            self.conn.commit()
+
+    def test_replacing_scan_interrupts_a_postgresql_query(self):
+        from psycopg2.errors import QueryCanceled
+        scans=routes.scans;client='e'*32;entered=threading.Event();cancelled=threading.Event()
+        scans.select(client,1,'old')
+        def worker():
+            token=scans.CURRENT.set((client,1))
+            try:
+                control=scans.Control();control.subscribe()
+                with closing(psycopg2.connect(self.dsn)) as conn:
+                    control.bind(conn)
+                    with conn.cursor() as cur:
+                        entered.set()
+                        try:cur.execute('SELECT pg_sleep(10)')
+                        except QueryCanceled:cancelled.set()
+            finally:scans.CURRENT.reset(token)
+        thread=threading.Thread(target=worker);thread.start();self.assertTrue(entered.wait(1))
+        # Wait until PostgreSQL is actually inside pg_sleep, avoiding a cancel-before-query race.
+        deadline=time.monotonic()+1
+        while time.monotonic()<deadline:
+            with self.conn.cursor() as cur:
+                cur.execute("SELECT count(*) FROM pg_stat_activity WHERE datname=current_database() AND query='SELECT pg_sleep(10)' AND wait_event='PgSleep'")
+                if cur.fetchone()[0]:break
+            time.sleep(.005)
+        scans.select(client,2,'new')
+        thread.join(2)
+        self.assertFalse(thread.is_alive());self.assertTrue(cancelled.is_set())
 
     def test_direct_inactive_member_and_dated_exclusion(self):
         c=config([dict(kind='character',id=9,op='include')])

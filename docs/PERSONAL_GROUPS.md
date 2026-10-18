@@ -35,7 +35,13 @@ Public visitors cannot supply arbitrary dates or change the saved scope.
   Supercapital visibility follows the owner's current permission.
 - Killboards use the standard shared renderer and styles, KILL / VICTIM / ALL
   selection and fixed-scope source data in pages of 100, checking at most three
-  months per request, with continuation cursor and visible progress.
+  months per API request, with continuation cursor and visible progress.
+  API / TOTAL / Hidden use the same semantics as standard corporation/alliance
+  killboards. TOTAL and Hidden reuse the standard MER scanner and hydration.
+  Whole corporations, alliances and historically dated/nested coalitions can
+  match MER; character IDs and damage shares cannot be invented from MER.
+  Saved area, ship and individual membership date/exclusion rules still apply.
+  Pagination uses the standard MER timestamp/month/source-row cursor.
 - Local rankings scan the requested period in the background. Characters,
   corporations and alliances get credit only for group members' contributions.
   A corporation/alliance gets full value once per kill, regardless of how many
@@ -54,8 +60,14 @@ old results. Permission checks happen before all cache lookups.
 
 One stats/ship scan and one local-ranking scan can run at a time, each guarded by
 a PostgreSQL session advisory lock. Source statements have a 120-second limit.
-Background scans stop at their next checkpoint when no page has polled for 60
-seconds. Closing the source connection releases the lock and temporary scores.
+Each browser tab carries a private random scan identity and an increasing
+selection generation. Changing page, period or ranking selection detaches the
+previous request immediately, cancels its active PostgreSQL statement and allows
+the replacement scan to start. Late responses/polls cannot revive an older
+selection. Shared work continues if another visitor still needs that result.
+Completed cached results survive navigation. Fetches and poll timers also stop
+on navigation; a beacon detaches the departing tab. Background scans additionally
+stop at their next checkpoint when no page has polled for 60 seconds. Closing the source connection releases the lock and temporary scores.
 All permanent source tables are read-only during calculations.
 
 ## Publication and delegation
@@ -66,7 +78,8 @@ Blocked pages are denied on HTML and data endpoints. The anonymous public link
 accepts only saved-scope all/year/month periods, fixed ranking enums and bounded
 pagination, with no arbitrary member/date/area/ship parameters. There is no public
 directory or link into account-only entity pages. Definitions, owner metadata and
-management controls are never passed to the public template. Responses are
+management controls are never passed to the public template. Anonymous pages
+show an EVEOSINT link to login; signed-in viewers get their usual app navigation. Responses are
 no-store/noindex, with no-referrer.
 
 **Editing a group preserves its public token and URL.** Its revision changes,

@@ -5031,6 +5031,7 @@ def _normalize_group_killmail_mode(mode):
 
 
 def _mer_group_scope(entity_type):
+    if entity_type=='personal_group':return {'personal_group_scope':True,'kill_priority':False}
     if entity_type == "global":
         return {"global_scope": True}
     if str(entity_type or "").strip().lower() == "coalition":
@@ -5081,7 +5082,13 @@ def _group_entity_mer_killmails(conn, entity_type, entity_id, page=1, per_page=1
     coalition_scope = bool(scope.get("coalition_scope"))
     multi_scope = isinstance(entity_id, (list, tuple, set))
 
-    if global_scope:
+    if scope.get('personal_group_scope'):
+        from .personal_group_queries import mer_actor_predicate
+        scope_value=entity_id
+        victim_scope_predicate,victim_scope_params=mer_actor_predicate(scope_value,'victim')
+        killer_scope_predicate,killer_scope_params=mer_actor_predicate(scope_value,'killer')
+        multi_ship_scope=False
+    elif global_scope:
         scope_value = None
         multi_ship_scope = False
     elif coalition_scope:
@@ -5422,6 +5429,7 @@ def _group_entity_mer_killmails(conn, entity_type, entity_id, page=1, per_page=1
         deadline = perf_counter() + 20.0
 
         while len(fetched) <= per_page and not scan_complete and perf_counter() < deadline:
+            if normalized_filters.get('_scan_check'):normalized_filters['_scan_check']()
             scan_lower = max(scan_floor, scan_upper - timedelta(days=window_days))
             chunk_clauses = list(base_clauses)
             chunk_params = list(base_params)

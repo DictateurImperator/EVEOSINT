@@ -7,6 +7,7 @@ import logging
 import threading
 import time
 from .db import db
+from . import personal_group_scans as scans
 from . import personal_group_queries as q
 
 LOG=logging.getLogger(__name__)
@@ -44,10 +45,16 @@ def _sum(rows):
 
 def calculate(group,period,view,can_super,report):
     with closing(db()) as source:
+        control=getattr(report,'control',None)
+        if control:control.bind(source)
         source.set_session(readonly=True,isolation_level='REPEATABLE READ')
         with source,source.cursor() as cur:
-            cur.execute('SELECT pg_try_advisory_lock(%s)',(LOCK_ID,))
-            if not cur.fetchone()[0]:raise ValueError('Another group result is loading. Please retry shortly.')
+            while True:
+                if control:control.check()
+                cur.execute('SELECT pg_try_advisory_lock(%s)',(LOCK_ID,))
+                if cur.fetchone()[0]:break
+                report(phase='Waiting for previous scan to stop')
+                time.sleep(.1)
             cur.execute("SET LOCAL timezone='UTC';SET LOCAL jit=off;SET LOCAL statement_timeout='120s';SET LOCAL work_mem='32MB'")
             start=period['from_date'];end=period['through_date']+timedelta(days=1)
             rules=q.load_rules(source);config=group['definition']
@@ -91,28 +98,42 @@ def state(group,period,view,can_super=False):
         for old,value in list(_RUNS.items()):
             if value['status']!='running' and now-value['updated']>=TTL:del _RUNS[old]
         previous=_RUNS.get(key)
+        if previous and previous.get('control') and previous['control'].cancelled.is_set():previous=None
         if previous:
+            previous['control'].subscribe()
             previous['last_requested']=now
             _RUNS.move_to_end(key)
             return dict(previous,progress=dict(previous['progress']))
-        if any(run['status']=='running' for run in _RUNS.values()):
+        if any(run['status']=='running' and not run['control'].cancelled.is_set() for run in _RUNS.values()):
             return dict(status='busy',progress={},result=None,error='Another group result is loading. Please retry shortly.')
         while len(_RUNS)>=MAX_RESULTS:_RUNS.popitem(last=False)
         run=dict(status='running',progress=dict(phase='Starting',checked=0,total=0),result=None,updated=now,last_requested=now)
+        control=scans.Control();control.subscribe();run['control']=control
         _RUNS[key]=run
         def report(**values):
             with _LOCK:
+                control.check()
                 if time.monotonic()-run['last_requested']>60:raise NoDemand()
                 if 'result' in values:run['result']=values.pop('result')
                 run['progress'].update(values);run['updated']=time.monotonic()
+        report.control=control
         def worker():
             try:
                 result=calculate(group,period,view,can_super,report)
-                with _LOCK:run.update(status='completed',result=result,updated=time.monotonic())
-            except NoDemand:
-                with _LOCK:_RUNS.pop(key,None)
+                with _LOCK:
+                    control.check()
+                    control.unbind()
+                    run.update(status='completed',result=result,updated=time.monotonic())
+            except (NoDemand,scans.Cancelled):
+                with _LOCK:
+                    if _RUNS.get(key) is run:_RUNS.pop(key,None)
             except Exception as exc:
+                if control.cancelled.is_set():
+                    with _LOCK:
+                        if _RUNS.get(key) is run:_RUNS.pop(key,None)
+                    return
                 LOG.exception('On-request group result failed group=%s',group['id'])
                 with _LOCK:run.update(status='failed',error=str(exc) if isinstance(exc,ValueError) else 'Could not complete this scan. Choose a month or narrower period.',updated=time.monotonic()-TTL+10)
+            finally:control.unbind()
         threading.Thread(target=worker,name=f"group-result-{group['id']}",daemon=True).start()
         return dict(run,progress=dict(run['progress']))

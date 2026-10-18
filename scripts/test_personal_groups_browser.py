@@ -104,7 +104,9 @@ try:
   with page.expect_navigation():page.get_by_role('button',name='Add manager',exact=True).click()
   store.set_manager.assert_called_with(9,1,2,remove=False)
   group['public_tabs'].append('ranking')
+  case.login.return_value=None
   page.goto(origin+'/public/groups/'+'a'*32)
+  expect(page.get_by_role('link',name='EVEOSINT',exact=True)).to_have_attribute('href','/login')
   expect(page.locator('#groupResult')).to_have_count(0)
   assert not any('/data?' in path for path in requests)
   page.get_by_role('link',name='Combat stats',exact=True).click()
@@ -118,7 +120,12 @@ try:
   page.get_by_role('button',name='Highest true ISK').click();expect(page.locator('[data-combat-top-panel=weighted]')).to_be_visible();expect(page.locator('[data-combat-top-panel=raw]')).to_be_hidden()
   group['public_tabs'].append('killboard');page.reload();page.get_by_role('link',name='Killboard',exact=True).click()
   expect(page.locator('.killmail-table')).to_be_visible();expect(page.locator('.killmail-row-kill')).to_have_count(1)
-  page.get_by_role('link',name='VICTIM',exact=True).click();expect(page).to_have_url(origin+'/public/groups/'+'a'*32+'?view=killboard&period=all&participation=losses')
+  page.get_by_role('link',name='Only hidden',exact=True).click();expect(page.locator('.killmail-table')).to_be_visible()
+  page.get_by_role('link',name='VICTIM',exact=True).click();expect(page.locator('.killmail-table')).to_be_visible()
+  query=parse_qs(urlparse(page.url).query);assert query['participation']==['losses'] and query['kb_mode']==['hidden']
+  data_requests=[path for path in requests if '/data?' in path];assert all('scan_client=' in path and 'scan_generation=' in path for path in data_requests)
+  assert any('/cancel' in path for path in requests)
+  case.login.return_value=case.user;page.reload();expect(page.locator('.account-menu')).to_be_visible();expect(page.locator('#shareGroup')).to_have_count(0)
   assert not any('/account/groups/9/data' in path for path in requests)
   case.user['id']=2;store.listed.return_value=[];store.delegated.return_value=[dict(group,owner_name='Owner')]
   page.goto(origin+'/account/groups');expect(page.get_by_text('Groups you manage',exact=True)).to_be_visible()
