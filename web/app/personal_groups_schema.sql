@@ -11,7 +11,7 @@ CREATE TABLE IF NOT EXISTS web.personal_groups (
  prepared_rules jsonb NOT NULL DEFAULT '{}',
  prepared_at timestamptz,
  public_token text UNIQUE,
- public_tabs jsonb NOT NULL DEFAULT '["killboard","stats","ships"]',
+ public_tabs jsonb NOT NULL DEFAULT '["killboard","stats","ships","ranking"]',
  progress jsonb NOT NULL DEFAULT '{"state":"idle"}',
  created_at timestamptz NOT NULL DEFAULT now(),
  updated_at timestamptz NOT NULL DEFAULT now(),
@@ -30,3 +30,11 @@ CREATE TABLE IF NOT EXISTS web.personal_group_periods (
  built_at timestamptz NOT NULL DEFAULT now(),
  PRIMARY KEY(group_id,period)
 );
+
+CREATE TABLE IF NOT EXISTS web.personal_group_managers (
+ group_id bigint NOT NULL REFERENCES web.personal_groups(id) ON DELETE CASCADE,
+ user_id bigint NOT NULL REFERENCES web.users(id) ON DELETE CASCADE,
+ created_at timestamptz NOT NULL DEFAULT now(),
+ PRIMARY KEY(group_id,user_id)
+);
+CREATE INDEX IF NOT EXISTS personal_group_managers_user_idx ON web.personal_group_managers(user_id,group_id);

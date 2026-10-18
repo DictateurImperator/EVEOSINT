@@ -2,17 +2,20 @@
 Requires Playwright and its Chromium browser. No production DB or server is used.
 """
 import json,sys,threading
+from urllib.parse import urlparse,parse_qs
+from decimal import Decimal
 from http.server import BaseHTTPRequestHandler,ThreadingHTTPServer
 from pathlib import Path
 from unittest.mock import patch
 ROOT=Path(__file__).resolve().parents[1]
 sys.path.insert(0,str(ROOT))
-from scripts.test_personal_groups import RouteTests,routes,store
+from scripts.test_personal_groups import RouteTests,routes,store,base,JAN,FEB
 from playwright.sync_api import sync_playwright,expect
 case=RouteTests();case.setUp()
 group=case.group;group['name']='Imperial test group';group['public_tabs']=['stats','ships'];case.result['totals']['ships_ready']=True
+case.client.app.include_router(base.routes.router)
 periods=[dict(period='all'),dict(period='2026'),dict(period='2026-01')]
-patches=[patch.object(store,'owned',return_value=group),patch.object(store,'listed',return_value=[group]),patch.object(store,'public',return_value=group),patch.object(store,'period_result',return_value=case.result),patch.object(store,'periods',return_value=periods),patch.object(store,'save',return_value=9)]
+patches=[patch.object(store,'accessible',return_value=group),patch.object(store,'listed',return_value=[group]),patch.object(store,'public',return_value=group),patch.object(store,'period_result',return_value=case.result),patch.object(store,'periods',return_value=periods),patch.object(store,'save',return_value=9),patch.object(store,'managers',return_value=[]),patch.object(store,'set_manager'),patch.object(base.routes,'require_login',return_value=case.user),patch.object(base.rankings,'catalog',return_value=[dict(month=m,built_at='v',killmails=1,valued=1,zero_damage=0,entity_rows=1,dirty=False) for m in (JAN,FEB)]),patch.object(base.rankings,'ranking_rows',return_value=([],True))]
 for p in patches:p.start()
 
 class Bridge(BaseHTTPRequestHandler):
@@ -36,14 +39,21 @@ try:
    if not url.startswith(origin+'/'):
     route.abort();return
    path=url.removeprefix(origin)
+   if '/managers/lookup?' in path:
+    route.fulfill(json={'results':[dict(id=2,username='Trusted manager')]});return
+   if '/lookup?' in path and 'kind=ship' in path:
+    route.fulfill(json={'results':[dict(kind='ship_group',id='Destroyer',label='Destroyer',subtitle='Ship group',image_url=None)]});return
    if '/lookup?' in path:
     data={'results':[dict(kind='character',id=94036773,label='Dictateur Imperator',image_url=None)]};route.fulfill(json=data);return
    if path.endswith('/status'):
     route.fulfill(json={'progress':dict(state='running',phase='Scanning killmails',checked=3,total=10,current_period='2026-01',kills_examined=1234),'periods':['2026-01'],'ready':False});return
+   if '/data?' in path and 'view=ranking' in path:
+    html=routes.templates.get_template('personal_group_ranking.html').render(rows=[dict(rank=1,entity_id=1,name='Local pilot',raw=10000,weighted=2000,lost=0,kills=1,losses=0,net=10000,efficiency=100,unvalued_kills=0,unvalued_losses=0)],public='/public/' in path,kind='character',compact_isk=base.rankings.compact_isk,full_isk=base.rankings.full_isk,previous=None,next_page=None)
+    route.fulfill(json={'html':html,'status':'completed','progress':{'checked':1,'total':1}});return
    if '/data?' in path:
     html=routes.templates.get_template('personal_group_ships.html').render(ships=[dict(name='Raven',group_name='Battleship',pilot_count=2,image_url=None)],result=case.result)
     route.fulfill(json={'html':html});return
-   if path.startswith('/account/groups') or path.startswith('/public/groups'):
+   if path.startswith('/account/groups') or path.startswith('/public/groups') or path.startswith('/leaderboard'):
     response=case.client.request(req.method,path,content=req.post_data_buffer,headers={k:v for k,v in req.headers.items() if k in ('content-type','origin','referer')},follow_redirects=False)
     route.fulfill(status=response.status_code,headers=dict(response.headers),body=response.content);return
    route.fulfill(json={})
@@ -51,22 +61,41 @@ try:
   page.goto(origin+'/account/groups/new')
   page.locator('.account-menu summary').click();expect(page.get_by_role('link',name='My groups',exact=True).first).to_be_visible();page.locator('.account-menu summary').click()
   page.locator('[name=name]').fill('Imperial test group');page.locator('#memberSearch').fill('Dictateur');page.locator('#memberSearch').press('ArrowDown')
-  page.get_by_role('button',name='Dictateur Imperator (character)').click();expect(page.locator('#memberRules tr')).to_have_count(1)
+  page.get_by_role('button',name='Dictateur Imperator Pilot').click();expect(page.locator('#memberRules tr')).to_have_count(1)
+  expect(page.locator('#memberRules img')).to_have_attribute('src','https://images.evetech.net/characters/94036773/portrait?size=64')
+  page.get_by_label('Member from: Dictateur Imperator',exact=True).fill('2026-01-05');page.get_by_label('Member through: Dictateur Imperator',exact=True).fill('2026-01-20')
+  page.locator('#shipSearch').fill('Destroyer');page.get_by_role('button',name='Destroyer Ship group',exact=True).click();expect(page.locator('#shipRules tr')).to_have_count(1)
+  page.locator('#shipRules select').last.select_option('victim')
   page.locator('#groupFrom').fill('2026-01-01');page.locator('#groupThrough').fill('2026-01-31');page.locator('#addPreset').click();expect(page.locator('#zoneRules tr')).to_have_count(1)
   with page.expect_navigation():page.get_by_role('button',name='Save group',exact=True).click()
   expect(page).to_have_url(origin+'/account/groups/9')
+  payload=store.save.call_args.args[3]
+  assert payload['members'][0]['from']=='2026-01-05' and payload['members'][0]['through']=='2026-01-20'
+  assert payload['ships'][0]['role']=='victim' and payload['ships'][0]['id']=='Destroyer'
+
   page.locator('summary',has_text='Group controls').click()
   expect(page.locator('#groupProgress')).to_contain_text('Months 3 / 10')
   expect(page.locator('#groupProgress')).to_contain_text('1,234')
-  expect(page.locator('[name=tabs]')).to_have_count(3)
+  expect(page.locator('[name=tabs]')).to_have_count(4)
   expect(page.locator('[name=tabs][value=killboard]')).not_to_be_checked()
+  page.get_by_role('link',name='Management',exact=True).click();expect(page.locator('#managerForm')).to_be_visible()
+  page.locator('#managerSearch').fill('Trusted');page.get_by_role('button',name='Trusted manager',exact=True).click()
+  with page.expect_navigation():page.get_by_role('button',name='Add manager',exact=True).click()
+  store.set_manager.assert_called_with(9,1,2,remove=False)
+  group['public_tabs'].append('ranking')
   page.goto(origin+'/public/groups/'+'a'*32+'?view=stats&period=2026-01')
   expect(page.locator('h1')).to_have_text('Imperial test group');expect(page.locator('#shareGroup')).to_have_count(0);expect(page.locator('.account-menu')).to_have_count(0)
   expect(page.get_by_role('link',name='Killboard',exact=True)).to_have_count(0)
   page.get_by_role('link',name='Pilotable ships',exact=True).click();expect(page.get_by_role('cell',name='Raven',exact=True)).to_be_visible()
+  page.get_by_role('link',name='Local ranking',exact=True).click();expect(page.locator('#localRankingProgress')).to_contain_text('Complete · Months 1 / 1');expect(page.get_by_role('cell',name='Local pilot',exact=True)).to_be_visible()
+  page.goto(origin+'/leaderboard');page.locator('[name=aggregation]').select_option('monthly');page.locator('#rankMonth').select_option('2026-02')
+  with page.expect_navigation():page.get_by_role('button',name='Show rankings',exact=True).click()
+  assert parse_qs(urlparse(page.url).query)['aggregation']==['monthly']
+  assert base.rankings.ranking_rows.call_args.args[3:5]==(FEB,FEB)
+  expect(page.get_by_text('Month only · 2026-02',exact=True)).to_be_visible()
   assert not errors,errors
   browser.close()
- print('Browser PASS: username menu, editor autocomplete/dates/area/save, owner progress/page switches, anonymous public restrictions, ships display; no JavaScript errors.')
+ print('Browser PASS: username menu, editor autocomplete/dates/area/save, member portraits/individual dates/ship filters, owner progress, manager delegation, public local ranking, standard monthly mode; no JavaScript errors.')
 finally:
  server.shutdown();server.server_close()
  for p in reversed(patches):p.stop()

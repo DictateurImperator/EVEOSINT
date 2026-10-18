@@ -5,7 +5,10 @@ An account with `entities.view` can keep three groups. Each group combines up to
 60 character, corporation, alliance or coalition rules. Include rules form a
 union; exclusions win. Rules may have inclusive UTC dates. Optional group dates
 and up to 20 system, constellation, region or security-space rules restrict
-combat history. Overlapping rules do not multiply kill or damage credits.
+combat history. Up to 20 model or ship-group rules filter ships on the attacking,
+victim or either side, using the standard killboard include/exclude semantics.
+These rules constrain combat results and local rankings, not the roster.
+Overlapping rules do not multiply kill or damage credits.
 
 ## Historical membership and results
 
@@ -15,7 +18,7 @@ never today's affiliation. Coalition definitions and their dated memberships are
 snapshotted when the owner prepares the group, including nested coalitions.
 Refreshing updates that snapshot.
 
-The owner starts preparation. Progress identifies the current phase, month,
+The owner or an appointed manager starts preparation. Progress identifies the current phase, month,
 completed months and matching killmails. Completed months can be viewed while
 preparation continues. A stop takes effect between database operations; each
 source statement has a 120-second limit. One preparation runs across the site at
@@ -46,10 +49,11 @@ preparation when the owner lacks `superintel.view`.
 
 Groups are private by default. Once preparation completes, the owner can enable
 an anonymous opaque public link and independently allow Killboard, Combat stats
-and Pilotable ships. Blocked pages are denied on both HTML and data endpoints.
+and Pilotable ships and Local ranking. Blocked pages are denied on both HTML and data endpoints.
 Visitors select only prepared all/year/month periods, an allowed page and a
 killboard pagination cursor. They cannot change rules, create a custom period,
-start scans/preparation jobs, or retrieve the private definition. Killboard
+start group-preparation jobs, or retrieve the private definition. Fixed-result
+killboard and ranking reads can scan source data, as described below. Killboard
 pagination reads existing raw data but does not persist additional analysis.
 There is no group directory. The public page exposes result names/images but no
 links into account-only entity or killmail pages.
@@ -57,7 +61,8 @@ links into account-only entity or killmail pages.
 Disabling sharing revokes the token. Republishing creates a new token. Editing
 the definition clears results and revokes the link. Full refresh temporarily hides
 public results until it completes; calculating a private custom period does not.
-Private endpoints require both login and owner ID. The application CSRF guard
+Private endpoints require login, normal entity-read access, and either ownership
+or a current management delegation. The application CSRF guard
 covers every group mutation. Authorization precedes cache access. Private/public
 render caches are separate. Responses are no-store and noindex, with no-referrer.
 
@@ -79,3 +84,36 @@ concurrent creation, public access blocks, revocation and preparation persistenc
 
 Browser workflow: `python scripts/test_personal_groups_browser.py` (Playwright /
 Chromium). It serves only mocked local fixtures and blocks external requests.
+
+## Local rankings and delegated management
+
+The Local ranking page is separately publishable. It ranks characters,
+corporations or alliances by full or damage-weighted ISK destroyed, losses,
+net ISK, efficiency, kills or losses, within the prepared period and saved
+membership/date/area/ship scope. Only contributions by group members count.
+Corporations and alliances deduplicate a kill across their matching pilots;
+True ISK sums their matching damage over **all** attacker damage. NPC characters
+are excluded. Affiliations use the individual killmail and historical fallback.
+A YYYY-MM period uses that month's activity only, with no lifetime score.
+
+Visitors may select only a prepared period and fixed ranking enums/page (no
+free membership, ship, spatial or date query). Scans run in a background thread
+and return provisional rankings after each month. One local ranking scan at a
+time is enforced with a session advisory lock. Exact numeric totals accumulate
+in a connection-local PostgreSQL temporary table, removed on connection close.
+Permanent source tables remain read-only. There are no permanent per-member or
+per-kill group copies. The bounded in-process cache keeps at most eight top-1,000
+lists for five minutes; pages contain 50 rows. Changing the prepared result or
+revision invalidates its cache identity. Access/tab checks run before cache lookup.
+
+The private Management tab lets the owner search active **site accounts**, add
+up to 20 managers, or revoke them. Managers can edit definitions, prepare/stop
+calculations and change publication settings. Only the owner can delete a group
+or manage its delegates. Management has no public equivalent. Delegated groups
+are listed separately and do not consume the manager's three owned-group slots.
+Mutations recheck delegation and the existing CSRF guard covers these paths.
+Delegated preparations cannot increase the owner's supercapital visibility.
+
+The standard Leaderboard also offers **Selected month only**. Its existing
+monthly facts are used directly, including filtered/name/rank searches. The
+cumulative mode remains the default; no additional score storage is introduced.

@@ -29,6 +29,7 @@ def page(request: Request):
     context=app_context(request=request,user=user,title='EVEOSINT - ISK rankings',active_module='leaderboard',active_menu_key='leaderboard.rankings')
     params=request.query_params
     kind=params.get('kind','character');mode=params.get('mode','classic');sort=params.get('sort','destroyed')
+    aggregation=params.get('aggregation','cumulative');monthly=aggregation=='monthly'
     view='ranking'  # Search shares this page; old view=search links remain valid.
     search_by=params.get('search_by','')
     q='' if search_by=='rank' else params.get('q','').strip()[:100]
@@ -41,6 +42,8 @@ def page(request: Request):
     try:
         if kind not in rankings.KINDS or mode not in ('classic','weighted') or sort not in rankings.SORTS or view not in ('ranking','search'):
             raise ValueError('Invalid ranking filter.')
+        if aggregation not in ('cumulative','monthly'):
+            raise ValueError('Invalid aggregation.')
         if search_by not in ('','name','rank'):
             raise ValueError('Invalid search mode.')
         page_number=int(params.get('page','1'))
@@ -62,8 +65,9 @@ def page(request: Request):
                 raise ValueError(f'Choose a month on or after {first:%Y-%m}, the first available month.')
             if last not in {m['month'] for m in months}:
                 raise ValueError('Choose a month available in the ranking selectors.')
+            if monthly:first=last
             started=time.monotonic()
-            if months[0].get('totals_ready',True):
+            if monthly or months[0].get('totals_ready',True):
                 target_id=None;position=offset+1
                 searching=bool(q or target_param or position_param)
                 if searching:
@@ -86,7 +90,7 @@ def page(request: Request):
                 effective_includes=[] if 'universe:0' in includes else includes
                 if searching or effective_includes or excludes or page_number>20:
                     result=rankings.explore_rows(kind,mode,sort,first,last,as_of=affiliation_month,
-                        includes=effective_includes,excludes=excludes,position=position,target_id=target_id,around=searching)
+                        includes=effective_includes,excludes=excludes,position=position,target_id=target_id,around=searching,**({'monthly':True} if monthly else {}))
                     rows=result['rows'];offset=result['offset'];more=result['more'];found_position=result['position'] if searching else None
                     if result.get('clamped'):
                         ranking_notice=f"Requested rank {int(position_param):,} exceeds the available ranking. Showing the last available rank: {found_position:,}."
@@ -106,6 +110,7 @@ def page(request: Request):
     selected=[m for m in months if first and last and first<=m['month']<=last]
     missing=max(0,(last.year-first.year)*12+last.month-first.month+1-len(selected)) if first and last else 0
     base=dict(kind=kind,mode=mode,sort=sort)
+    if monthly:base['aggregation']='monthly'
     if custom_period:
         base['through']=params.get('through','')
     if includes:
@@ -116,7 +121,7 @@ def page(request: Request):
         return '/leaderboard?'+urlencode(dict(base,**changes),doseq=True)
     context.update(months=months,rows=rows,kind=kind,mode=mode,sort=sort,view=view,q=q,
         target_id=target_param,position=found_position if position_param and found_position else position_param,found_position=found_position,
-        ranking_notice=ranking_notice,
+        ranking_notice=ranking_notice,aggregation=aggregation,monthly=monthly,
         include_terms=[dict(token=v,label=labels.get(v,v),logo_url=rankings.scope_logo(v)) for v in includes],
         exclude_terms=[dict(token=v,label=labels.get(v,v),logo_url=rankings.scope_logo(v)) for v in excludes],
         ranking_link=link(view='ranking'),search_link=link(view='search'),
@@ -129,7 +134,7 @@ def page(request: Request):
         period_from=first.strftime('%Y-%m') if first else '',period_through=last.strftime('%Y-%m') if last else '',
         membership_date=('end of '+affiliation_month.strftime('%B %Y')) if affiliation_month else 'today',
         lookup_default_through=lookup_default_through,
-        totals_ready=bool(months and months[0].get('totals_ready',True)),error=error,
+        totals_ready=bool(months and (monthly or months[0].get('totals_ready',True))),error=error,
         selected=selected,missing=missing,cached=cached,elapsed=elapsed,page_number=page_number,offset=offset,
         previous=link(page=page_number-1) if not found_position and page_number>1 else None,
         next_page=link(page=page_number+1) if not found_position and more else None,

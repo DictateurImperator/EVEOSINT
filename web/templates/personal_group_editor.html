@@ -1,5 +1,6 @@
 {% extends "base.html" %}
 {% block content %}
+{% include "killboard_filters_styles.html" %}
 <h1 class="h3">{{ 'Edit group' if group else 'Create group' }}</h1>
 <p class="muted-line">Membership follows history at the date studied. Include rules are combined; exclusions win. Overlapping rules never multiply a pilot or a kill.</p>
 {% if error %}<div class="alert alert-danger" role="alert">{{ error }}</div>{% endif %}
@@ -7,13 +8,16 @@
 <form id="groupEditor" method="post" action="/account/groups/save" class="content-card p-4">
 <input type="hidden" name="group_id" value="{{ group.id if group else '' }}"><input type="hidden" name="definition" id="definition">
 <div class="row g-3"><label class="col-md-6">Name<input class="form-control" name="name" value="{{ form_name }}" maxlength="80" required></label><label class="col-md-6">Description<input class="form-control" name="description" value="{{ form_description }}" maxlength="1000"></label><label class="col-md-6">From (UTC, optional)<input class="form-control" id="groupFrom" type="date" value="{{ form_definition['from'] or '' }}"></label><label class="col-md-6">Through (UTC, optional)<input class="form-control" id="groupThrough" type="date" value="{{ form_definition.through or '' }}"></label></div>
-<h2 class="h5 mt-4">Members</h2>
-<div class="position-relative"><input class="form-control" id="memberSearch" placeholder="Search a pilot, corporation, alliance or coalition" autocomplete="off"><div id="memberResults" class="group-suggestions" hidden></div></div>
-<div class="table-responsive mt-3"><table class="table"><thead><tr><th>Rule</th><th>Entity</th><th>From (optional)</th><th>Through (optional)</th><th></th></tr></thead><tbody id="memberRules"></tbody></table></div>
+<h2 class="h5 mt-4">Members</h2><p class="muted-line">Each member can have its own start and end dates. Blank dates keep the member for the whole group period. The end date includes that entire UTC day.</p>
+<div class="d-flex gap-2 align-items-start flex-wrap"><label class="visually-hidden" for="memberKind">Member type</label><select id="memberKind" class="form-select" style="width:180px"><option value="all">All entities</option><option value="character">Pilots</option><option value="corporation">Corporations</option><option value="alliance">Alliances</option><option value="coalition">Coalitions</option></select><div class="position-relative flex-grow-1" style="min-width:min(260px,100%)"><input class="form-control" id="memberSearch" placeholder="Search a pilot, corporation, alliance or coalition" autocomplete="off"><div id="memberResults" class="group-suggestions" hidden></div></div></div>
+<div class="table-responsive mt-3"><table class="table"><thead><tr><th>Rule</th><th>Entity</th><th>Member from (UTC)</th><th>Member through (UTC)</th><th></th></tr></thead><tbody id="memberRules"></tbody></table></div>
 <h2 class="h5 mt-4">Combat area</h2><p class="muted-line">No geographical rule means all space. These rules filter kill locations. Ship capabilities count all known group members, independently of activity or location.</p>
 <div class="d-flex gap-2 flex-wrap mb-2"><select id="spacePreset" class="form-select" style="width:auto"><option value="highsec">High security</option><option value="lowsec">Low security</option><option value="nullsec">Null security</option><option value="wormhole">Anoikis / wormholes</option><option value="pochven">Pochven</option></select><button class="btn btn-outline-primary" id="addPreset" type="button">Add space type</button></div>
 <div class="position-relative"><input class="form-control" id="zoneSearch" placeholder="Search a system, constellation or region" autocomplete="off"><div id="zoneResults" class="group-suggestions" hidden></div></div>
 <div class="table-responsive mt-3"><table class="table"><thead><tr><th>Rule</th><th>Location</th><th></th></tr></thead><tbody id="zoneRules"></tbody></table></div>
+<h2 class="h5 mt-4">Ships involved in combat</h2><p class="muted-line">Choose a model or a ship group. Select attacking ships, lost ships, or either side. Include rules are combined within a side; exclusions win. These filters restrict killmails and local rankings, not the member roster.</p>
+<div class="position-relative"><input class="form-control" id="shipSearch" placeholder="Search a ship or group (e.g. Catalyst, Destroyer)" autocomplete="off"><div id="shipResults" class="group-suggestions" hidden></div></div>
+<div class="table-responsive mt-3"><table class="table"><thead><tr><th>Rule</th><th>Ship / group</th><th>Side</th><th></th></tr></thead><tbody id="shipRules"></tbody></table></div>
 <button class="btn btn-primary" type="submit">Save group</button> <a class="btn btn-outline-secondary" href="/account/groups">Cancel</a>
 </form>
 <style>.group-suggestions{position:absolute;top:100%;left:0;right:0;background:#0f172a;border:1px solid #475569;border-radius:8px;z-index:30;max-height:340px;overflow:auto}.group-suggestions button{display:flex;align-items:center;gap:10px;width:100%;text-align:left;color:#e2e8f0;background:none;border:0;padding:10px}.group-suggestions button:hover,.group-suggestions button:focus{background:#1e3a5f}.group-suggestions img{width:32px;height:32px}</style>
@@ -22,13 +26,25 @@
  const initial={{ form_definition|tojson }};
  const members=Array.isArray(initial.members)?initial.members:[];
  const zones=Array.isArray(initial.zones)?initial.zones:[];
+ const ships=Array.isArray(initial.ships)?initial.ships:[];
+ const typeName=kind=>({character:'Pilot',corporation:'Corporation',alliance:'Alliance',coalition:'Coalition',ship:'Ship',ship_group:'Ship group',system:'System',constellation:'Constellation',region:'Region',security:'Space type'}[kind]||kind);
+ function image(item){
+  if(item.image_url)return item.image_url;
+  if(item.kind==='ship')return `https://images.evetech.net/types/${item.id}/icon?size=64`;
+  if(item.kind==='coalition')return `/coalition/${item.id}/logo`;
+  if(['character','corporation','alliance'].includes(item.kind))return `https://images.evetech.net/${item.kind==='character'?'characters':item.kind==='corporation'?'corporations':'alliances'}/${item.id}/${item.kind==='character'?'portrait':'logo'}?size=64`;
+  return null;
+ }
+ function identity(item){const box=document.createElement('div');box.className='d-flex align-items-center gap-2';const url=image(item);if(url){const img=document.createElement('img');img.src=url;img.alt='';img.width=36;img.height=36;img.loading='lazy';img.style.borderRadius='5px';img.onerror=()=>img.hidden=true;box.append(img);}const text=document.createElement('div'),title=document.createElement('div'),subtitle=document.createElement('div');title.className='fw-semibold';title.textContent=item.label||`${typeName(item.kind)} ${item.id}`;subtitle.className='muted-line small';subtitle.textContent=item.subtitle||typeName(item.kind);text.append(title,subtitle);box.append(text);return box;}
+
  function draw(items,target,isMember){
   const body=document.getElementById(target);body.replaceChildren();
   items.forEach((rule,index)=>{
    const tr=document.createElement('tr');const opCell=document.createElement('td');const op=document.createElement('select');op.className='form-select form-select-sm';
    [['include','+ Include'],['exclude','− Exclude']].forEach(([value,label])=>{const o=new Option(label,value);op.add(o);});op.value=rule.op;op.onchange=()=>rule.op=op.value;opCell.append(op);tr.append(opCell);
-   const name=document.createElement('td');name.textContent=(rule.label||`${rule.kind} ${rule.id}`)+` (${rule.kind})`;tr.append(name);
-   if(isMember)['from','through'].forEach(key=>{const td=document.createElement('td');const input=document.createElement('input');input.type='date';input.className='form-control form-control-sm';input.value=rule[key]||'';input.onchange=()=>rule[key]=input.value||null;td.append(input);tr.append(td);});
+   const name=document.createElement('td');name.append(identity(rule));tr.append(name);
+   if(items===ships){const td=document.createElement('td'),role=document.createElement('select');role.className='form-select form-select-sm';[['both','Either side'],['attacker','Attacking ship'],['victim','Lost ship']].forEach(([value,label])=>role.add(new Option(label,value)));role.value=rule.role||'both';role.onchange=()=>rule.role=role.value;td.append(role);tr.append(td);}
+   if(isMember)['from','through'].forEach(key=>{const td=document.createElement('td');const input=document.createElement('input');input.type='date';input.className='form-control form-control-sm';input.value=rule[key]||'';input.setAttribute('aria-label',`${key==='from'?'Member from':'Member through'}: ${rule.label||rule.id}`);input.onchange=()=>rule[key]=input.value||null;td.append(input);tr.append(td);});
    const td=document.createElement('td');const remove=document.createElement('button');remove.type='button';remove.className='btn btn-sm btn-outline-danger';remove.textContent='Remove';remove.onclick=()=>{items.splice(index,1);draw(items,target,isMember);};td.append(remove);tr.append(td);body.append(tr);
   });
  }
@@ -36,16 +52,17 @@
   const input=document.getElementById(inputId),results=document.getElementById(resultId);let timer,controller,sequence=0;
   input.addEventListener('input',()=>{clearTimeout(timer);if(controller)controller.abort();const seq=++sequence;const q=input.value.trim();results.replaceChildren();results.hidden=q.length<2;if(q.length<2)return;timer=setTimeout(async()=>{
    controller=new AbortController();results.hidden=false;results.textContent='Searching…';
-   try{const response=await fetch('/account/groups/lookup?'+new URLSearchParams({kind,q}),{signal:controller.signal});if(!response.ok)throw new Error('Search unavailable');const data=await response.json();if(seq!==sequence)return;results.replaceChildren();
+   try{const response=await fetch('/account/groups/lookup?'+new URLSearchParams({kind,q,...(kind==='member'?{entity_type:document.getElementById('memberKind').value}:{})}),{signal:controller.signal});if(!response.ok)throw new Error('Search unavailable');const data=await response.json();if(seq!==sequence)return;results.replaceChildren();
     if(!data.results.length)results.textContent='No matching entities.';
-    data.results.forEach(item=>{const button=document.createElement('button');button.type='button';if(item.image_url){const image=document.createElement('img');image.src=item.image_url;image.alt='';button.append(image);}const label=document.createElement('span');label.textContent=`${item.label} (${item.kind})`;button.append(label);button.onclick=()=>{if(items.length>=(isMember?60:20)){results.textContent='Rule limit reached.';return;}items.push({kind:item.kind,id:item.id,label:item.label,op:'include',from:null,through:null});draw(items,target,isMember);results.hidden=true;input.value='';};results.append(button);});
+    data.results.forEach(item=>{const button=document.createElement('button');button.type='button';button.className='kb-search-result';button.append(identity(item));button.onclick=()=>{if(items.length>=(isMember?60:20)){results.textContent='Rule limit reached.';return;}items.push({kind:item.kind,id:item.id,label:item.label,image_url:item.image_url,subtitle:item.subtitle,op:'include',role:'both',from:null,through:null});draw(items,target,isMember);results.hidden=true;input.value='';};results.append(button);});
    }catch(error){if(error.name!=='AbortError'&&seq===sequence)results.textContent='Search unavailable. Please retry.';}
   },250);});input.addEventListener('keydown',event=>{if(event.key==='Escape')results.hidden=true;if(event.key==='ArrowDown'){event.preventDefault();results.querySelector('button')?.focus();}});results.addEventListener('keydown',event=>{if(event.key==='Escape'){results.hidden=true;input.focus();}if(event.key==='ArrowDown'){event.preventDefault();event.target.nextElementSibling?.focus();}if(event.key==='ArrowUp'){event.preventDefault();event.target.previousElementSibling?.focus();}});
  }
- draw(members,'memberRules',true);draw(zones,'zoneRules',false);
- search('memberSearch','memberResults','member',members,'memberRules',true);search('zoneSearch','zoneResults','zone',zones,'zoneRules',false);
+ draw(members,'memberRules',true);draw(zones,'zoneRules',false);draw(ships,'shipRules',false);
+ document.getElementById('memberKind').addEventListener('change',()=>document.getElementById('memberSearch').dispatchEvent(new Event('input')));
+ search('memberSearch','memberResults','member',members,'memberRules',true);search('zoneSearch','zoneResults','zone',zones,'zoneRules',false);search('shipSearch','shipResults','ship',ships,'shipRules',false);
  document.getElementById('addPreset').onclick=()=>{if(zones.length>=20)return;const input=document.getElementById('spacePreset');zones.push({kind:'security',id:input.value,label:input.selectedOptions[0].textContent,op:'include'});draw(zones,'zoneRules',false);};
- document.getElementById('groupEditor').addEventListener('submit',()=>{document.getElementById('definition').value=JSON.stringify({members,zones,from:document.getElementById('groupFrom').value||null,through:document.getElementById('groupThrough').value||null});});
+ document.getElementById('groupEditor').addEventListener('submit',()=>{document.getElementById('definition').value=JSON.stringify({members,zones,ships,from:document.getElementById('groupFrom').value||null,through:document.getElementById('groupThrough').value||null});});
 })();
 </script>
 {% endblock %}

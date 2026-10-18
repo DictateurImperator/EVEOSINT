@@ -308,6 +308,20 @@ class ControlTests(unittest.TestCase):
                 self.assertEqual(self.client.post('/admin/debug/rankings/start').status_code,200)
             launch.assert_called_once()
 
+    def test_month_only_mode_queries_one_month_and_keeps_search_and_tabs(self):
+        months=[dict(month=m,built_at='v',killmails=1,valued=1,zero_damage=0,entity_rows=1,dirty=False,totals_ready=False) for m in (JAN,FEB)]
+        with patch.object(rankings,'catalog',return_value=months),patch.object(rankings,'ranking_rows',return_value=([],True)) as query:
+            response=self.client.get('/leaderboard?aggregation=monthly&through=2026-02')
+            self.assertEqual(response.status_code,200)
+            self.assertEqual(query.call_args.args[3:5],(FEB,FEB))
+            self.assertIn('Month only · 2026-02',response.text)
+            self.assertIn('name="aggregation"',response.text)
+            self.assertIn('aggregation=monthly',response.text)
+            self.assertNotIn('Cumulative rankings are awaiting',response.text)
+        with patch.object(rankings,'catalog',return_value=months),patch.object(rankings,'explore_rows',return_value=dict(rows=[],offset=0,position=1,more=False)) as search:
+            self.client.get('/leaderboard?aggregation=monthly&through=2026-02&target_id=1')
+            self.assertEqual(search.call_args.args[3:5],(FEB,FEB));self.assertTrue(search.call_args.kwargs['monthly'])
+
     def test_leaderboard_has_no_rebuild_controls_even_for_administrators(self):
         months=[dict(month=JAN,built_at='v',killmails=1,valued=1,zero_damage=0,entity_rows=1,dirty=False,totals_ready=False)]
         with patch.object(rankings,'catalog',return_value=months),patch.object(rankings,'ranking_rows',return_value=([],True)),patch.object(routes,'run_killmail_rankings') as launch:
@@ -567,6 +581,22 @@ class DatabaseTests(unittest.TestCase):
             cur.execute('''SELECT destroyed_cents,weighted_destroyed_cents,lost_cents,kills,losses,unvalued_kills,unvalued_losses
                            FROM analytics.killmail_rankings_monthly WHERE entity_kind=%s AND entity_id=%s AND month=%s''',(kind,id,month))
             return cur.fetchone()
+
+    def test_monthly_rankings_and_filtered_search_never_use_cumulative_scores(self):
+        self.build(JAN);self.build(FEB)
+        with psycopg2.connect(self.dsn) as conn:
+            rows=rankings.engine().query(conn,'character','weighted','destroyed',FEB,FEB)
+            self.assertEqual(next(r for r in rows if r['entity_id']==1)['destroyed'],30000)
+        with psycopg2.connect(self.dsn) as conn:
+            result=rankings.explorer().explore(conn,rankings.engine(),'character','weighted','destroyed',FEB,FEB,
+                monthly=True,target_id=1,around=True,as_of=FEB,includes=['corporation:11'])
+            player=next(r for r in result['rows'] if r['entity_id']==1)
+            self.assertEqual(player['destroyed'],30000);self.assertEqual(player['lost'],0);self.assertEqual(player['kills'],1)
+        with psycopg2.connect(self.dsn) as conn:
+            result=rankings.explorer().explore(conn,rankings.engine(),'character','classic','destroyed',JAN,JAN,
+                monthly=True,target_id=1,around=True)
+            player=next(r for r in result['rows'] if r['entity_id']==1)
+            self.assertEqual(player['destroyed'],10000);self.assertEqual(player['lost'],20000)
 
     def test_combat_history_reads_monthly_not_cumulative_values_for_all_kinds(self):
         with patch.object(rankings,'db',side_effect=lambda: psycopg2.connect(self.dsn)):

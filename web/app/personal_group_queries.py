@@ -18,7 +18,7 @@ def load_rules(conn):
         return result
 
 
-def actor_predicate(config,rules,alias,victim=False,history=True):
+def actor_fields(alias,victim=False,history=True):
     prefix='victim_' if victim else ''
     at=f'{alias}.killmail_time';char=f'{alias}.{prefix}character_id';corp=f'{alias}.{prefix}corporation_id';ally=f'{alias}.{prefix}alliance_id'
     if history:
@@ -28,6 +28,12 @@ def actor_predicate(config,rules,alias,victim=False,history=True):
         ally=f'''COALESCE({ally},(SELECT h.alliance_id FROM entities.corporation_alliance_history h
              WHERE h.corporation_id={corp} AND NOT h.is_deleted AND h.start_date<={at}
              AND (h.end_date IS NULL OR h.end_date>{at}) ORDER BY h.start_date DESC,h.record_id DESC LIMIT 1))'''
+    return dict(character=char,corporation=corp,alliance=ally)
+
+
+def actor_predicate(config,rules,alias,victim=False,history=True):
+    at=f'{alias}.killmail_time'
+    fields=actor_fields(alias,victim,history)
     budget=[0]
     def combine(parts,operator,empty='false'):
         if not parts:return empty,[]
@@ -43,7 +49,7 @@ def actor_predicate(config,rules,alias,victim=False,history=True):
             negative=combine([rule(c,stack+(id,)) for c in children if c['op']=='exclude'],'OR')
             query=f'({positive[0]}) AND NOT ({negative[0]})';params=positive[1]+negative[1]
         else:
-            expression={'character':char,'corporation':corp,'alliance':ally}[kind]
+            expression=fields[kind]
             query=f'{expression}=%s';params=[id]
         if r.get('from'):query=f'({query}) AND {at}>=%s::date';params.append(r['from'])
         if r.get('through'):query=f'({query}) AND {at}<(%s::date+1)';params.append(r['through'])
@@ -75,7 +81,19 @@ def relations(conn):
     return sorted(result,key=lambda r:r[0],reverse=True)
 
 
-def match_sql(config,rules,kills,attackers,start,end,zones,cursor=None):
+def ship_terms(conn,config):
+    result=[]
+    for rule in config.get('ships',[]):
+        if rule['kind']=='ship_group':
+            with conn.cursor() as cur:
+                cur.execute('SELECT entity_id::bigint FROM sde_work.ship_entities WHERE group_name=%s',(rule['id'],))
+                ids=[row[0] for row in cur]
+        else:ids=[rule['id']]
+        result.append(dict(rule,type_ids=ids))
+    return result
+
+
+def match_sql(config,rules,kills,attackers,start,end,zones,cursor=None,ship_terms=()):
     victim,vp=actor_predicate(config,rules,'k',victim=True)
     actor,ap=actor_predicate(config,rules,'a')
     where='k.killmail_time >= %s AND k.killmail_time < %s';params=[ts(start),ts(end)]
@@ -84,19 +102,35 @@ def match_sql(config,rules,kills,attackers,start,end,zones,cursor=None):
     if deny:where+=' AND NOT k.solar_system_id=ANY(%s)';params.append(deny)
     if cursor:
         where+=' AND (k.killmail_time,k.killmail_id)<(%s,%s)';params.extend(cursor)
+    where_sql=sql.SQL(where)
+    # OR within each role, AND across roles, matching the standard killboard builder.
+    for role in ('both','attacker','victim'):
+        includes=[];excludes=[];inc_params=[];exc_params=[]
+        for rule in ship_terms:
+            if rule['role']!=role:continue
+            victim_ship=sql.SQL('k.victim_ship_type_id=ANY(%s)')
+            attack_ship=sql.SQL('EXISTS(SELECT 1 FROM {} sa WHERE sa.killmail_id=k.killmail_id AND sa.killmail_time=k.killmail_time AND sa.ship_type_id=ANY(%s))').format(attackers)
+            clause=victim_ship if role=='victim' else attack_ship if role=='attacker' else sql.SQL('({} OR {})').format(victim_ship,attack_ship)
+            values=[rule['type_ids']]*(2 if role=='both' else 1)
+            (includes if rule['op']=='include' else excludes).append(clause)
+            (inc_params if rule['op']=='include' else exc_params).extend(values)
+        if includes:
+            where_sql+=sql.SQL(' AND ({})').format(sql.SQL(' OR ').join(includes));params+=inc_params
+        if excludes:
+            where_sql+=sql.SQL(' AND NOT COALESCE(({}),false)').format(sql.SQL(' OR ').join(excludes));params+=exc_params
     query=sql.SQL('''WITH matches AS MATERIALIZED (
         SELECT k.killmail_id,k.killmail_time,k.estimated_value_cents,k.victim_character_id,
                {victim} AS is_loss
         FROM {kills} k WHERE {where} AND (({victim}) OR EXISTS(
             SELECT 1 FROM {attackers} a WHERE a.killmail_id=k.killmail_id
               AND a.killmail_time=k.killmail_time AND {actor})))''').format(
-                  victim=sql.SQL(victim),where=sql.SQL(where),actor=sql.SQL(actor),kills=kills,attackers=attackers)
+                  victim=sql.SQL(victim),where=where_sql,actor=sql.SQL(actor),kills=kills,attackers=attackers)
     return query,vp+params+vp+ap
 
 
 def month_totals(conn,config,rules,relation,start,end,zones):
     month,kills,attackers=relation
-    query,params=match_sql(config,rules,kills,attackers,start,end,zones)
+    query,params=match_sql(config,rules,kills,attackers,start,end,zones,ship_terms=ship_terms(conn,config))
     actor,ap=actor_predicate(config,rules,'a')
     query+=sql.SQL(''', scored AS (
         SELECT k.*,d.* FROM matches k CROSS JOIN LATERAL (
@@ -239,7 +273,7 @@ def killboard(conn,group,result,cursor='',limit=50):
     zones=zone_ids(conn,group['definition']);entries=[];values={};credits={};scanned=0;next_cursor=''
     while index<len(parts) and len(entries)<limit and scanned<3:
         relation=parts[index];month,kills,attackers=relation
-        query,params=match_sql(group['definition'],group['prepared_rules'],kills,attackers,max(start,month),min(end,next_month(month)),zones,cursor=before)
+        query,params=match_sql(group['definition'],group['prepared_rules'],kills,attackers,max(start,month),min(end,next_month(month)),zones,cursor=before,ship_terms=ship_terms(conn,group['definition']))
         query+=sql.SQL(" SELECT CASE WHEN is_loss THEN 'loss' ELSE 'kill' END,killmail_id,killmail_time,estimated_value_cents FROM matches ORDER BY killmail_time DESC,killmail_id DESC LIMIT %s")
         remaining=limit-len(entries)
         with conn.cursor() as cur:

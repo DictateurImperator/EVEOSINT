@@ -16,7 +16,7 @@ from .auth import require_login,has_permission
 from .layout import app_context
 from .main_objects import templates
 from .db import db
-from . import personal_groups as store,personal_group_jobs as jobs,personal_group_queries as queries
+from . import personal_groups as store,personal_group_jobs as jobs,personal_group_queries as queries,personal_group_rankings as local_rankings
 from .killmail_rankings import compact_isk,full_isk
 
 router=APIRouter()
@@ -35,7 +35,7 @@ def account(request):
 def group_for(request,id):
     user=account(request)
     if not 0<id<2**63:raise HTTPException(404)
-    group=store.owned(id,user['id'])
+    group=store.accessible(id,user['id'])
     if not group:raise HTTPException(404)
     return user,group
 
@@ -56,25 +56,36 @@ def no_store(response):
 @router.get(PRIVATE,response_class=HTMLResponse)
 def index(request:Request):
     user=account(request)
-    ctx=context(request,user,'My groups');ctx.update(groups=store.listed(user['id']),error=None)
+    ctx=context(request,user,'My groups');ctx.update(groups=store.listed(user['id']),delegated_groups=store.delegated(user['id']),error=None)
     return no_store(templates.TemplateResponse(request=request,name='personal_groups.html',context=ctx))
 
 
 @router.get(PRIVATE+'/lookup')
 def lookup(request:Request):
     account(request)
-    kind=request.query_params.get('kind','member');query=request.query_params.get('q','').strip()[:100]
+    kind=request.query_params.get('kind','member');entity_type=request.query_params.get('entity_type','all');query=request.query_params.get('q','').strip()[:100]
     if len(query)<2:return {'results':[]}
-    if kind=='zone':
+    if kind=='ship':
+        from .killmail_filters import search_killboard_filters
+        rows=search_killboard_filters('ship',query,limit=20)
+    elif kind=='zone':
         from .entities import search_killmail_locations
         rows=search_killmail_locations(query,limit=12)
     elif kind=='member':
         from .coalitions import search_member_entities
         from .killmail_rankings import lookup as find
-        characters=find(query,'character')
-        rows=characters+search_member_entities(query,limit=12)
+        if entity_type not in ('all','character','corporation','alliance','coalition'):raise HTTPException(400)
+        characters=find(query,'character') if entity_type in ('all','character') else []
+        others=search_member_entities(query,limit=12 if entity_type=='all' else 50) if entity_type!='character' else []
+        rows=characters+[r for r in others if entity_type=='all' or r.get('entity_type')==entity_type]
     else:raise HTTPException(400)
-    return no_store(JSONResponse({'results':[dict(kind=r.get('entity_type'),id=r.get('entity_id'),label=r.get('name') or r.get('label'),image_url=r.get('image_url') or r.get('logo_url')) for r in rows[:24]]}))
+    def display(r):
+        kind=r.get('entity_type');id=r.get('entity_id')
+        from .entities import image_url
+        picture=r.get('image_url') or r.get('logo_url') or (image_url(kind,id,64) if kind in ('character','corporation','alliance','ship') else None)
+        return dict(kind=kind,id=id,label=r.get('name') or r.get('label'),image_url=picture,
+                    subtitle=r.get('subtitle') or ' · '.join(str(v) for v in [kind,r.get('corporation_name'),r.get('alliance_name')] if v))
+    return no_store(JSONResponse({'results':[display(r) for r in rows[:24]]}))
 
 
 @router.get(PRIVATE+'/new',response_class=HTMLResponse)
@@ -91,14 +102,16 @@ async def save(request:Request):
     try:
         id=int(id_value) if id_value else None
         if id is not None and not 0<id<2**63:raise HTTPException(400)
-        if id is not None and not store.owned(id,user['id']):raise HTTPException(404)
+        selected=store.accessible(id,user['id']) if id else None
+        if id is not None and not selected:raise HTTPException(404)
         payload=json.loads(str(form.get('definition','')))
-        result=store.save(user['id'],form.get('name'),form.get('description'),payload,id)
+        result=store.save(selected['owner_id'] if selected else user['id'],form.get('name'),form.get('description'),payload,id,actor_id=user['id'])
     except (ValueError,TypeError) as exc:
-        ctx=context(request,user,'Edit group');ctx.update(group=store.owned(id,user['id']) if isinstance(id,int) and 0<id<2**63 else None,
+        ctx=context(request,user,'Edit group');ctx.update(group=store.accessible(id,user['id']) if isinstance(id,int) and 0<id<2**63 else None,
             form_name=str(form.get('name','')),form_description=str(form.get('description','')),
             form_definition=payload if 'payload' in locals() and isinstance(payload,dict) else {'members':[],'zones':[]},error=str(exc))
         return no_store(templates.TemplateResponse(request=request,name='personal_group_editor.html',context=ctx,status_code=400))
+    except LookupError:raise HTTPException(404)
     return RedirectResponse(f'{PRIVATE}/{result}',status_code=303)
 
 
@@ -111,15 +124,18 @@ def edit(request:Request,id:int):
 
 @router.post(PRIVATE+'/{id}/delete')
 def delete(request:Request,id:int):
-    user,group=group_for(request,id);store.remove(id,user['id'])
+    user,group=group_for(request,id)
+    if user['id']!=group['owner_id']:raise HTTPException(403)
+    store.remove(id,user['id'])
     return RedirectResponse(PRIVATE,status_code=303)
 
 
 @router.post(PRIVATE+'/{id}/sharing')
 async def sharing(request:Request,id:int):
     user,group=group_for(request,id);form=await request.form()
-    try:store.sharing(id,user['id'],form.get('enabled')=='on',form.getlist('tabs'))
+    try:store.sharing(id,group['owner_id'],form.get('enabled')=='on',form.getlist('tabs'),actor_id=user['id'])
     except ValueError as exc:return JSONResponse({'error':str(exc)},status_code=400)
+    except LookupError:raise HTTPException(404)
     return RedirectResponse(f'{PRIVATE}/{id}',status_code=303)
 
 
@@ -132,14 +148,21 @@ async def prepare(request:Request,id:int):
             start=store.day(form.get('from'));end=store.day(form.get('through'))
             if not start or not end or start>end:raise ValueError('Choose both dates, in chronological order.')
             custom=(start,end)
-        jobs.start(group,has_permission(user,'superintel.view'),custom=custom)
+        can_super=has_permission(user,'superintel.view')
+        if user['id']!=group['owner_id'] and can_super:
+            from .auth import get_user_permissions
+            can_super='superintel.view' in get_user_permissions(group['owner_id'])
+        jobs.start(group,can_super,custom=custom,actor_id=user['id'])
     except ValueError as exc:return JSONResponse({'error':str(exc)},status_code=409)
+    except LookupError:raise HTTPException(404)
     return no_store(JSONResponse({'ok':True}))
 
 
 @router.post(PRIVATE+'/{id}/stop')
 def stop(request:Request,id:int):
-    user,group=group_for(request,id);jobs.stop(group)
+    user,group=group_for(request,id)
+    try:jobs.stop(group,actor_id=user['id'])
+    except LookupError:raise HTTPException(404)
     return no_store(JSONResponse({'ok':True}))
 
 
@@ -150,11 +173,44 @@ def status(request:Request,id:int):
     return no_store(JSONResponse({'progress':group['progress'],'periods':[p['period'] for p in store.periods(group)],'ready':group['prepared_revision']==group['revision']}))
 
 
+def ranking_options(request):
+    kind=request.query_params.get('kind','character');mode=request.query_params.get('mode','classic');sort=request.query_params.get('sort','destroyed')
+    try:page=int(request.query_params.get('page','1'))
+    except ValueError:raise HTTPException(400)
+    if kind not in local_rankings.KINDS or mode not in ('classic','weighted') or sort not in local_rankings.SORTS or not 1<=page<=20:raise HTTPException(400)
+    return dict(kind=kind,mode=mode,sort=sort,page=page)
+
+
+@router.get(PRIVATE+'/{id}/managers/lookup')
+def manager_lookup(request:Request,id:int):
+    user,group=group_for(request,id)
+    if user['id']!=group['owner_id']:raise HTTPException(403)
+    query=request.query_params.get('q','').strip()[:100]
+    return no_store(JSONResponse({'results':store.manager_accounts(id,user['id'],query) if len(query)>=2 else []}))
+
+
+@router.post(PRIVATE+'/{id}/managers')
+async def manage(request:Request,id:int):
+    user,group=group_for(request,id)
+    if user['id']!=group['owner_id']:raise HTTPException(403)
+    form=await request.form()
+    try:
+        manager_id=int(form.get('user_id','0'))
+        if not 0<manager_id<2**63:raise ValueError('Choose an account.')
+        if form.get('action') not in ('add','remove'):raise ValueError('Invalid action.')
+        store.set_manager(id,user['id'],manager_id,remove=form.get('action')=='remove')
+    except (ValueError,TypeError) as exc:return JSONResponse({'error':str(exc)},status_code=400)
+    except LookupError:raise HTTPException(404)
+    return RedirectResponse(f'{PRIVATE}/{id}?view=management',status_code=303)
+
+
 def selection(request,group,public=False):
-    allowed={'period','view','cursor'}
+    allowed={'period','view','cursor','kind','mode','sort','page'}
     if set(request.query_params)-allowed:raise HTTPException(400,'Only prepared periods, page selection and pagination are accepted.')
     view=request.query_params.get('view') or (group['public_tabs'][0] if public and group['public_tabs'] else 'stats')
-    if view not in store.TABS:raise HTTPException(400)
+    if view not in store.TABS and not (view=='management' and not public):raise HTTPException(400)
+    if view!='ranking' and set(request.query_params)&{'kind','mode','sort','page'}:raise HTTPException(400)
+    if view=='ranking':ranking_options(request)
     if public and view not in group['public_tabs']:raise HTTPException(403)
     period=request.query_params.get('period','all')
     if public and period=='custom':raise HTTPException(403)
@@ -176,7 +232,9 @@ def render_page(request,group,user=None,public=False):
     ctx=dict(request=request,title=group['name'],show_app_layout=False,username=None) if public else context(request,user,group['name'])
     # Never pass definitions, private rules, owner IDs or account metadata to public templates.
     ctx.update(group_name=group['name'],group_description=group['description'],public=public,
-        group=None if public else group,base_url=base,view=view,period=period,result=result,
+        group=None if public else group,base_url=base,view=view,period=period,result=result,is_owner=not public and user['id']==group['owner_id'],
+        managers=store.managers(group['id'],user['id']) if not public and view=='management' and user['id']==group['owner_id'] else [],
+        ranking=ranking_options(request) if view=='ranking' else None,
         available=available,tabs=group['public_tabs'] if public else list(store.TABS),compact_isk=compact_isk,full_isk=full_isk,
         ratio_label=ratio_label(result['totals']) if result else '—',ratio_for=ratio_label)
     ctx['monthly_results']=store.monthly_results(group,result['from_date'],result['through_date']) if result and view=='stats' and period!='custom' else []
@@ -200,6 +258,16 @@ def data_result(request,group,public=False):
     view,period,result=selection(request,group,public)
     if not result:raise HTTPException(404,'This period has not been prepared.')
     if view!='killboard' and request.query_params.get('cursor'):raise HTTPException(400)
+    if view=='ranking':
+        if request.query_params.get('cursor'):raise HTTPException(400)
+        options=ranking_options(request)
+        state=local_rankings.state(group,result,options['kind'],options['mode'],options['sort'])
+        start=(options['page']-1)*50;rows=state['rows'][start:start+50]
+        base=f"/public/groups/{group['public_token']}" if public else f"{PRIVATE}/{group['id']}"
+        def link(page):return base+'?'+urlencode(dict(view='ranking',period=period,**dict(options,page=page)))
+        html=templates.get_template('personal_group_ranking.html').render(rows=rows,public=public,kind=options['kind'],compact_isk=compact_isk,
+            full_isk=full_isk,previous=link(options['page']-1) if options['page']>1 else None,next_page=link(options['page']+1) if start+50<len(state['rows']) else None)
+        return no_store(JSONResponse(dict(html=html,status=state['status'],progress=state['progress'],error=state.get('error')),status_code=202 if state['status'] in ('running','busy') else 200))
     if view=='stats':
         return no_store(JSONResponse({'totals':result['totals']}))
     key=(group['id'],group['revision'],str(result['built_at']),public,view,period,request.query_params.get('cursor',''))

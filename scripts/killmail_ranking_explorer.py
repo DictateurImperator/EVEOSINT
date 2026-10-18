@@ -152,7 +152,7 @@ def scoped_result(cur,base,params,table,id_column,position,target_id,around,limi
 
 
 def explore(conn,engine,kind,mode,sort,first,last,*,as_of=None,includes=(),excludes=(),rules=None,
-            position=1,target_id=None,around=False,limit=50,scope_day=None):
+            position=1,target_id=None,around=False,limit=50,scope_day=None,monthly=False):
     """Read sparse snapshots, then rank within the chosen membership scope."""
     conn.set_session(isolation_level='REPEATABLE READ',readonly=True)
     kind_id,table,id_column=engine.KINDS[kind]
@@ -174,7 +174,7 @@ def explore(conn,engine,kind,mode,sort,first,last,*,as_of=None,includes=(),exclu
         latest=cur.fetchone()[0]
     # Score cutoff and affiliation date are independent. The latest completed
     # month already has current totals, even when its affiliations are historical.
-    if latest is None or last>=latest:
+    if monthly or latest is None or last>=latest:
         values=sql.SQL(',').join(sql.SQL('c.{c} AS {a}').format(c=sql.Identifier(c),a=sql.Identifier(a)) for a,c in fields.items())
         snapshot=sql.SQL('')
     else:
@@ -186,6 +186,7 @@ def explore(conn,engine,kind,mode,sort,first,last,*,as_of=None,includes=(),exclu
               AND m.month<=%s AND c.last_month>%s ORDER BY month DESC LIMIT 1) p ON true''')
         params.extend((last,last))
     params.append(kind_id)
+    if monthly:params.append(last)
     scope_join=sql.SQL('')
     predicate=sql.SQL('true')
     if (includes or excludes) and not fast_scope:
@@ -199,10 +200,12 @@ def explore(conn,engine,kind,mode,sort,first,last,*,as_of=None,includes=(),exclu
         params.extend(scope_params)
     metric={'net':sql.SQL('destroyed-lost'),
             'efficiency':sql.SQL('100*destroyed/NULLIF(destroyed+lost,0)')}.get(sort,sql.Identifier(sort))
-    base=sql.SQL('''WITH {prefix} facts AS (SELECT c.entity_id,{values} FROM analytics.killmail_rankings_current c
-            {members_join} {snapshot} WHERE c.entity_kind=%s AND {players}),{scope_join}
+    base=sql.SQL('''WITH {prefix} facts AS (SELECT c.entity_id,{values} FROM {facts_table} c
+            {members_join} {snapshot} WHERE c.entity_kind=%s {month_clause} AND {players}),{scope_join}
         candidates AS {materialized} (SELECT *,{metric} AS score FROM {source}
                         WHERE (kills>0 OR losses>0) AND ({predicate})) ''').format(
+        facts_table=sql.Identifier('analytics','killmail_rankings_monthly' if monthly else 'killmail_rankings_current'),
+        month_clause=sql.SQL('AND c.month=%s' if monthly else ''),
         prefix=prefix,members_join=members_join,values=values,snapshot=snapshot,scope_join=scope_join,metric=metric,
         players=engine.player_character_filter(kind,sql.SQL('c.entity_id')),
         source=sql.Identifier('scoped' if (includes or excludes) and not fast_scope else 'facts'),predicate=predicate,

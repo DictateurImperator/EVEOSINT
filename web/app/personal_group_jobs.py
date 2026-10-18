@@ -132,12 +132,13 @@ def prepare(writer,group,can_super,custom=None):
         writer.close()  # Releases the session advisory lock, also on cancellation/error.
 
 
-def start(group,can_super,custom=None):
+def start(group,can_super,custom=None,*,actor_id=None):
     writer=db()
     try:
         with writer.cursor() as cur:
             cur.execute('SELECT pg_try_advisory_lock(%s)',(LOCK_ID,))
             if not cur.fetchone()[0]:raise ValueError('Another group is being prepared. Please retry when it finishes.')
+            if actor_id is not None and actor_id!=group['owner_id']:store._assert_manager(cur,group['id'],group['owner_id'],actor_id)
             cur.execute('SELECT revision,prepared_revision FROM web.personal_groups WHERE id=%s AND owner_id=%s FOR UPDATE',(group['id'],group['owner_id']))
             row=cur.fetchone()
             if not row or row[0]!=group['revision']:raise ValueError('The group changed. Reload before preparing it.')
@@ -152,8 +153,9 @@ def start(group,can_super,custom=None):
         writer.rollback();writer.close();raise
 
 
-def stop(group):
+def stop(group,*,actor_id=None):
     with closing(db()) as conn,conn,conn.cursor() as cur:
+        if actor_id is not None and actor_id!=group['owner_id']:store._assert_manager(cur,group['id'],group['owner_id'],actor_id)
         cur.execute("UPDATE web.personal_groups SET progress=jsonb_set(progress,'{stop_requested}','true') WHERE id=%s AND owner_id=%s",(group['id'],group['owner_id']))
 
 

@@ -8,7 +8,7 @@ import secrets
 from psycopg2.extras import Json, RealDictCursor
 from .db import db
 
-TABS = ('killboard','stats','ships')
+TABS = ('killboard','stats','ships','ranking')
 ENTITY_TABLES = {'character':('characters','character_id'),'corporation':('corporations','corporation_id'),
                  'alliance':('alliances','alliance_id'),'coalition':('coalitions','coalition_id')}
 SECURITY_ZONES = {'highsec','lowsec','nullsec','wormhole','pochven'}
@@ -63,6 +63,22 @@ def definition(payload):
         rule=dict(kind=source['kind'],id=id,op=source['op'],label=str(source.get('label','')).strip()[:120])
         if rule not in clean:clean.append(rule)
     result['zones']=clean
+    ships=payload.get('ships',[])
+    if not isinstance(ships,list) or len(ships)>20:raise ValueError('Choose at most 20 ship rules.')
+    clean=[]
+    for source in ships:
+        if not isinstance(source,dict) or source.get('kind') not in ('ship','ship_group') or source.get('op') not in ('include','exclude') or source.get('role','both') not in ('both','attacker','victim'):
+            raise ValueError('Invalid ship rule.')
+        if source['kind']=='ship_group':
+            id=str(source.get('id','')).strip()
+            if not 1<=len(id)<=100:raise ValueError('Invalid ship group.')
+        else:
+            try:id=int(source['id'])
+            except (KeyError,ValueError,TypeError):raise ValueError('Invalid ship.')
+            if not 0<id<2**63:raise ValueError('Invalid ship.')
+        rule=dict(kind=source['kind'],id=id,op=source['op'],role=source.get('role','both'),label=str(source.get('label','')).strip()[:120])
+        if rule not in clean:clean.append(rule)
+    result['ships']=clean
     return result
 
 
@@ -91,11 +107,13 @@ def public(token):
         return _row(cur)
 
 
-def save(owner_id,name,description,payload,group_id=None):
+def save(owner_id,name,description,payload,group_id=None,*,actor_id=None):
     name=str(name or '').strip();description=str(description or '').strip()
     if not 1<=len(name)<=80 or len(description)>1000:raise ValueError('Use a name up to 80 characters and a description up to 1,000 characters.')
     config=definition(payload)
     with closing(db()) as conn,conn,conn.cursor() as cur:
+        if actor_id is not None and actor_id!=owner_id:
+            _assert_manager(cur,group_id,owner_id,actor_id)
         # Lock the account, so concurrent creations cannot allocate a fourth slot.
         cur.execute('SELECT id FROM web.users WHERE id=%s FOR UPDATE',(owner_id,))
         if not cur.fetchone():raise ValueError('Account not found.')
@@ -129,10 +147,11 @@ def remove(group_id,owner_id):
         if not cur.fetchone():raise LookupError('Group not found.')
 
 
-def sharing(group_id,owner_id,enabled,tabs):
+def sharing(group_id,owner_id,enabled,tabs,*,actor_id=None):
     tabs=list(dict.fromkeys(tabs))
     if any(t not in TABS for t in tabs) or (enabled and not tabs):raise ValueError('Select at least one public page.')
     with closing(db()) as conn,conn,conn.cursor() as cur:
+        if actor_id is not None and actor_id!=owner_id:_assert_manager(cur,group_id,owner_id,actor_id)
         cur.execute('SELECT revision,prepared_revision,public_token FROM web.personal_groups WHERE id=%s AND owner_id=%s FOR UPDATE',(group_id,owner_id))
         row=cur.fetchone()
         if not row:raise LookupError('Group not found.')
@@ -166,3 +185,50 @@ def monthly_results(group,start,end):
           WHERE group_id=%s AND revision=%s AND period ~ '^\d{4}-\d{2}$'
             AND from_date>=%s AND through_date<=%s ORDER BY period DESC''',(group['id'],group['revision'],start,end))
         return [dict(row) for row in cur]
+
+
+def _assert_manager(cur,group_id,owner_id,actor_id):
+    cur.execute('SELECT 1 FROM web.personal_groups g JOIN web.personal_group_managers m ON m.group_id=g.id WHERE g.id=%s AND g.owner_id=%s AND m.user_id=%s',(group_id,owner_id,actor_id))
+    if not cur.fetchone():raise LookupError('Group access revoked.')
+
+
+def accessible(group_id,user_id):
+    with closing(db()) as conn,conn,conn.cursor(cursor_factory=RealDictCursor) as cur:
+        cur.execute('SELECT g.* FROM web.personal_groups g WHERE g.id=%s AND (g.owner_id=%s OR EXISTS(SELECT 1 FROM web.personal_group_managers m WHERE m.group_id=g.id AND m.user_id=%s))',(group_id,user_id,user_id))
+        return _row(cur)
+
+
+def delegated(user_id):
+    with closing(db()) as conn,conn,conn.cursor(cursor_factory=RealDictCursor) as cur:
+        cur.execute('SELECT g.*,u.username AS owner_name FROM web.personal_groups g JOIN web.personal_group_managers m ON m.group_id=g.id JOIN web.users u ON u.id=g.owner_id WHERE m.user_id=%s AND g.owner_id<>%s ORDER BY g.name,g.id',(user_id,user_id))
+        return [dict(row) for row in cur]
+
+
+def managers(group_id,owner_id):
+    with closing(db()) as conn,conn,conn.cursor(cursor_factory=RealDictCursor) as cur:
+        cur.execute('SELECT u.id,u.username FROM web.personal_group_managers m JOIN web.users u ON u.id=m.user_id JOIN web.personal_groups g ON g.id=m.group_id WHERE g.id=%s AND g.owner_id=%s ORDER BY lower(u.username),u.id',(group_id,owner_id))
+        return [dict(row) for row in cur]
+
+
+def manager_accounts(group_id,owner_id,query):
+    with closing(db()) as conn,conn,conn.cursor(cursor_factory=RealDictCursor) as cur:
+        cur.execute('SELECT id FROM web.personal_groups WHERE id=%s AND owner_id=%s',(group_id,owner_id))
+        if not cur.fetchone():raise LookupError('Group not found.')
+        cur.execute("""SELECT u.id,u.username FROM web.users u WHERE u.is_active AND u.id<>%s
+            AND lower(u.username) LIKE %s AND NOT EXISTS(SELECT 1 FROM web.personal_group_managers m WHERE m.group_id=%s AND m.user_id=u.id)
+            ORDER BY lower(u.username),u.id LIMIT 12""",(owner_id,'%'+query.lower().replace('\\','\\\\').replace('%','\\%').replace('_','\\_')+'%',group_id))
+        return [dict(row) for row in cur]
+
+
+def set_manager(group_id,owner_id,user_id,remove=False):
+    with closing(db()) as conn,conn,conn.cursor() as cur:
+        cur.execute('SELECT id FROM web.personal_groups WHERE id=%s AND owner_id=%s FOR UPDATE',(group_id,owner_id))
+        if not cur.fetchone():raise LookupError('Group not found.')
+        if remove:
+            cur.execute('DELETE FROM web.personal_group_managers WHERE group_id=%s AND user_id=%s',(group_id,user_id));return
+        if user_id==owner_id:raise ValueError('The owner already manages this group.')
+        cur.execute('SELECT id FROM web.users WHERE id=%s AND is_active',(user_id,))
+        if not cur.fetchone():raise ValueError('Choose an active site account.')
+        cur.execute('SELECT count(*) FROM web.personal_group_managers WHERE group_id=%s',(group_id,))
+        if cur.fetchone()[0]>=20:raise ValueError('A group can have up to 20 managers.')
+        cur.execute('INSERT INTO web.personal_group_managers(group_id,user_id) VALUES(%s,%s) ON CONFLICT DO NOTHING',(group_id,user_id))
