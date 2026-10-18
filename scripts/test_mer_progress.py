@@ -1,5 +1,6 @@
 """Passive status, SQL wait reporting and sequential MER ALL; no live services."""
 import json
+from datetime import date
 import tempfile
 import unittest
 from pathlib import Path
@@ -65,21 +66,45 @@ class ProgressTests(unittest.TestCase):
     def test_alliance_updates_report_partitions_and_commit_only_at_the_end(self):
         class Connection:
             commits=0;rowcount=5
+            def __init__(self):self.updates=[]
             def __enter__(self):return self
             def __exit__(self,*args):pass
             def cursor(self):return self
-            def execute(self,query,params=None):self.last=str(query)
+            def execute(self,query,params=None):
+                self.last=str(query)
+                if self.last.strip().startswith('UPDATE'):self.updates.append((self.last,params))
+            def fetchone(self):return (date(2026,9,1),)
             def fetchall(self):return [('killmails_2026_08',),('killmails_2026_09',)]
             def commit(self):self.commits+=1
         conn=Connection()
         with patch.object(mer,'db',return_value=conn),patch.object(mer,'MER_LOG_FILE',Path(self.directory.name)/'mer.log'):
             result=mer.enrich_mer_entity_ids()
-        self.assertEqual(result['rows'],10);self.assertEqual(conn.commits,1)
+        self.assertEqual(result['rows'],5);self.assertEqual(conn.commits,1)
+        self.assertEqual(len(conn.updates),1)
+        query,params=conn.updates[0]
+        self.assertIn('killmails_2026_09',query);self.assertNotIn('killmails_2026_08',query)
+        self.assertIn('WHERE m.kill_datetime >= %s AND m.kill_datetime < %s',query)
+        self.assertEqual(params,(date(2026,9,1),date(2026,10,1)))
         state=progress._load()['ALLIANCE_HISTORY']
-        self.assertEqual(state['processed'],2);self.assertEqual(state['total'],2);self.assertEqual(state['status'],'completed')
+        self.assertEqual(state['processed'],1);self.assertEqual(state['total'],1);self.assertEqual(state['status'],'completed')
+        conn.updates.clear()
+        with patch.object(mer,'db',return_value=conn),patch.object(mer,'MER_LOG_FILE',Path(self.directory.name)/'mer.log'):
+            mer.enrich_mer_entity_ids(months=['2026-08'])
+        self.assertEqual(len(conn.updates),1);self.assertIn('killmails_2026_08',conn.updates[0][0])
+        self.assertEqual(conn.updates[0][1],(date(2026,8,1),date(2026,9,1)))
 
 
 class PipelineTests(unittest.TestCase):
+    def test_affiliations_use_imported_mer_months_and_retry_latest_if_none(self):
+        with patch.object(mer,'import_mer_kill_dumps',return_value={'imported_months':['2026-09']}),patch.object(mer,'enrich_mer_entity_ids') as enrich:
+            selected={key:function for key,label,function in pipeline.steps()}
+            selected['KILL_IMPORT']();selected['ALLIANCE_HISTORY']()
+            enrich.assert_called_once_with(months=['2026-09'])
+        with patch.object(mer,'import_mer_kill_dumps',return_value={'imported_months':[]}),patch.object(mer,'enrich_mer_entity_ids') as enrich:
+            selected={key:function for key,label,function in pipeline.steps()}
+            selected['KILL_IMPORT']();selected['ALLIANCE_HISTORY']()
+            enrich.assert_called_once_with(months=None)
+
     def test_sequential_order_and_error_stops_remaining_steps(self):
         calls=[]
         selected=[('A','first',lambda:calls.append('first')),('B','second',lambda:calls.append('second')),('C','last',lambda:calls.append('last'))]

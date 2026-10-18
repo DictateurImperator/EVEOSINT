@@ -25,9 +25,16 @@ def economy():
 
 
 def steps():
+    imported_months=[]
+    def import_kills():
+        result=mer.import_mer_kill_dumps()
+        imported_months.extend(result.get('imported_months',[]))
+        return result
+    def affiliations():
+        return mer.enrich_mer_entity_ids(months=imported_months or None)
     return [('SCAN','Scan CCP MER',mer.scan_all_mer),('DOWNLOAD','Download missing ZIPs',mer.download_mer_archives),
-        ('ANALYZE','Analyze archives',mer.analyze_mer_archives),('KILL_IMPORT','Import kill dumps',mer.import_mer_kill_dumps),
-        ('ECONOMY','Import economic data',economy),('ALLIANCE_HISTORY','Resolve historical alliance IDs',mer.enrich_mer_entity_ids),
+        ('ANALYZE','Analyze archives',mer.analyze_mer_archives),('KILL_IMPORT','Import kill dumps',import_kills),
+        ('ECONOMY','Import economic data',economy),('ALLIANCE_HISTORY','Resolve historical alliance IDs',affiliations),
         ('KILL_MATCH','Reconcile existing killmails',mer.match_mer_killmails)]
 
 

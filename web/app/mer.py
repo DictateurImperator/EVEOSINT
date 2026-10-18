@@ -8,7 +8,7 @@ import re
 import threading
 import zipfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from html.parser import HTMLParser
 from pathlib import Path
 from urllib.parse import urljoin, urlparse
@@ -2813,6 +2813,7 @@ def import_mer_kill_dumps(month=None):
             "changed": 0,
             "failed": 0,
             "rows_imported": 0,
+            "imported_months": [],
         }
 
         _mer_log(
@@ -2836,6 +2837,7 @@ def import_mer_kill_dumps(month=None):
 
                 if state == "imported":
                     stats["imported"] += 1
+                    stats["imported_months"].append(row_month.strftime('%Y-%m'))
                     stats["rows_imported"] += result["rows_imported"]
                 elif state == "skipped":
                     stats["skipped"] += 1
@@ -2874,9 +2876,9 @@ def import_mer_kill_dumps(month=None):
 # MER ALLIANCE IDS FROM EXISTING LOCAL CORPORATION HISTORY
 # ============================================================
 
-def enrich_mer_entity_ids():
+def enrich_mer_entity_ids(months=None):
     """
-    Pour toutes les lignes de mer.killmails :
+    Pour les mois MER demandés (dernier MER importé par défaut) :
 
       victim_corporation_id + kill_datetime
           -> entities.corporation_alliance_history
@@ -2896,10 +2898,16 @@ def enrich_mer_entity_ids():
         return {"busy": True}
 
     try:
-        _mer_log("[ALLIANCE_HISTORY] START")
+        _mer_log("[ALLIANCE_HISTORY] START Selecting MER months")
 
         with db() as conn:
             with conn.cursor() as cur:
+                if months is None:
+                    cur.execute(f"SELECT MAX(month) FROM {_mer_data_table(MER_KILL_IMPORT_TABLE)} WHERE status='success'")
+                    latest=cur.fetchone()[0]
+                    selected_months=[latest] if latest else []
+                else:
+                    selected_months=sorted({datetime.strptime(str(month)[:7], '%Y-%m').date() for month in months})
                 cur.execute("""SELECT child.relname FROM pg_inherits i
                     JOIN pg_class parent ON parent.oid=i.inhparent
                     JOIN pg_namespace parent_ns ON parent_ns.oid=parent.relnamespace
@@ -2907,10 +2915,12 @@ def enrich_mer_entity_ids():
                     JOIN pg_namespace child_ns ON child_ns.oid=child.relnamespace
                     WHERE parent_ns.nspname=%s AND parent.relname=%s AND child_ns.nspname=%s
                     ORDER BY child.relname""",(MER_DATA_SCHEMA,MER_KILL_TABLE,MER_DATA_SCHEMA))
-                partitions=[row[0] for row in cur.fetchall()] or [MER_KILL_TABLE]
-                _mer_log(f"[ALLIANCE_HISTORY] PLAN total={len(partitions)}")
+                available={row[0] for row in cur.fetchall()}
+                partitions=[(f"{MER_KILL_TABLE}_{month:%Y_%m}" if available else MER_KILL_TABLE,month) for month in selected_months
+                            if not available or f"{MER_KILL_TABLE}_{month:%Y_%m}" in available]
+                _mer_log(f"[ALLIANCE_HISTORY] PLAN total={len(partitions)} months={','.join(f'{month:%Y-%m}' for month in selected_months)}")
                 rows=0
-                for partition_name in partitions:
+                for partition_name,month in partitions:
                     partition_table=f"{MER_DATA_SCHEMA}.{_quote_ident(partition_name)}"
                     _mer_log(f"[ALLIANCE_HISTORY] partition={partition_name} START Updating historical affiliations")
                     cur.execute(f"""
@@ -2939,8 +2949,9 @@ def enrich_mer_entity_ids():
                                   )
                                 ORDER BY h.start_date DESC, h.record_id DESC
                                 LIMIT 1
-                            );
-                    """)
+                            )
+                        WHERE m.kill_datetime >= %s AND m.kill_datetime < %s;
+                    """, (month, (month.replace(day=28)+timedelta(days=4)).replace(day=1)))
                     affected=int(cur.rowcount or 0)
                     rows+=affected
                     _mer_log(f"[ALLIANCE_HISTORY] partition={partition_name} rows={affected}")

@@ -10,7 +10,9 @@ The pipeline runs these steps sequentially:
 3. Analyze local archives.
 4. Import the kill dumps.
 5. Import economic data and wait for that worker's successful completion.
-6. Resolve historical alliance IDs.
+6. Resolve historical alliance IDs only for newly imported MER months. When
+   retrying without new imports, use the latest successfully imported MER month.
+   The standalone action also defaults to that MER month, not the calendar month.
 7. Reconcile MER rows with existing raw killmails.
 
 A failed or busy step stops the pipeline. Existing individual actions remain
