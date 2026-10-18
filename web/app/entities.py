@@ -1109,6 +1109,50 @@ def _killmail_value_fields(value_cents=None, *, mer_isk=None):
             "value_source": source}
 
 
+def _add_entity_true_values(conn, entity_type, entity_id, killmails, values_by_km):
+    """Add entity credit for the visible page only, using the ranking damage rule."""
+    columns = {'character': 'character_id', 'corporation': 'corporation_id', 'alliance': 'alliance_id'}
+    if entity_type not in columns:
+        return
+    keys = list(dict.fromkeys((row['killmail_id'],row['killmail_time']) for row in killmails
+                             if not row['is_loss'] and values_by_km.get((row['killmail_id'],row['killmail_time'])) is not None))
+    damage = {}
+    if keys:
+        placeholders = ','.join(['(%s::bigint,%s::timestamptz)']*len(keys))
+        params = [value for key in keys for value in key]
+        with conn.cursor() as cur:
+            cur.execute('SET LOCAL jit=off')
+            cur.execute(f'''
+                SELECT p.id,p.at,d.total_damage,d.entity_damage
+                FROM (VALUES {placeholders}) p(id,at)
+                CROSS JOIN LATERAL (
+                    SELECT sum(GREATEST(COALESCE(a.damage_done,0),0)::numeric) AS total_damage,
+                           sum(GREATEST(COALESCE(a.damage_done,0),0)::numeric)
+                               FILTER (WHERE a.{columns[entity_type]}=%s) AS entity_damage
+                    FROM rawkm.killmail_attackers a
+                    WHERE a.killmail_id=p.id AND a.killmail_time=p.at
+                ) d
+            ''',params+[int(entity_id)])
+            damage = {(id,at):(total or Decimal(0),own or Decimal(0)) for id,at,total,own in cur.fetchall()}
+    for row in killmails:
+        key = row['killmail_id'],row['killmail_time']
+        cents = values_by_km.get(key)
+        if cents is None:
+            continue
+        if row['is_loss']:
+            credit = Decimal(cents)
+            explanation = 'Losses count at full value.'
+        else:
+            if key not in damage:
+                continue
+            total,own = damage[key]
+            credit = Decimal(cents)*own/total if total else Decimal(0)
+            explanation = f'{100*own/total:.3f}% of all attacker damage, including NPCs.' if total else 'No positive attacker damage recorded.'
+        fields = _killmail_value_fields(credit)
+        row.update(true_value_label=fields['value_label'],true_value_cents=credit,
+                   true_value_title=f"True ISK: {fields['value_full_label']} — {explanation}")
+
+
 def _damage_percent(damage_done, victim_damage_taken):
     damage = int(damage_done or 0)
     total = int(victim_damage_taken or 0)
@@ -3177,6 +3221,7 @@ def _character_killmails(conn, character_id, page=1, per_page=100, filters=None)
             **_killmail_value_fields(values_by_km.get((int(killmail_id), killmail_time))),
         })
 
+    _add_entity_true_values(conn, 'character', character_id, killmails, values_by_km)
     timing_marks["build_rows_ms"] = round((perf_counter() - build_started) * 1000, 1)
     timing_marks["total_ms"] = round((perf_counter() - timing_started) * 1000, 1)
     _timing_print(f"ENTITY_PROFILE_TIMING character_killmails character_id={character_id} page={page} per_page={per_page} details={timing_marks}")
@@ -4953,6 +4998,7 @@ def _group_entity_killmails(conn, entity_type, entity_id, page=1, per_page=100, 
             **_killmail_value_fields(values_by_km.get((int(killmail_id), killmail_time))),
         })
 
+    _add_entity_true_values(conn, entity_type, entity_id, killmails, values_by_km)
     timing_marks["build_rows_ms"] = round((perf_counter() - build_started) * 1000, 1)
     timing_marks["total_ms"] = round((perf_counter() - timing_started) * 1000, 1)
     _timing_print(f"ENTITY_PROFILE_TIMING {timing_label} entity_id={entity_id} page={page} per_page={per_page} details={timing_marks}")

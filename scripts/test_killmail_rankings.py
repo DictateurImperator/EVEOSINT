@@ -581,6 +581,19 @@ class DatabaseTests(unittest.TestCase):
             self.assertEqual(rankings.combat_history('character',999999)['rows'],[])
         with self.assertRaises(ValueError):rankings.combat_history('coalition',42)
 
+    def test_killboard_true_values_use_the_same_entity_damage_as_rankings(self):
+        at=datetime(2026,1,2,12,tzinfo=UTC)
+        later=datetime(2026,2,2,12,tzinfo=UTC)
+        for kind,id,expected in [('character',1,Decimal(3000)),('corporation',10,Decimal(5000)),('alliance',1000,Decimal(5000))]:
+            rows=[dict(killmail_id=100,killmail_time=at,is_loss=False),
+                  dict(killmail_id=100,killmail_time=later,is_loss=False),
+                  dict(killmail_id=101,killmail_time=at,is_loss=True)]
+            fixture.f.entities._add_entity_true_values(self.conn,kind,id,rows,
+                {(100,at):10000,(100,later):30000,(101,at):20000})
+            self.assertEqual(rows[0]['true_value_cents'],expected)
+            self.assertEqual(rows[1]['true_value_cents'],30000 if kind=='character' else 0)
+            self.assertEqual(rows[2]['true_value_cents'],20000)
+
     def test_top_kills_exact_ordering_beyond_the_first_raw_candidates(self):
         with self.conn.cursor() as cur:
             cur.execute('''INSERT INTO rawkm.killmails VALUES

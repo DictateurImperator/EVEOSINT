@@ -153,6 +153,7 @@
                   {% endif %}
                 {% endif %}
                 {% if km.value_label %}<span class="killmail-isk{% if not km.value_source %} killmail-isk-unavailable{% endif %}" title="{{ km.value_title or '' }}" aria-label="{{ km.value_title or km.value_label }}">{{ km.value_label }}{% if km.value_source %}<small class="killmail-isk-unit"> ISK</small>{% endif %}</span>{% endif %}
+                {% if km.true_value_label is defined %}<span class="killmail-true-isk" title="{{ km.true_value_title }}">({{ km.true_value_label }} <small>True ISK</small>)</span>{% endif %}
               </td>
               <td class="killmail-ship-cell">
                 {% if km.detail_url %}

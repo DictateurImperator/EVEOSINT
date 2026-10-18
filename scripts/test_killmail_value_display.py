@@ -77,6 +77,22 @@ class ValueDisplayTests(unittest.TestCase):
                         rows, _ = f.entities._group_entity_killmails(conn, "alliance", 90000002)
                 self.assertEqual(rows[0]["value_label"], "91.5 M")
                 self.assertEqual(rows[0]["value_full_label"], "91,500,000.05 ISK")
+                self.assertEqual(rows[0]["true_value_label"], "91.5 M")
+                self.assertIn('Losses count at full value',rows[0]['true_value_title'])
+
+    def test_true_values_batch_visible_kills_and_preserve_unknown_prices(self):
+        rows=[dict(killmail_id=id,killmail_time=f.TIME,is_loss=False) for id in (1,2,3)]
+        conn=f.Connection([(1,f.TIME,Decimal(100),Decimal(30)),(2,f.TIME,Decimal(0),Decimal(0))])
+        f.entities._add_entity_true_values(conn,'character',42,rows,{(1,f.TIME):10000,(2,f.TIME):5000,(3,f.TIME):None})
+        self.assertEqual(rows[0]['true_value_cents'],Decimal(3000))
+        self.assertEqual(rows[0]['true_value_label'],'30')
+        self.assertIn('30.000%',rows[0]['true_value_title'])
+        self.assertEqual(rows[1]['true_value_label'],'0')
+        self.assertNotIn('true_value_label',rows[2])
+        queries=[q for q,p in conn.queries if 'total_damage' in q]
+        self.assertEqual(len(queries),1)
+        self.assertIn('FILTER (WHERE a.character_id=%s)',queries[0])
+        self.assertNotIn('victim_damage_taken',queries[0])
 
 
 if __name__ == "__main__":
