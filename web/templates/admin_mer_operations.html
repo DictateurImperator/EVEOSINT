@@ -1,0 +1,46 @@
+<section class="content-card p-3 mb-3" aria-label="MER operations">
+<div class="d-flex justify-content-between align-items-center gap-2"><h2 class="h5 mb-0">MER operations · live progress</h2><a href="/admin/mer/log" target="_blank" rel="noopener" class="btn btn-sm btn-outline-secondary">MER log</a></div>
+<p class="muted-line small mt-2">Updates automatically every 3 seconds. Counts advance when a month completes; an active SQL query may take time. Completed means the final database commit succeeded.</p>
+<div id="merOperations" role="status" aria-live="polite">Checking operations…</div>
+<p id="merStatusError" class="text-warning small" role="alert"></p>
+<details class="mt-3"><summary>Latest MER log lines</summary><pre id="merLiveLog" class="small mt-2 mb-0" style="max-height:360px;overflow:auto;white-space:pre-wrap"></pre></details>
+</section>
+<script>
+(()=>{
+ const root=document.getElementById('merOperations'),error=document.getElementById('merStatusError'),log=document.getElementById('merLiveLog');
+ const labels={not_started:'No recorded run',running:'Running',completed:'Completed',completed_with_errors:'Completed with errors',failed:'Failed',interrupted:'Interrupted'};
+ const metrics={rows:'Rows processed',unique:'Unique matches',ambiguous:'Ambiguous matches',unresolved:'Unresolved',shared_raw_mer_rows:'Shared candidates',imported:'Files imported',skipped:'Skipped',failed:'Errors',errors:'Errors',changed:'Changed files',downloaded:'Downloaded',already_present:'Already present',present:'Kill dumps found',absent:'No kill dump',multiple:'Multiple candidates',zips:'ZIPs found'};
+ const endpoints={MER_ALL:'/admin/mer/all',SCAN:'/admin/mer/scan',DOWNLOAD:'/admin/mer/download',ANALYZE:'/admin/mer/analyze',KILL_IMPORT:'/admin/mer/import-kills',ALLIANCE_HISTORY:'/admin/mer/resolve-entity-ids',KILL_MATCH:'/admin/mer/match-killmails'};
+ function line(parent,text,css='muted-line small'){const el=document.createElement('div');el.className=css;el.textContent=text;parent.append(el);return el;}
+ function stamp(value){return value?new Date(value).toLocaleString():'';}
+ function duration(seconds){seconds=Math.max(0,Number(seconds)||0);return `${Math.floor(seconds/3600)}h ${Math.floor(seconds%3600/60)}m ${seconds%60}s`;}
+ async function refresh(){
+  try{
+   const response=await fetch('/admin/mer/status',{headers:{Accept:'application/json'},cache:'no-store'});
+   if(!response.ok||response.redirected||!(response.headers.get('content-type')||'').includes('application/json'))throw new Error('Status unavailable. Your session may have expired.');
+   const data=await response.json();root.replaceChildren();
+   for(const button of document.querySelectorAll('[data-mer-all-disabled]')){if(button.id!=='economy-import-button')button.disabled=false;delete button.dataset.merAllDisabled;}
+   for(const state of data.operations||[]){
+    const box=document.createElement('div');box.className='border-top py-3';box.dataset.merOperation=state.key;
+    const heading=line(box,`${state.label} · ${state.waiting_for_lock?'Waiting for database lock':labels[state.status]||state.status}`,'fw-semibold');
+    if(state.status==='completed')heading.classList.add('text-success');if(['failed','interrupted','completed_with_errors'].includes(state.status))heading.classList.add('text-danger');
+    if(state.total!==undefined&&state.total!==null){line(box,`${state.key==='MER_ALL'?'Steps completed':'Months / files completed'}: ${Number(state.processed||0).toLocaleString()} / ${Number(state.total).toLocaleString()}${state.current?' · Current: '+state.current:''}`);const bar=document.createElement('progress');bar.max=Math.max(1,state.total);bar.value=Math.min(state.total,state.processed||0);bar.className='w-100';bar.setAttribute('aria-label',state.label+' progress');box.append(bar);}
+    else if(state.current)line(box,'Current: '+state.current);
+    if(state.waiting_for_lock)line(box,'Waiting for: '+((state.waiting_for||[]).join(', ')||'another database transaction'),'text-warning small');
+    else if(state.status==='running')line(box,state.sql_active?'Database query active':state.sql_status_unavailable?'Database activity unavailable; job status and logs remain visible.':'Processing…');
+    const values=Object.entries(state.metrics||{}).filter(([key])=>metrics[key]).map(([key,value])=>`${metrics[key]}: ${Number(value).toLocaleString()}`);if(values.length)line(box,values.join(' · '));
+    if(state.started_at)line(box,`Started: ${stamp(state.started_at)} · Duration: ${duration(state.elapsed_seconds)}${state.finished_at?' · Finished: '+stamp(state.finished_at):''}`);
+    if(state.message)line(box,state.message,state.status==='failed'?'text-danger small':'muted-line small');
+    root.append(box);
+    for(const button of document.querySelectorAll(`form[action="${endpoints[state.key]}"] button`))button.disabled=state.status==='running';
+   }
+   const allRunning=(data.operations||[]).some(state=>state.key==='MER_ALL'&&state.status==='running');
+   document.documentElement.dataset.merAllRunning=allRunning?'1':'0';
+   if(allRunning)for(const button of document.querySelectorAll('form[action^="/admin/mer/"] button')){button.disabled=true;button.dataset.merAllDisabled='1';}
+   log.textContent=data.log||'';error.textContent='';
+  }catch(e){error.textContent=e.message||'Status unavailable. Latest displayed results have been kept.';}
+ }
+ let timer;async function poll(){await refresh();if(!document.hidden)timer=setTimeout(poll,3000);}
+ document.addEventListener('visibilitychange',()=>{clearTimeout(timer);if(!document.hidden)poll();});window.addEventListener('pagehide',()=>clearTimeout(timer));poll();
+})();
+</script>

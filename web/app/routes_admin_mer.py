@@ -30,6 +30,9 @@ from .mer import (
     scan_all_mer,
 )
 
+from . import mer_progress,mer_pipeline
+from .mer import MER_LOG_FILE
+
 router = APIRouter()
 
 
@@ -80,6 +83,7 @@ def admin_mer_scan(request: Request):
     redirect = require_permission_or_redirect(user, "admin.mer.view")
     if redirect:
         return redirect
+    if mer_pipeline.running():return RedirectResponse('/admin/mer?error=mer_all_busy',status_code=302)
 
     try:
         stats = scan_all_mer()
@@ -134,6 +138,7 @@ def admin_mer_reset_downloads(request: Request):
     redirect = require_permission_or_redirect(user, "admin.mer.view")
     if redirect:
         return redirect
+    if mer_pipeline.running():return RedirectResponse('/admin/mer?error=mer_all_busy',status_code=302)
 
     stats = reset_mer_downloads()
 
@@ -176,6 +181,7 @@ def admin_mer_download_all(
     redirect = require_permission_or_redirect(user, "admin.mer.view")
     if redirect:
         return redirect
+    if mer_pipeline.running():return RedirectResponse('/admin/mer?error=mer_all_busy',status_code=302)
 
     audit_log(
         request,
@@ -205,6 +211,7 @@ def admin_mer_download_one(
     redirect = require_permission_or_redirect(user, "admin.mer.view")
     if redirect:
         return redirect
+    if mer_pipeline.running():return RedirectResponse('/admin/mer?error=mer_all_busy',status_code=302)
 
     try:
         parsed_month = datetime.strptime(month, "%Y-%m").date().replace(day=1)
@@ -245,6 +252,7 @@ def admin_mer_analyze_all(
     redirect = require_permission_or_redirect(user, "admin.mer.view")
     if redirect:
         return redirect
+    if mer_pipeline.running():return RedirectResponse('/admin/mer?error=mer_all_busy',status_code=302)
 
     audit_log(
         request,
@@ -274,6 +282,7 @@ def admin_mer_analyze_one(
     redirect = require_permission_or_redirect(user, "admin.mer.view")
     if redirect:
         return redirect
+    if mer_pipeline.running():return RedirectResponse('/admin/mer?error=mer_all_busy',status_code=302)
 
     try:
         parsed_month = datetime.strptime(
@@ -319,6 +328,7 @@ def admin_mer_import_kills(
     redirect = require_permission_or_redirect(user, "admin.mer.view")
     if redirect:
         return redirect
+    if mer_pipeline.running():return RedirectResponse('/admin/mer?error=mer_all_busy',status_code=302)
 
     audit_log(
         request,
@@ -347,6 +357,7 @@ def admin_mer_resolve_entity_ids(
     redirect = require_permission_or_redirect(user, "admin.mer.view")
     if redirect:
         return redirect
+    if mer_pipeline.running():return RedirectResponse('/admin/mer?error=mer_all_busy',status_code=302)
 
     audit_log(
         request,
@@ -376,6 +387,7 @@ def admin_mer_match_killmails(
     redirect = require_permission_or_redirect(user, "admin.mer.view")
     if redirect:
         return redirect
+    if mer_pipeline.running():return RedirectResponse('/admin/mer?error=mer_all_busy',status_code=302)
 
     audit_log(
         request,
@@ -401,6 +413,7 @@ def admin_mer_import_economy(request: Request):
     redirect = require_permission_or_redirect(user, "admin.mer.view")
     if redirect:
         return redirect
+    if mer_pipeline.running():return RedirectResponse('/admin/mer?error=mer_all_busy',status_code=302)
     try:
         run_mer_economy_import_job()
     except JobError as exc:
@@ -430,3 +443,32 @@ def admin_mer_economy_log(request: Request):
         return PlainTextResponse(read_job_log("import_mer_economy", lines=250))
     except JobError:
         return PlainTextResponse("No economic import log is available yet.")
+
+
+@router.get('/admin/mer/status')
+def admin_mer_status(request:Request):
+    user=require_login(request)
+    redirect=require_permission_or_redirect(user,'admin.mer.view')
+    if redirect:return redirect
+    result=mer_progress.snapshot()
+    result['log']=mer_progress.log_tail(MER_LOG_FILE)
+    return JSONResponse(result,headers={'Cache-Control':'no-store'})
+
+
+@router.get('/admin/mer/log',response_class=PlainTextResponse)
+def admin_mer_log(request:Request):
+    user=require_login(request)
+    redirect=require_permission_or_redirect(user,'admin.mer.view')
+    if redirect:return redirect
+    return PlainTextResponse(mer_progress.log_tail(MER_LOG_FILE,250),headers={'Cache-Control':'no-store'})
+
+
+@router.post('/admin/mer/all')
+def admin_mer_all(request:Request):
+    user=require_login(request)
+    redirect=require_permission_or_redirect(user,'admin.mer.view')
+    if redirect:return redirect
+    try:started=mer_pipeline.start()
+    except Exception:started=False
+    audit_log(request,'admin_mer_all',user_id=user['id'],username=user['username'],target_type='mer',target_id='all',details='Sequential MER pipeline requested' if started else 'MER pipeline already busy or unavailable')
+    return RedirectResponse('/admin/mer?success=mer_all_started' if started else '/admin/mer?error=mer_all_busy',status_code=302)

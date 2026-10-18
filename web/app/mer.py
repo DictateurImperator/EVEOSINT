@@ -15,7 +15,27 @@ from urllib.parse import urljoin, urlparse
 
 import requests
 
-from .db import db, t
+from .db import db as _database, t
+from . import mer_progress
+from functools import wraps
+
+
+def db():
+    connection=_database()
+    mer_progress.bind_current(connection)
+    return connection
+
+
+def _reported_errors(tag):
+    def decorate(function):
+        @wraps(function)
+        def run(*args,**kwargs):
+            try:return function(*args,**kwargs)
+            except Exception as exc:
+                _mer_log(f"[{tag}] FAILED={exc}")
+                raise
+        return run
+    return decorate
 
 
 ARTICLE_BASE = "https://www.eveonline.com/news/view"
@@ -38,6 +58,8 @@ _log_lock = threading.Lock()
 
 def _mer_log(message):
     """Log MER append-only. Une erreur de log ne doit jamais casser le traitement."""
+    try:mer_progress.record(message)
+    except Exception:pass
     try:
         MER_LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
         line = f"{datetime.now().isoformat(timespec='seconds')} {message}\n"
@@ -562,6 +584,7 @@ def _scan_month(month):
     }
 
 
+@_reported_errors("SCAN")
 def scan_all_mer():
     """
     Catalogue MER stable.
@@ -1270,6 +1293,7 @@ def reset_mer_downloads():
         _download_lock.release()
 
 
+@_reported_errors("DOWNLOAD")
 def download_mer_archives(month=None):
     """
     Télécharge les ZIP MER catalogués.
@@ -1287,6 +1311,7 @@ def download_mer_archives(month=None):
         }
 
     try:
+        _mer_log("[DOWNLOAD] START Preparing archive list")
         rows = _catalog_rows_for_download(month=month)
 
         _mer_log(
@@ -1974,6 +1999,7 @@ def _catalog_rows_for_analysis(month=None):
     ]
 
 
+@_reported_errors("ANALYZE")
 def analyze_mer_archives(month=None):
     """
     Analyse les ZIP MER déjà téléchargés.
@@ -1997,6 +2023,7 @@ def analyze_mer_archives(month=None):
         }
 
     try:
+        _mer_log("[ANALYZE] START Preparing archive list")
         rows = _catalog_rows_for_analysis(month=month)
 
         _mer_log(
@@ -2748,6 +2775,7 @@ def _import_mer_kill_dump_row(row):
             raise
 
 
+@_reported_errors("KILL_IMPORT")
 def import_mer_kill_dumps(month=None):
     """
     Importe les kill dumps MER analysés dans mer.killmails.
@@ -2774,6 +2802,7 @@ def import_mer_kill_dumps(month=None):
         }
 
     try:
+        _mer_log("[KILL_IMPORT] START Preparing archive list")
         rows = _catalog_rows_for_kill_import(month=month)
 
         stats = {
@@ -2871,36 +2900,51 @@ def enrich_mer_entity_ids():
 
         with db() as conn:
             with conn.cursor() as cur:
-                cur.execute(f"""
-                    UPDATE {_mer_data_table(MER_KILL_TABLE)} AS m
-                    SET
-                        victim_alliance_id = (
-                            SELECT h.alliance_id
-                            FROM entities.corporation_alliance_history h
-                            WHERE h.corporation_id = m.victim_corporation_id
-                              AND h.start_date <= m.kill_datetime
-                              AND (
-                                  h.end_date IS NULL
-                                  OR m.kill_datetime < h.end_date
-                              )
-                            ORDER BY h.start_date DESC, h.record_id DESC
-                            LIMIT 1
-                        ),
-                        killer_alliance_id = (
-                            SELECT h.alliance_id
-                            FROM entities.corporation_alliance_history h
-                            WHERE h.corporation_id = m.killer_corporation_id
-                              AND h.start_date <= m.kill_datetime
-                              AND (
-                                  h.end_date IS NULL
-                                  OR m.kill_datetime < h.end_date
-                              )
-                            ORDER BY h.start_date DESC, h.record_id DESC
-                            LIMIT 1
-                        );
-                """)
-                rows = int(cur.rowcount or 0)
-
+                cur.execute("""SELECT child.relname FROM pg_inherits i
+                    JOIN pg_class parent ON parent.oid=i.inhparent
+                    JOIN pg_namespace parent_ns ON parent_ns.oid=parent.relnamespace
+                    JOIN pg_class child ON child.oid=i.inhrelid
+                    JOIN pg_namespace child_ns ON child_ns.oid=child.relnamespace
+                    WHERE parent_ns.nspname=%s AND parent.relname=%s AND child_ns.nspname=%s
+                    ORDER BY child.relname""",(MER_DATA_SCHEMA,MER_KILL_TABLE,MER_DATA_SCHEMA))
+                partitions=[row[0] for row in cur.fetchall()] or [MER_KILL_TABLE]
+                _mer_log(f"[ALLIANCE_HISTORY] PLAN total={len(partitions)}")
+                rows=0
+                for partition_name in partitions:
+                    partition_table=f"{MER_DATA_SCHEMA}.{_quote_ident(partition_name)}"
+                    _mer_log(f"[ALLIANCE_HISTORY] partition={partition_name} START Updating historical affiliations")
+                    cur.execute(f"""
+                        UPDATE {partition_table} AS m
+                        SET
+                            victim_alliance_id = (
+                                SELECT h.alliance_id
+                                FROM entities.corporation_alliance_history h
+                                WHERE h.corporation_id = m.victim_corporation_id
+                                  AND h.start_date <= m.kill_datetime
+                                  AND (
+                                      h.end_date IS NULL
+                                      OR m.kill_datetime < h.end_date
+                                  )
+                                ORDER BY h.start_date DESC, h.record_id DESC
+                                LIMIT 1
+                            ),
+                            killer_alliance_id = (
+                                SELECT h.alliance_id
+                                FROM entities.corporation_alliance_history h
+                                WHERE h.corporation_id = m.killer_corporation_id
+                                  AND h.start_date <= m.kill_datetime
+                                  AND (
+                                      h.end_date IS NULL
+                                      OR m.kill_datetime < h.end_date
+                                  )
+                                ORDER BY h.start_date DESC, h.record_id DESC
+                                LIMIT 1
+                            );
+                    """)
+                    affected=int(cur.rowcount or 0)
+                    rows+=affected
+                    _mer_log(f"[ALLIANCE_HISTORY] partition={partition_name} rows={affected}")
+            _mer_log("[ALLIANCE_HISTORY] STEP Committing all monthly updates")
             conn.commit()
 
         _mer_log(f"[ALLIANCE_HISTORY] END rows={rows}")
@@ -2976,6 +3020,7 @@ def match_mer_killmails(months=None):
                 if not cur.fetchone()[0]:
                     _mer_log("[KILL_MATCH] BUSY")
                     return {"busy": True}
+            _mer_log("[KILL_MATCH] STEP Preparing tables and indexes")
             _ensure_mer_kill_tables(conn)
             conn.commit()
 
@@ -3010,6 +3055,9 @@ def match_mer_killmails(months=None):
                 "shared_raw_mer_rows": 0,
             }
 
+            planned=[name for name in partitions if selected_months is None or name.removeprefix(MER_KILL_TABLE+'_').replace('_','-') in selected_months]
+            _mer_log(f"[KILL_MATCH] PLAN total={len(planned)}")
+            _mer_log("[KILL_MATCH] STEP Reserving already matched raw killmails")
             # Les rattachements déjà trouvés ne sont jamais rejoués.
             # Leurs raw killmail IDs sont réservés afin qu'un nouveau MER
             # ne puisse pas reprendre un kill déjà rattaché.
@@ -3045,6 +3093,7 @@ def match_mer_killmails(months=None):
                 if selected_months is not None and f"{year}-{month}" not in selected_months:
                     continue
 
+                _mer_log(f"[KILL_MATCH] partition={partition_name} START Searching unmatched rows")
                 partition_table = (
                     f"{MER_DATA_SCHEMA}.{_quote_ident(partition_name)}"
                 )

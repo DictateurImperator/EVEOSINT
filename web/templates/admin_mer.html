@@ -8,6 +8,7 @@
   </div>
 
   <div class="d-flex gap-2 flex-wrap justify-content-end">
+    <form method="post" action="/admin/mer/all"><button id="mer-all-button" type="submit" class="btn btn-info fw-bold">MER ALL</button></form>
     <form method="post" action="/admin/mer/scan">
       <button type="submit" class="btn btn-outline-primary">
         Scan CCP MER
@@ -50,6 +51,10 @@
   </div>
 </div>
 
+{% if success=='mer_all_started' %}<div class="alert alert-info">MER ALL started. Steps run sequentially through economic import and killmail reconciliation. Follow live progress below.</div>{% endif %}
+{% if error=='mer_all_busy' %}<div class="alert alert-warning">A MER operation is already running, or the pipeline could not start. Follow its progress before launching MER ALL.</div>{% endif %}
+{% include "admin_mer_operations.html" %}
+
 {% if success == "economy_started" %}
 <div class="alert alert-info">Economic import started in the background. Progress updates below automatically.</div>
 {% endif %}
@@ -73,7 +78,7 @@
       const response = await fetch('/admin/mer/economy-status', {headers: {'Accept': 'application/json'}});
       if (!response.ok || !(response.headers.get('content-type') || '').includes('application/json')) throw new Error('Status unavailable');
       const data = await response.json();
-      button.disabled = data.running;
+      button.disabled = data.running || document.documentElement.dataset.merAllRunning === '1';
       const p = data.progress;
       if (!p) { output.textContent = 'No economic import started yet.'; return; }
       const names = {starting: 'Starting', running: 'Running', completed: 'Completed', failed: 'Completed with errors — see job log', interrupted: 'Interrupted — see job log'};
