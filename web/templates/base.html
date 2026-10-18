@@ -257,8 +257,14 @@
       border-bottom: 1px solid rgba(148, 163, 184, 0.07);
     }
 
+    button.topbar-entity-search-result {
+      width: 100%; text-align: left; background: none;
+      border-top: 0; border-left: 0; font: inherit; cursor: pointer;
+    }
+
     .topbar-entity-search-result:hover,
-    .topbar-entity-search-result.active {
+    .topbar-entity-search-result.active,
+    .topbar-entity-search-result:focus-visible {
       background: rgba(13, 110, 253, 0.45);
       color: #fff;
     }
@@ -532,6 +538,7 @@
       line-height: 1.45;
     }
   </style>
+<script>{% include "entity_search_results.js" %}</script>
 </head>
 
 <body>
@@ -803,35 +810,7 @@
           return;
         }
 
-        const groups = [];
-        const bySection = new Map();
-        lastResults.forEach((item, index) => {
-          if (!bySection.has(item.section)) {
-            const group = {section: item.section, items: []};
-            bySection.set(item.section, group);
-            groups.push(group);
-          }
-          bySection.get(item.section).items.push({item, index});
-        });
-
-        resultsBox.innerHTML = groups.map((group) => `
-          <section class="topbar-entity-search-section">
-            <div class="topbar-entity-search-section-title">${escapeHtml(group.section)}</div>
-            <div class="topbar-entity-search-grid">
-              ${group.items.map(({item, index}) => `
-                <a class="topbar-entity-search-result" href="${escapeHtml(item.url)}" data-index="${index}">
-                  ${item.image_url
-                    ? `<img src="${escapeHtml(item.image_url)}" alt="" loading="lazy" onerror="this.style.display='none'">`
-                    : `<span class="topbar-entity-search-fallback-icon ${escapeHtml(item.entity_type)}" aria-hidden="true"></span>`}
-                  <span class="topbar-entity-search-text">
-                    <span class="topbar-entity-search-name">${escapeHtml(item.label)}</span>
-                    <span class="topbar-entity-search-type">${escapeHtml(item.subtitle)}</span>
-                  </span>
-                </a>
-              `).join("")}
-            </div>
-          </section>
-        `).join("");
+        window.EVEOSINTEntitySearch.render(resultsBox, lastResults);
 
         resultsBox.querySelectorAll(".topbar-entity-search-result").forEach((node) => {
           node.addEventListener("mousedown", (event) => {

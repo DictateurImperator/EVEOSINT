@@ -184,9 +184,11 @@ class RouteTests(unittest.TestCase):
         with patch.object(base.rankings,'lookup',return_value=[pilot]) as find,patch.object(coalitions,'search_member_entities',return_value=[corp]):
             response=self.client.get('/account/groups/lookup?kind=member&q=Pi')
             data=response.json()['results'];self.assertEqual(response.status_code,200)
-            self.assertIn('/characters/42/portrait?',data[0]['image_url'])
-            self.assertIn('Corp · Alliance',data[0]['subtitle'])
-            self.assertIn('/corporations/10/logo?',data[1]['image_url'])
+            self.assertEqual([r['section'] for r in data],['CORPORATIONS','CHARACTERS'])
+            by_kind={r['kind']:r for r in data}
+            self.assertIn('/characters/42/portrait?',by_kind['character']['image_url'])
+            self.assertIn('Corp · Alliance',by_kind['character']['subtitle'])
+            self.assertIn('/corporations/10/logo?',by_kind['corporation']['image_url'])
             find.reset_mock()
             response=self.client.get('/account/groups/lookup?kind=member&entity_type=corporation&q=Co')
             find.assert_not_called();self.assertEqual([r['kind'] for r in response.json()['results']],['corporation'])

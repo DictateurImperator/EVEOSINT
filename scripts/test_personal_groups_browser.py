@@ -43,8 +43,11 @@ try:
     route.fulfill(json={'results':[dict(id=2,username='Trusted manager')]});return
    if '/lookup?' in path and 'kind=ship' in path:
     route.fulfill(json={'results':[dict(kind='ship_group',id='Destroyer',label='Destroyer',subtitle='Ship group',image_url=None)]});return
+   choices=[dict(kind='corporation',id=10,label='Example corporation',image_url=None,subtitle='Corporation',section='CORPORATIONS'),*[dict(kind='character',id=94036773+i,label='Dictateur Imperator' if i==0 else f'Example pilot {i}',image_url=None,subtitle='Pilot',section='CHARACTERS') for i in range(6)]]
+   if path.startswith('/api/entity-search?'):
+    route.fulfill(json={'results':[dict(item,entity_type=item['kind'],url=f"/{item['kind']}/{item['id']}") for item in choices]});return
    if '/lookup?' in path:
-    data={'results':[dict(kind='character',id=94036773,label='Dictateur Imperator',image_url=None)]};route.fulfill(json=data);return
+    data={'results':choices};route.fulfill(json=data);return
    if path.endswith('/status'):
     route.fulfill(json={'progress':dict(state='running',phase='Scanning killmails',checked=3,total=10,current_period='2026-01',kills_examined=1234),'periods':['2026-01'],'ready':False});return
    if '/data?' in path and 'view=ranking' in path:
@@ -60,7 +63,16 @@ try:
   page.route('**/*',serve)
   page.goto(origin+'/account/groups/new')
   page.locator('.account-menu summary').click();expect(page.get_by_role('link',name='My groups',exact=True).first).to_be_visible();page.locator('.account-menu summary').click()
+  top=page.locator('[data-entity-search-input]');top.fill('Example');expect(page.locator('[data-entity-search-results] .topbar-entity-search-grid')).to_have_count(2)
+  assert page.locator('[data-entity-search-results] .topbar-entity-search-grid').first.evaluate("el=>getComputedStyle(el).gridTemplateColumns.split(' ').length")==3
+  top.press('Escape')
   page.locator('[name=name]').fill('Imperial test group');page.locator('#memberSearch').fill('Dictateur');page.locator('#memberSearch').press('ArrowDown')
+  expect(page.locator('#memberResults .topbar-entity-search-section-title')).to_have_text(['CORPORATIONS','CHARACTERS'])
+  assert page.locator('#memberResults .topbar-entity-search-grid').last.evaluate("el=>getComputedStyle(el).gridTemplateColumns.split(' ').length")==3
+  cells=page.locator('#memberResults .topbar-entity-search-grid').last.locator('button')
+  a,b,c,d=[cells.nth(i).bounding_box() for i in range(4)]
+  assert a['y']==b['y']==c['y'] and a['x']<b['x']<c['x'] and d['y']>a['y']
+  page.get_by_role('button',name='Example corporation Corporation',exact=True).focus();page.keyboard.press('ArrowDown');expect(page.get_by_role('button',name='Dictateur Imperator Pilot',exact=True)).to_be_focused()
   page.get_by_role('button',name='Dictateur Imperator Pilot').click();expect(page.locator('#memberRules tr')).to_have_count(1)
   expect(page.locator('#memberRules img')).to_have_attribute('src','https://images.evetech.net/characters/94036773/portrait?size=64')
   page.get_by_label('Member from: Dictateur Imperator',exact=True).fill('2026-01-05');page.get_by_label('Member through: Dictateur Imperator',exact=True).fill('2026-01-20')

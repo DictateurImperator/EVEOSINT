@@ -83,8 +83,15 @@ def lookup(request:Request):
         kind=r.get('entity_type');id=r.get('entity_id')
         from .entities import image_url
         picture=r.get('image_url') or r.get('logo_url') or (image_url(kind,id,64) if kind in ('character','corporation','alliance','ship') else None)
-        return dict(kind=kind,id=id,label=r.get('name') or r.get('label'),image_url=picture,
+        return dict(kind=kind,id=id,label=r.get('label') or (str(r.get('name') or '')+(f" [{r['ticker']}]" if r.get('ticker') else '')),image_url=picture,
+                    section={'coalition':'COALITIONS','alliance':'ALLIANCES','corporation':'CORPORATIONS','character':'CHARACTERS','ship':'SHIPS','ship_group':'SHIP TYPES','system':'SYSTEMS','constellation':'CONSTELLATIONS','region':'REGIONS'}.get(kind,str(kind).upper()),
                     subtitle=r.get('subtitle') or ' · '.join(str(v) for v in [kind,r.get('corporation_name'),r.get('alliance_name')] if v))
+    if kind=='member':
+        order={'coalition':0,'alliance':1,'corporation':2,'character':3};counts={};grouped=[]
+        for row in sorted(rows,key=lambda r:order.get(r.get('entity_type'),99)):
+            category=row.get('entity_type');counts[category]=counts.get(category,0)+1
+            if counts[category]<=6:grouped.append(row)
+        rows=grouped
     return no_store(JSONResponse({'results':[display(r) for r in rows[:24]]}))
 
 
