@@ -221,4 +221,7 @@ def ensure_tables():
             """)
 
 
+            from .personal_groups import schema_sql
+            cur.execute(schema_sql())
+
         conn.commit()

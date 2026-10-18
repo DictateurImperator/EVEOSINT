@@ -31,6 +31,7 @@ from .routes_home import router as home_router
 from .routes_login import router as login_router
 from .routes_map_economy import router as map_economy_router
 from .routes_population_economics import router as population_economics_router
+from .routes_personal_groups import router as personal_groups_router
 from .routes_superintel import router as superintel_router
 from .routes_update_status import router as update_status_router
 from .schema import ensure_tables
@@ -127,6 +128,7 @@ def _requires_csrf_check(request: Request) -> bool:
     return (
         path == "/logout"
         or path in {"/account/password", "/account/delete"}
+        or path.startswith("/account/groups/")
         or path == "/admin"
         or path.startswith("/admin/")
     )
@@ -254,6 +256,7 @@ def startup():
 app.include_router(login_router)
 app.include_router(home_router)
 app.include_router(account_router)
+app.include_router(personal_groups_router)
 app.include_router(superintel_router)
 app.include_router(entities_router)
 app.include_router(map_economy_router)

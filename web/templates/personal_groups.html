@@ -1,0 +1,5 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="d-flex justify-content-between align-items-center flex-wrap gap-3 mb-4"><div><h1 class="h3">My groups</h1><p class="muted-line mb-0">{{ groups|length }} / 3 personal groups · Private until you publish selected pages.</p></div>{% if groups|length < 3 %}<a class="btn btn-primary" href="/account/groups/new">Create group</a>{% endif %}</div>
+<div class="row g-3">{% for group in groups %}<div class="col-12 col-xl-4"><section class="content-card p-4 h-100"><h2 class="h5"><a href="/account/groups/{{ group.id }}">{{ group.name }}</a></h2><p>{{ group.description }}</p><p class="muted-line">{{ 'Public link enabled' if group.public_token else 'Private' }} · {{ group.progress.phase or 'Not prepared' }}</p><a class="btn btn-outline-primary" href="/account/groups/{{ group.id }}">Open group</a></section></div>{% else %}<p class="muted-line">Create a group from pilots, corporations, alliances or coalitions. Its killboard, combat statistics and ship capabilities can then be viewed by period.</p>{% endfor %}</div>
+{% endblock %}

@@ -557,9 +557,13 @@
       </div>
 
       <div class="top-actions">
-        <a class="account-link" href="/account">
-          {{ account_label }}
-        </a>
+        <details class="account-menu" style="position:relative">
+          <summary class="account-link" style="cursor:pointer;list-style:none">{{ account_label }} ▾</summary>
+          <nav aria-label="Account" style="position:absolute;right:0;top:100%;min-width:170px;background:#0f172a;border:1px solid #334155;border-radius:8px;padding:.5rem;z-index:1200">
+            <a class="d-block p-2 text-decoration-none" href="/account">My account</a>
+            {% if user and 'entities.view' in user.permissions %}<a class="d-block p-2 text-decoration-none" href="/account/groups">My groups</a>{% endif %}
+          </nav>
+        </details>
 
         <form method="post" action="/logout" class="m-0">
           <button class="logout-link" type="submit" title="Logout" aria-label="Logout" style="padding:0;cursor:pointer;">
