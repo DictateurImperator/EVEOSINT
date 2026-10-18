@@ -7,7 +7,15 @@ group dates, combat areas and ship/model-group filters. Overlapping rules never
 multiply a pilot, kill or damage credit. Membership follows the studied date;
 killmail affiliations take precedence over historical fallback, never today's
 membership. Coalition history is read when the requested result is calculated.
-The editor uses the same grouped search renderer as the top bar.
+The editor uses the same grouped search renderer as the top bar. A separate
+**Avoid** list accepts up to 60 pilots, corporations, alliances or coalitions.
+A victim matching Avoid and killed by the group is removed from all group combat results
+(killboard, stats, top kills and local ranking). This is independent of membership
+exclusions: the pilotable-ship roster remains intact. Losses caused by opponents
+remain visible; internal losses against an Avoid target are hidden. Coalition
+Avoid rules follow historical composition. MER Hidden/TOTAL can match whole
+corporations/alliances/coalitions; individual Avoid pilots are matched only when
+a unique resolved raw killmail identifies them, never guessed on Hidden rows.
 
 ## Calculate only on request
 
@@ -83,8 +91,10 @@ directory. Anonymous visitors have no links into account-only entity pages;
 signed-in visitors can follow the normal entity, killmail, ship and location
 links, with each destination enforcing its own access permissions. Rendered
 killboard caches distinguish anonymous and signed-in responses, and login state
-is checked on every data request. Definitions, owner metadata and
-management controls are never passed to the public template. Anonymous pages
+is checked on every data request. Public pages display a read-only summary of configured members, membership
+dates, Avoid entries, areas and ship filters, derived from the saved definition
+without scanning killmails or expanding rosters. Owner metadata, delegation and
+management controls remain private. Anonymous pages
 show an EVEOSINT link to login; signed-in viewers get their usual app navigation. Responses are
 no-store/noindex, with no-referrer.
 

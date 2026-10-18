@@ -46,6 +46,8 @@ try:
    choices=[dict(kind='corporation',id=10,label='Example corporation',image_url=None,subtitle='Corporation',section='CORPORATIONS'),*[dict(kind='character',id=94036773+i,label='Dictateur Imperator' if i==0 else f'Example pilot {i}',image_url=None,subtitle='Pilot',section='CHARACTERS') for i in range(6)]]
    if path.startswith('/api/entity-search?'):
     route.fulfill(json={'results':[dict(item,entity_type=item['kind'],url=f"/{item['kind']}/{item['id']}") for item in choices]});return
+   if '/lookup?' in path and parse_qs(urlparse(path).query).get('q')==['Imperium']:
+    route.fulfill(json={'results':[dict(kind='coalition',id=1,label='Imperium',image_url=None,subtitle='Coalition',section='COALITIONS')]});return
    if '/lookup?' in path:
     data={'results':choices};route.fulfill(json=data);return
    if '/data?' in path and 'view=ranking' in path:
@@ -84,6 +86,7 @@ try:
   page.get_by_role('button',name='Dictateur Imperator Pilot').click();expect(page.locator('#memberRules tr')).to_have_count(1)
   expect(page.locator('#memberRules img')).to_have_attribute('src','https://images.evetech.net/characters/94036773/portrait?size=64')
   page.get_by_label('Member from: Dictateur Imperator',exact=True).fill('2026-01-05');page.get_by_label('Member through: Dictateur Imperator',exact=True).fill('2026-01-20')
+  page.locator('#avoidSearch').fill('Imperium');page.get_by_role('button',name='Imperium Coalition',exact=True).click();expect(page.locator('#avoidRules tr')).to_have_count(1)
   page.locator('#shipSearch').fill('Destroyer');page.get_by_role('button',name='Destroyer Ship group',exact=True).click();expect(page.locator('#shipRules tr')).to_have_count(1)
   page.locator('#shipRules select').last.select_option('victim')
   page.locator('#groupFrom').fill('2026-01-01');page.locator('#groupThrough').fill('2026-01-31');page.locator('#addPreset').click();expect(page.locator('#zoneRules tr')).to_have_count(1)
@@ -91,6 +94,8 @@ try:
   expect(page).to_have_url(origin+'/account/groups/9')
   payload=store.save.call_args.args[3]
   assert payload['members'][0]['from']=='2026-01-05' and payload['members'][0]['through']=='2026-01-20'
+  assert payload['avoids'][0]['kind']=='coalition' and payload['avoids'][0]['label']=='Imperium'
+  group['definition']=payload
   assert payload['ships'][0]['role']=='victim' and payload['ships'][0]['id']=='Destroyer'
 
   expect(page.locator('#groupResult')).to_have_count(0)
@@ -108,6 +113,8 @@ try:
   page.goto(origin+'/public/groups/'+'a'*32)
   expect(page.get_by_role('link',name='EVEOSINT',exact=True)).to_have_attribute('href','/login')
   expect(page.locator('#groupResult')).to_have_count(0)
+  expect(page.locator('#publicGroupRules')).to_be_visible();expect(page.locator('#publicGroupRules')).to_contain_text('Imperium')
+  expect(page.locator('#publicGroupRules input')).to_have_count(0)
   assert not any('/data?' in path for path in requests)
   page.get_by_role('link',name='Combat stats',exact=True).click()
   expect(page.locator('#groupResultProgress')).to_contain_text('Complete')

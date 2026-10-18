@@ -11,6 +11,9 @@
 <h2 class="h5 mt-4">Members</h2><p class="muted-line">Each member can have its own start and end dates. Blank dates keep the member for the whole group period. The end date includes that entire UTC day.</p>
 <div class="d-flex gap-2 align-items-start flex-wrap"><label class="visually-hidden" for="memberKind">Member type</label><select id="memberKind" class="form-select" style="width:180px"><option value="all">All entities</option><option value="character">Pilots</option><option value="corporation">Corporations</option><option value="alliance">Alliances</option><option value="coalition">Coalitions</option></select><div class="position-relative flex-grow-1" style="min-width:min(260px,100%)"><input class="form-control" id="memberSearch" placeholder="Search a pilot, corporation, alliance or coalition" autocomplete="off"><div id="memberResults" class="topbar-entity-search-results group-suggestions" hidden></div></div></div>
 <div class="table-responsive mt-3"><table class="table"><thead><tr><th>Rule</th><th>Entity</th><th>Member from (UTC)</th><th>Member through (UTC)</th><th></th></tr></thead><tbody id="memberRules"></tbody></table></div>
+<h2 class="h5 mt-4">Avoid</h2><p class="muted-line">Hide kills against these pilots, corporations, alliances or coalitions from this group's killboard, combat stats, top kills and local ranking. This does not remove them from membership. Losses caused by opponents remain visible; an internal loss is hidden if this group killed an Avoid target. Coalitions follow their historical membership. MER Hidden reports identify corporations and alliances, but not pilots.</p>
+<div class="position-relative"><input class="form-control" id="avoidSearch" placeholder="Search a pilot, corporation, alliance or coalition to avoid" autocomplete="off"><div id="avoidResults" class="topbar-entity-search-results group-suggestions" hidden></div></div>
+<div class="table-responsive mt-3"><table class="table"><thead><tr><th>Rule</th><th>Entity</th><th></th></tr></thead><tbody id="avoidRules"></tbody></table></div>
 <h2 class="h5 mt-4">Combat area</h2><p class="muted-line">No geographical rule means all space. These rules filter kill locations. Ship capabilities count all known group members, independently of activity or location.</p>
 <div class="d-flex gap-2 flex-wrap mb-2"><select id="spacePreset" class="form-select" style="width:auto"><option value="highsec">High security</option><option value="lowsec">Low security</option><option value="nullsec">Null security</option><option value="wormhole">Anoikis / wormholes</option><option value="pochven">Pochven</option></select><button class="btn btn-outline-primary" id="addPreset" type="button">Add space type</button></div>
 <div class="position-relative"><input class="form-control" id="zoneSearch" placeholder="Search a system, constellation or region" autocomplete="off"><div id="zoneResults" class="topbar-entity-search-results group-suggestions" hidden></div></div>
@@ -25,6 +28,7 @@
 (() => {
  const initial={{ form_definition|tojson }};
  const members=Array.isArray(initial.members)?initial.members:[];
+ const avoids=Array.isArray(initial.avoids)?initial.avoids:[];
  const zones=Array.isArray(initial.zones)?initial.zones:[];
  const ships=Array.isArray(initial.ships)?initial.ships:[];
  const typeName=kind=>({character:'Pilot',corporation:'Corporation',alliance:'Alliance',coalition:'Coalition',ship:'Ship',ship_group:'Ship group',system:'System',constellation:'Constellation',region:'Region',security:'Space type'}[kind]||kind);
@@ -41,7 +45,7 @@
   const body=document.getElementById(target);body.replaceChildren();
   items.forEach((rule,index)=>{
    const tr=document.createElement('tr');const opCell=document.createElement('td');const op=document.createElement('select');op.className='form-select form-select-sm';
-   [['include','+ Include'],['exclude','− Exclude']].forEach(([value,label])=>{const o=new Option(label,value);op.add(o);});op.value=rule.op;op.onchange=()=>rule.op=op.value;opCell.append(op);tr.append(opCell);
+   [['include','+ Include'],['exclude','− Exclude']].forEach(([value,label])=>{const o=new Option(label,value);op.add(o);});op.value=rule.op;op.onchange=()=>rule.op=op.value;if(items===avoids)opCell.textContent='Hide kills against';else opCell.append(op);tr.append(opCell);
    const name=document.createElement('td');name.append(identity(rule));tr.append(name);
    if(items===ships){const td=document.createElement('td'),role=document.createElement('select');role.className='form-select form-select-sm';[['both','Either side'],['attacker','Attacking ship'],['victim','Lost ship']].forEach(([value,label])=>role.add(new Option(label,value)));role.value=rule.role||'both';role.onchange=()=>rule.role=role.value;td.append(role);tr.append(td);}
    if(isMember)['from','through'].forEach(key=>{const td=document.createElement('td');const input=document.createElement('input');input.type='date';input.className='form-control form-control-sm';input.value=rule[key]||'';input.setAttribute('aria-label',`${key==='from'?'Member from':'Member through'}: ${rule.label||rule.id}`);input.onchange=()=>rule[key]=input.value||null;td.append(input);tr.append(td);});
@@ -52,19 +56,19 @@
   const input=document.getElementById(inputId),results=document.getElementById(resultId);let timer,controller,sequence=0;
   input.addEventListener('input',()=>{clearTimeout(timer);if(controller)controller.abort();const seq=++sequence;const q=input.value.trim();results.replaceChildren();results.hidden=q.length<2;if(q.length<2)return;timer=setTimeout(async()=>{
    controller=new AbortController();results.hidden=false;results.textContent='Searching…';
-   try{const response=await fetch('/account/groups/lookup?'+new URLSearchParams({kind,q,...(kind==='member'?{entity_type:document.getElementById('memberKind').value}:{})}),{signal:controller.signal});if(!response.ok)throw new Error('Search unavailable');const data=await response.json();if(seq!==sequence)return;results.replaceChildren();
+   try{const response=await fetch('/account/groups/lookup?'+new URLSearchParams({kind,q,...(kind==='member'?{entity_type:items===avoids?'all':document.getElementById('memberKind').value}:{})}),{signal:controller.signal});if(!response.ok)throw new Error('Search unavailable');const data=await response.json();if(seq!==sequence)return;results.replaceChildren();
     if(!data.results.length)results.textContent='No matching entities.';
     const choices=data.results.map(item=>({...item,entity_type:item.kind,image_url:image(item),section:item.section||({coalition:'COALITIONS',alliance:'ALLIANCES',corporation:'CORPORATIONS',character:'CHARACTERS',ship:'SHIPS',ship_group:'SHIP TYPES',system:'SYSTEMS',constellation:'CONSTELLATIONS',region:'REGIONS',security:'SPACE TYPES'}[item.kind]||item.kind.toUpperCase())}));
-    window.EVEOSINTEntitySearch.render(results,choices,item=>{if(items.length>=(isMember?60:20)){results.textContent='Rule limit reached.';return;}items.push({kind:item.kind,id:item.id,label:item.label,image_url:item.image_url,subtitle:item.subtitle,op:'include',role:'both',from:null,through:null});draw(items,target,isMember);results.hidden=true;input.value='';});
+    window.EVEOSINTEntitySearch.render(results,choices,item=>{if(items.length>=(isMember||items===avoids?60:20)){results.textContent='Rule limit reached.';return;}items.push({kind:item.kind,id:item.id,label:item.label,image_url:item.image_url,subtitle:item.subtitle,op:'include',role:'both',from:null,through:null});draw(items,target,isMember);results.hidden=true;input.value='';});
    }catch(error){if(error.name!=='AbortError'&&seq===sequence)results.textContent='Search unavailable. Please retry.';}
   },250);});input.addEventListener('keydown',event=>{if(event.key==='Escape'){clearTimeout(timer);results.hidden=true;controller?.abort();++sequence;}if(event.key==='ArrowDown'){event.preventDefault();results.querySelector('button')?.focus();}});results.addEventListener('keydown',event=>{const buttons=[...results.querySelectorAll('button')],index=buttons.indexOf(document.activeElement);if(event.key==='Escape'){clearTimeout(timer);results.hidden=true;controller?.abort();++sequence;input.focus();}if(index>=0&&['ArrowDown','ArrowUp','ArrowLeft','ArrowRight'].includes(event.key)){event.preventDefault();buttons[(index+(['ArrowDown','ArrowRight'].includes(event.key)?1:-1)+buttons.length)%buttons.length].focus();}});
  document.addEventListener('click',event=>{if(!input.parentElement.contains(event.target)&&!(kind==='member'&&event.target===document.getElementById('memberKind'))){clearTimeout(timer);results.hidden=true;controller?.abort();++sequence;}});
  }
- draw(members,'memberRules',true);draw(zones,'zoneRules',false);draw(ships,'shipRules',false);
+ draw(avoids,'avoidRules',false);draw(members,'memberRules',true);draw(zones,'zoneRules',false);draw(ships,'shipRules',false);
  document.getElementById('memberKind').addEventListener('change',()=>document.getElementById('memberSearch').dispatchEvent(new Event('input')));
- search('memberSearch','memberResults','member',members,'memberRules',true);search('zoneSearch','zoneResults','zone',zones,'zoneRules',false);search('shipSearch','shipResults','ship',ships,'shipRules',false);
+ search('avoidSearch','avoidResults','member',avoids,'avoidRules',false);search('memberSearch','memberResults','member',members,'memberRules',true);search('zoneSearch','zoneResults','zone',zones,'zoneRules',false);search('shipSearch','shipResults','ship',ships,'shipRules',false);
  document.getElementById('addPreset').onclick=()=>{if(zones.length>=20)return;const input=document.getElementById('spacePreset');zones.push({kind:'security',id:input.value,label:input.selectedOptions[0].textContent,op:'include'});draw(zones,'zoneRules',false);};
- document.getElementById('groupEditor').addEventListener('submit',()=>{document.getElementById('definition').value=JSON.stringify({members,zones,ships,from:document.getElementById('groupFrom').value||null,through:document.getElementById('groupThrough').value||null});});
+ document.getElementById('groupEditor').addEventListener('submit',()=>{document.getElementById('definition').value=JSON.stringify({members,avoids,zones,ships,from:document.getElementById('groupFrom').value||null,through:document.getElementById('groupThrough').value||null});});
 })();
 </script>
 {% endblock %}

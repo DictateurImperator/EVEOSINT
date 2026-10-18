@@ -79,6 +79,17 @@ def definition(payload):
         rule=dict(kind=source['kind'],id=id,op=source['op'],role=source.get('role','both'),label=str(source.get('label','')).strip()[:120])
         if rule not in clean:clean.append(rule)
     result['ships']=clean
+    avoids=payload.get('avoids',[])
+    if not isinstance(avoids,list) or len(avoids)>60:raise ValueError('Choose at most 60 Avoid entities.')
+    clean=[]
+    for source in avoids:
+        if not isinstance(source,dict) or source.get('kind') not in ENTITY_TABLES:raise ValueError('Invalid Avoid entity.')
+        try:id=int(source['id'])
+        except (KeyError,TypeError,ValueError):raise ValueError('Invalid Avoid entity.')
+        if not 0<id<2**63:raise ValueError('Invalid Avoid entity.')
+        rule=dict(kind=source['kind'],id=id)
+        if rule not in clean:clean.append(rule)
+    result['avoids']=clean
     return result
 
 
@@ -116,7 +127,7 @@ def save(owner_id,name,description,payload,group_id=None,*,actor_id=None):
         # Lock the account, so concurrent creations cannot allocate a fourth slot.
         cur.execute('SELECT id FROM web.users WHERE id=%s FOR UPDATE',(owner_id,))
         if not cur.fetchone():raise ValueError('Account not found.')
-        for rule in config['members']:
+        for rule in config['members']+config['avoids']:
             table,column=ENTITY_TABLES[rule['kind']]
             cur.execute(f'SELECT name FROM entities.{table} WHERE {column}=%s',(rule['id'],))
             entity=cur.fetchone()

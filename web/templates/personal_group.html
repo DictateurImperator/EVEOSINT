@@ -14,6 +14,7 @@
 {% if is_owner %}<form method="post" action="{{ base_url }}/delete" onsubmit="return confirm('Delete this group and revoke its public link?');"><button class="btn btn-sm btn-outline-danger">Delete group</button></form>{% endif %}
 </details>
 {% endif %}
+{% if public %}{% include 'personal_group_rules.html' %}{% endif %}
 <nav class="d-flex flex-wrap gap-2 mb-3" aria-label="Group pages">{% for value,label in [('killboard','Killboard'),('stats','Combat stats'),('ships','Pilotable ships'),('ranking','Local ranking')] %}{% if value in tabs %}<a class="btn btn-sm {{ 'btn-primary' if view==value else 'btn-outline-primary' }}" href="{{ base_url }}?view={{ value }}&amp;period={{ period }}">{{ label }}</a>{% endif %}{% endfor %}</nav>
 {% if view=='management' %}{% include 'personal_group_management.html' %}{% elif view=='overview' %}<p class="muted-line">Select an allowed page above. No calculation starts until you choose one.</p>{% else %}
 {% if view=='stats' %}<nav class="d-flex flex-wrap gap-2 mb-3" aria-label="Combat stats views">{% for value,label in [('history','Monthly history'),('top-kills','Top kills')] %}<a class="btn btn-sm {{ 'btn-primary' if stats_view==value else 'btn-outline-primary' }}" href="{{ base_url }}?view=stats&amp;period={{ period }}&amp;stats_view={{ value }}">{{ label }}</a>{% endfor %}</nav>{% endif %}

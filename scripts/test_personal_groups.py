@@ -42,6 +42,12 @@ def sample_killmail(id=100,loss=False):
 
 
 class DefinitionTests(unittest.TestCase):
+    def test_avoids_accept_all_entity_types_but_are_bounded_and_deduplicated(self):
+        rules=[dict(kind=kind,id=1) for kind in store.ENTITY_TABLES]
+        self.assertEqual(len(config(avoids=rules+rules)['avoids']),4)
+        for bad in [[dict(kind='ship',id=638)],[dict(kind='character',id=-1)],rules*16,'not a list']:
+            with self.assertRaises(ValueError):config(avoids=bad)
+
     def test_dates_limits_types_and_exclusions(self):
         good=config();self.assertEqual(good['members'][0]['id'],10)
         for payload in [dict(members=[]),dict(members=[dict(kind='universe',id=1,op='include')]),
@@ -398,6 +404,22 @@ class RouteTests(unittest.TestCase):
                         if signed_in:self.assertIn('href="'+target+'"',response.json()['html'])
                         else:self.assertNotIn('href="'+target+'"',response.json()['html'])
 
+    def test_public_members_and_rules_are_read_only_and_need_no_scan(self):
+        self.login.return_value=None
+        self.group['definition']=config([dict(kind='corporation',id=10,op='include',**{'from':'2026-01-01','through':'2026-01-31'})],avoids=[dict(kind='coalition',id=3)],ships=[dict(kind='ship',id=638,op='include',role='attacker',label='Raven')])
+        self.group['definition']['members'][0]['label']='Old Corp'
+        self.group['definition']['avoids'][0]['label']='Imperium <test>'
+        self.group['definition']['zones']=[dict(kind='security',id='highsec',op='include',label='High security')]
+        with patch.object(store,'public',return_value=self.group),patch.object(store,'periods') as periods,patch.object(jobs,'state') as scan:
+            response=self.client.get('/public/groups/'+'a'*32)
+            self.assertEqual(response.status_code,200)
+            for text in ['Members and rules','Old Corp','2026-01-31','Imperium &lt;test&gt;','High security','Raven','Attacking ship']:self.assertIn(text,response.text)
+            self.assertNotIn('owner_id',response.text);self.assertNotIn('id="groupEditor"',response.text)
+            self.assertNotIn('href="/coalition/3"',response.text)
+            periods.assert_not_called();scan.assert_not_called()
+            self.login.return_value=self.user
+            self.assertIn('href="/coalition/3"',self.client.get('/public/groups/'+'a'*32).text)
+
     def test_member_search_returns_portraits_affiliations_and_an_entity_type_filter(self):
         coalitions=importlib.import_module(store.__package__+'.coalitions')
         pilot=dict(entity_type='character',entity_id=42,name='Pilot',corporation_name='Corp',alliance_name='Alliance')
@@ -624,12 +646,32 @@ class DatabaseTests(unittest.TestCase):
                 with self.assertRaises(ValueError):q.killboard(self.conn,group,period,mode='hidden',cursor='bad')
                 with self.conn.cursor() as cur:
                     cur.execute("INSERT INTO mer.killmails(source_month,source_row,kill_datetime,solar_system_id,victim_ship_type_id,victim_corporation_id,killer_ship_type_id,killer_corporation_id,ccp_isk_lost) VALUES('2026-01-01',6,'2026-01-05 12:00Z',7,638,10,587,10,700)")
+                with self.conn.cursor() as cur:
+                    cur.execute("INSERT INTO entities.coalitions VALUES(3,'Avoid enemies');INSERT INTO entities.coalition_memberships(coalition_id,operation,member_type,member_id,valid_from) VALUES(3,'include','corporation',99,'2026-01-01')")
+                group['membership_rules']=q.load_rules(self.conn)
+                for kind,id in [('corporation',99),('coalition',3)]:
+                    avoided=dict(group,definition=dict(group['definition'],avoids=[dict(kind=kind,id=id)]))
+                    for mode in ['hidden','total']:
+                        result=q.killboard(self.conn,avoided,period,mode=mode)['rows']
+                        self.assertNotIn(1,[r['source_row'] for r in result])
+                        self.assertIn(0,[r['source_row'] for r in result]) # An Avoid target that is a group member remains a loss.
+                with self.conn.cursor() as cur:
+                    cur.execute("INSERT INTO mer.killmails(source_month,source_row,kill_datetime,solar_system_id,victim_ship_type_id,victim_corporation_id,killer_ship_type_id,killer_corporation_id,resolved_km,ccp_isk_lost) VALUES('2026-01-01',7,'2026-01-02 12:00Z',7,638,90,587,10,ARRAY[100]::bigint[],100)")
+                own_avoid=dict(group,definition=dict(group['definition'],avoids=[dict(kind='corporation',id=10)]))
+                own_rows=q.killboard(self.conn,own_avoid,period,mode='hidden')['rows']
+                self.assertNotIn(6,[r['source_row'] for r in own_rows])
+                self.assertIn(0,[r['source_row'] for r in own_rows])
+                character_avoid=dict(group,definition=dict(group['definition'],avoids=[dict(kind='character',id=9)]))
+                resolved=q.killboard(self.conn,character_avoid,period,mode='total')['rows']
+                self.assertNotIn(7,[r['source_row'] for r in resolved])
+                self.assertIn(2,[r['source_row'] for r in resolved]) # Group losses are preserved.
+                self.assertIn(0,[r['source_row'] for r in resolved]) # Hidden pilot identity is unknown, not guessed.
                 for mode in ['hidden','total']:
                     both=q.killboard(self.conn,group,period,mode=mode)['rows']
                     internal=next(r for r in both if r['source_row']==6)
                     self.assertTrue(internal['is_loss']);self.assertFalse(internal['is_kill'])
                     kills=q.killboard(self.conn,group,period,mode=mode,participation='kills')['rows']
-                    self.assertEqual([r['source_row'] for r in kills],[1])
+                    self.assertEqual([r['source_row'] for r in kills],[1] if mode=='hidden' else [1,7])
                     losses=q.killboard(self.conn,group,period,mode=mode,participation='losses')['rows']
                     self.assertIn(6,[r['source_row'] for r in losses])
         finally:
@@ -687,6 +729,37 @@ class DatabaseTests(unittest.TestCase):
         rankings=routes.local_rankings.scan(group,period,'corporation','classic','destroyed',lambda **values:None)
         self.assertEqual(rankings[0]['raw'],10000);self.assertEqual(rankings[0]['kills'],1)
         self.assertEqual(rankings[0]['lost'],20000);self.assertEqual(rankings[0]['losses'],2)
+
+    def test_avoid_victims_are_removed_from_all_combat_results_not_membership_or_losses(self):
+        group=self.make_group();period=dict(period='2026-01',built_at='v',from_date=JAN,through_date=date(2026,1,31))
+        jan=next(r for r in q.relations(self.conn) if r[0]==JAN)
+        for kind,id in [('character',9),('corporation',90),('alliance',900)]:
+            selected=dict(group,definition=config(avoids=[dict(kind=kind,id=id)]),membership_rules=q.load_rules(self.conn))
+            totals=q.month_totals(self.conn,selected['definition'],selected['membership_rules'],jan,JAN,FEB,(None,[]))
+            self.assertEqual(totals['kills'],0);self.assertEqual(totals['losses'],2);self.assertEqual(totals['lost_cents'],20000)
+            self.assertEqual(totals['destroyed_cents'],0);self.assertEqual(totals['weighted_destroyed_cents'],0)
+            with patch.object(q.entities,'_hydrate_global_killmail_entries',side_effect=lambda conn,entries:[dict(sample_killmail(id),killmail_time=at) for side,id,at in entries]):
+                self.assertEqual(q.killboard(self.conn,selected,period,participation='kills')['rows'],[])
+                self.assertEqual([r['killmail_id'] for r in q.killboard(self.conn,selected,period)['rows']],[102,101])
+            self.assertEqual(q.month_top_kills(self.conn,selected,jan,JAN,FEB,(None,[])),[])
+            ranks=routes.local_rankings.scan(selected,period,'corporation','classic','destroyed',lambda **values:None)
+            self.assertEqual(ranks[0]['raw'],0);self.assertEqual(ranks[0]['lost'],20000)
+        own=dict(group,definition=config([dict(kind='corporation',id=10,op='include'),dict(kind='character',id=1,op='include')],avoids=[dict(kind='corporation',id=10)]))
+        totals=q.month_totals(self.conn,own['definition'],{},jan,JAN,FEB,(None,[]))
+        self.assertEqual(totals['losses'],1);self.assertEqual(totals['kills'],1) # Internal loss 102 is hidden, external loss 101 remains.
+        self.assertEqual(q.pilotable_counts(self.conn,selected['definition'],{},JAN,FEB),q.pilotable_counts(self.conn,group['definition'],{},JAN,FEB))
+
+    def test_avoid_coalition_tracks_history_and_saves_canonical_names(self):
+        with self.conn.cursor() as cur:
+            cur.execute("INSERT INTO entities.coalitions VALUES(3,'Avoid bloc');INSERT INTO entities.coalition_memberships(coalition_id,operation,member_type,member_id,valid_from,valid_to) VALUES(3,'include','corporation',90,'2026-01-01','2026-01-31')")
+        self.conn.commit()
+        c=config([dict(kind='corporation',id=10,op='include'),dict(kind='character',id=1,op='include')],avoids=[dict(kind='coalition',id=3,label='Forged name')])
+        group=self.make_group(c);self.assertEqual(group['definition']['avoids'][0]['label'],'Avoid bloc')
+        rules=q.load_rules(self.conn)
+        for relation in q.relations(self.conn):
+            start=relation[0]
+            total=q.month_totals(self.conn,group['definition'],rules,relation,start,q.next_month(start),(None,[]))
+            self.assertEqual(total['kills'],0 if start==JAN else 1)
 
     def test_direct_inactive_member_and_dated_exclusion(self):
         c=config([dict(kind='character',id=9,op='include')])

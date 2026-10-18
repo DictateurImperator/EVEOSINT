@@ -59,6 +59,12 @@ def actor_predicate(config,rules,alias,victim=False,history=True,fields=None,at=
     return f'COALESCE(({positive[0]}) AND NOT ({negative[0]}),false)',positive[1]+negative[1]
 
 
+def avoid_predicate(config,rules,alias,**options):
+    if not config.get('avoids'):return 'false',[]
+    avoid_config={'members':[dict(rule,op='include') for rule in config['avoids']]}
+    return actor_predicate(avoid_config,rules,alias,victim=True,**options)
+
+
 def zone_ids(conn,config):
     included=[];excluded=[]
     for r in config['zones']:
@@ -118,6 +124,10 @@ def match_sql(config,rules,kills,attackers,start,end,zones,cursor=None,ship_term
             where_sql+=sql.SQL(' AND ({})').format(sql.SQL(' OR ').join(includes));params+=inc_params
         if excludes:
             where_sql+=sql.SQL(' AND NOT COALESCE(({}),false)').format(sql.SQL(' OR ').join(excludes));params+=exc_params
+    avoid_query,avoid_params=avoid_predicate(config,rules,'k')
+    if config.get('avoids'):
+        where_sql+=sql.SQL(' AND NOT (({avoid}) AND EXISTS(SELECT 1 FROM {attackers} a WHERE a.killmail_id=k.killmail_id AND a.killmail_time=k.killmail_time AND {actor}))').format(avoid=sql.SQL(avoid_query),attackers=attackers,actor=sql.SQL(actor))
+        params+=avoid_params+ap
     query=sql.SQL('''WITH matches AS MATERIALIZED (
         SELECT k.killmail_id,k.killmail_time,k.estimated_value_cents,k.victim_character_id,
                {victim} AS is_loss

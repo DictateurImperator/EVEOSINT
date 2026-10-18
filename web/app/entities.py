@@ -5199,6 +5199,24 @@ def _group_entity_mer_killmails(conn, entity_type, entity_id, page=1, per_page=1
         clauses.append(f'NOT ({victim_scope_predicate})')
         params.extend(victim_scope_params)
 
+    if scope.get('personal_group_scope') and scope_value['definition'].get('avoids'):
+        from .personal_group_queries import avoid_predicate
+        fields={'character':'NULL::bigint','corporation':'m.victim_corporation_id','alliance':'m.victim_alliance_id'}
+        avoided,avoid_params=avoid_predicate(scope_value['definition'],scope_value['membership_rules'],'m',fields=fields,at='m.kill_datetime')
+        if not hidden_only:
+            known,known_params=avoid_predicate(scope_value['definition'],scope_value['membership_rules'],'avoided')
+            avoided=f"""(({avoided}) OR (
+                cardinality(m.resolved_km)=1 AND NOT COALESCE(m.resolved_km_ambiguous,false)
+                AND EXISTS(SELECT 1 FROM rawkm.killmails avoided
+                  WHERE avoided.killmail_id=m.resolved_km[1]
+                    AND avoided.killmail_time>=date_trunc('month',m.kill_datetime)
+                    AND avoided.killmail_time<date_trunc('month',m.kill_datetime)+interval '1 month'
+                    AND ({known}))))"""
+            avoid_params+=known_params
+        # Avoid hides a target only when this group is the recorded attacker.
+        clauses.append(f'NOT (({killer_scope_predicate}) AND ({avoided}))')
+        params.extend(killer_scope_params+avoid_params)
+
     if hidden_only:
         clauses.append("m.resolved_km IS NULL")
 

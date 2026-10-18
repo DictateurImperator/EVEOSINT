@@ -210,6 +210,15 @@ def ratio_label(totals):
     return f"{100*Decimal(str(totals['weighted_destroyed_cents']))/raw:.3f}%" if raw else '—'
 
 
+def public_rule_summary(group):
+    """Publish only the configured scope, never owner/delegation or account data."""
+    definition=group['definition']
+    summary={key:definition.get(key) for key in ('from','through')}
+    for key in ('members','avoids','zones','ships'):
+        summary[key]=[{field:rule.get(field) for field in ('kind','id','label','op','from','through','role')} for rule in definition.get(key,[])]
+    return summary
+
+
 def render_page(request,group,user=None,public=False):
     if not public:
         # Private URLs are definition/access management, including legacy result URLs.
@@ -225,9 +234,9 @@ def render_page(request,group,user=None,public=False):
         if not result:raise HTTPException(404)
     base=f"/public/groups/{group['public_token']}" if public else f"{PRIVATE}/{group['id']}"
     ctx=(app_context(request=request,user=user,title=group['name'],active_module='',active_menu_key='') if user else dict(request=request,title=group['name'],show_app_layout=False,username=None)) if public else context(request,user,group['name'])
-    # Never pass definitions, private rules, owner IDs or account metadata to public templates.
+    # Public scope is read-only; ownership, delegation and account metadata remain private.
     ctx.update(group_name=group['name'],group_description=group['description'],public=public,
-        group=None if public else group,base_url=base,view=view,period=period,result=result,is_owner=not public and user['id']==group['owner_id'],
+        group=None if public else group,public_rules=public_rule_summary(group) if public else None,links_enabled=bool(user),base_url=base,view=view,period=period,result=result,is_owner=not public and user['id']==group['owner_id'],
         managers=store.managers(group['id'],user['id']) if not public and view=='management' and user['id']==group['owner_id'] else [],
         ranking=ranking_options(request) if view=='ranking' else None,
         stats_view=request.query_params.get('stats_view','history'),participation=request.query_params.get('participation','both'),kb_mode=request.query_params.get('kb_mode','api'),
