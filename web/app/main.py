@@ -12,6 +12,7 @@ from .routes_account import router as account_router
 from .routes_admin_audit import router as admin_audit_router
 from .routes_admin_coalitions import router as admin_coalitions_router
 from .routes_admin_debug import router as admin_debug_router
+from .routes_economic_indices import router as economic_indices_router
 from .routes_admin_first_loss import router as admin_first_loss_router
 from .routes_admin_prices import router as admin_prices_router
 from .routes_admin_git import router as admin_git_router
@@ -272,6 +273,7 @@ app.include_router(admin_killmail_values_router)
 app.include_router(admin_killmail_price_recovery_router)
 app.include_router(admin_rankings_router)
 app.include_router(admin_debug_router)
+app.include_router(economic_indices_router)
 app.include_router(admin_first_loss_router)
 app.include_router(admin_prices_router)
 app.include_router(admin_git_router)

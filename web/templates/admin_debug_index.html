@@ -1,5 +1,39 @@
 {% extends "base.html" %}
 {% block content %}
-<h1 class="h3 mb-3">Debug</h1>
-<section class="content-card p-4"><p class="muted-line mb-0">Experimental pages will appear here while they are being tested.</p></section>
+<h1 class="h3 mb-2">Economic indices · Debug</h1>
+<p class="muted-line">Compare fixed baskets over time. Your reference date is 100%; 150% means the same basket costs 50% more.</p>
+<section class="content-card p-3 p-md-4 mb-3">
+<form id="economicForm">
+<div class="row g-3 mb-3">
+<div class="col-md-4"><label class="form-label" for="ecoStart">Chart starts (UTC)</label><input required class="form-control" type="date" id="ecoStart"></div>
+<div class="col-md-4"><label class="form-label" for="ecoBase">Reference date = 100% (UTC)</label><input required class="form-control" type="date" id="ecoBase"></div>
+<div class="col-md-4"><label class="form-label" for="ecoEnd">Compare through (UTC)</label><input required class="form-control" type="date" id="ecoEnd"></div>
+</div>
+<div class="row g-4">
+<div class="col-lg-5"><h2 class="h5">Built-in baskets</h2><p class="small muted-line">One unit of each eligible hull or item. Choose up to six curves. Families and their sub-indices overlap: compare them; do not add them.</p>
+<label class="visually-hidden" for="presetSearch">Find an index</label><input id="presetSearch" class="form-control mb-2" placeholder="Filter: Titans, Frigates, T2, Navy, Modules…">
+<div id="ecoPresets" style="max-height:340px;overflow:auto" class="border rounded p-2"></div></div>
+<div class="col-lg-7"><h2 class="h5">Your own basket</h2>
+<div class="row g-2 mb-2"><div class="col"><label class="visually-hidden" for="basketName">Basket name</label><input id="basketName" maxlength="80" class="form-control" placeholder="My fleet / My shopping basket"></div><div class="col-auto"><button type="button" id="saveBasket" class="btn btn-outline-secondary">Save in this browser</button></div></div>
+<div class="d-flex gap-2 mb-2"><select id="savedBaskets" class="form-select" aria-label="Saved baskets"><option value="">Saved baskets…</option></select><button type="button" id="deleteBasket" class="btn btn-outline-danger">Delete saved</button></div>
+<label for="itemSearch" class="form-label">Add ships, modules, materials or other market objects</label><input id="itemSearch" class="form-control" placeholder="Search by name (at least 2 letters)" autocomplete="off"><div id="itemResults" class="list-group mt-1" aria-live="polite"></div>
+<div class="table-responsive mt-2" style="max-height:300px;overflow:auto"><table class="table table-sm align-middle"><thead><tr><th>Object</th><th style="width:140px">Fixed quantity</th><th></th></tr></thead><tbody id="basketItems"></tbody></table></div>
+<p class="small muted-line">Saved baskets stay in this browser. Abyssal modules are excluded. Quantities remain fixed on every date.</p></div>
+</div><div class="d-flex gap-3 align-items-center mt-3"><button id="ecoCalculate" class="btn btn-primary" disabled>Calculate indices</button><button type="button" id="ecoStop" class="btn btn-outline-danger" hidden>Stop</button><span id="ecoAvailability" class="muted-line small">Loading local price dates and SDE…</span></div>
+</form></section>
+<div id="ecoStatus" role="status" aria-live="polite" class="mb-2"></div><progress id="ecoProgress" class="w-100 mb-3" hidden></progress>
+<section id="ecoResults" class="content-card p-3 p-md-4 mb-3" hidden>
+<h2 class="h5">Price evolution relative to your reference</h2><p id="ecoChartHint" class="small muted-line">Monthly points use the last day of the month; the exact reference, start and end dates are included. Hover or focus a point for its date and value.</p>
+<div id="ecoChart" class="mb-3"></div><div id="ecoSummary"></div>
+<details class="mt-3"><summary>Values by date</summary><div id="ecoValues" class="table-responsive"></div></details>
+<details class="mt-3"><summary>Basket contents, missing prices and quote dates</summary><div id="ecoDetails"></div></details>
+<button type="button" id="exportIndices" class="btn btn-outline-secondary btn-sm mt-3">Download indices CSV</button>
+</section>
+<section class="content-card p-3 small muted-line">
+<strong>Reading these indices</strong>
+<p class="mb-1">Index = 100 × cost of the same quantities on the chosen date ÷ their cost on the reference date. Built-in baskets use published objects from the current SDE, with one unit per included item; this is not a market-volume-weighted or CCP index. A large reference-price item has more weight.</p>
+<p class="mb-1">Source: locally imported zKill valuation quotes, not guaranteed market transactions. Each date uses the last positive quote available on or before that date. No future prices, kill-derived fallback prices or artificial 0.01 ISK replacements are used. Old carried quotes may hide later market changes.</p>
+<p class="mb-0">Items with no positive quote by the reference date are listed and excluded for the entire curve. Earlier dates with incomplete coverage have no index. New ships are not inserted midway. Triglavians have their own family, including T2 variants; supercapitals stay separate from capitals. Capsules and special-edition market families are excluded from built-in ship baskets.</p>
+</section>
+{% include 'economic_indices_script.html' %}
 {% endblock %}
