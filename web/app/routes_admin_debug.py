@@ -366,13 +366,15 @@ def _redirect(code, kind="error"):
 
 
 @router.get("/admin/debug", response_class=HTMLResponse)
-def admin_debug(request: Request):
+def admin_debug(request: Request, tab: str = "economics"):
     user = require_login(request)
     redirect = require_permission_or_redirect(user, "admin.jobs.view")
     if redirect:
         return redirect
     context=app_context(request=request,user=user,title="EVEOSINT - Debug",
                         active_module="admin",active_menu_key="admin.debug")
+    context.update(debug_tab="killmail" if tab == "killmail" else "economics",
+                   can_import_killmail="admin.jobs.run" in user.get("permissions", set()))
     return templates.TemplateResponse(request=request,name="admin_debug_index.html",context=context)
 
 

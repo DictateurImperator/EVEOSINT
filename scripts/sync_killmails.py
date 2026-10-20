@@ -89,7 +89,7 @@ def configure_worker_logger():
     return logger
 
 
-logger = configure_worker_logger()
+logger = logging.getLogger(__name__)
 
 
 # ============================================================
@@ -483,6 +483,8 @@ def insert_item_recursive(
 def insert_killmail(
     conn,
     payload,
+    *,
+    skip_existing=False,
 ):
     kmid = payload["killmail_id"]
     killmail_time = payload["killmail_time"]
@@ -513,7 +515,7 @@ def insert_killmail(
 
         ON CONFLICT (killmail_id, killmail_time)
         DO NOTHING
-        """, (
+        """ + (" RETURNING killmail_id" if skip_existing else ""), (
             kmid,
             payload.get("killmail_hash"),
             killmail_time,
@@ -525,6 +527,9 @@ def insert_killmail(
             victim.get("damage_taken"),
             payload.get("http_last_modified"),
         ))
+
+        if skip_existing and cur.fetchone() is None:
+            return False
 
         cur.execute(
             f"""
@@ -610,6 +615,8 @@ def insert_killmail(
                 item,
                 item_index,
             )
+
+    return True if skip_existing else None
 
 
 # ============================================================
@@ -809,6 +816,7 @@ def process_day(day_iso):
 # ============================================================
 
 def main():
+    configure_worker_logger()
     listener = configure_listener_logger()
 
     parser = argparse.ArgumentParser()

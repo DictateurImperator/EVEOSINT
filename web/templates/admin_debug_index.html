@@ -1,5 +1,12 @@
 {% extends "base.html" %}
 {% block content %}
+<nav class="nav nav-tabs mb-4" aria-label="Tests Debug">
+  <a class="nav-link {% if debug_tab != 'killmail' %}active{% endif %}" href="/admin/debug?tab=economics" {% if debug_tab != 'killmail' %}aria-current="page"{% endif %}>Indices économiques</a>
+  <a class="nav-link {% if debug_tab == 'killmail' %}active{% endif %}" href="/admin/debug?tab=killmail" {% if debug_tab == 'killmail' %}aria-current="page"{% endif %}>Import killmail</a>
+</nav>
+{% if debug_tab == 'killmail' %}
+{% include 'debug_killmail_import.html' %}
+{% else %}
 <h1 class="h3 mb-2">Economic indices · Debug</h1>
 <p class="muted-line">Compare fixed baskets over time. Your reference date is 100%; 150% means the same basket costs 50% more.</p>
 <section class="content-card p-3 p-md-4 mb-3">
@@ -36,4 +43,5 @@
 <p class="mb-0">Items with no positive quote by the reference date are listed and excluded for the entire curve. Earlier dates with incomplete coverage have no index. New ships are not inserted midway. Triglavians have their own family, including T2 variants; supercapitals stay separate from capitals. Capsules and special-edition market families are excluded from built-in ship baskets.</p>
 </section>
 {% include 'economic_indices_script.html' %}
+{% endif %}
 {% endblock %}
