@@ -8,6 +8,7 @@ import (
 	"runtime"
 	"strings"
 	"syscall"
+	"time"
 	"unsafe"
 )
 
@@ -22,6 +23,10 @@ var move = user32.NewProc("MoveWindow")
 var controls []uintptr
 var pathEdit, replayBox, startButton, stopButton, statusText, summaryEdit, reportEdit uintptr
 var pilotEdit, shipEdit, lossEdit uintptr
+var tokenEdit, deliveryStatus uintptr
+var queue *outbox
+var deliveryCancel context.CancelFunc
+var deliveries = make(chan string, 32)
 var updates <-chan Update
 var cancel context.CancelFunc
 var store repairStore
@@ -107,7 +112,8 @@ func layout(w, h int32) {
 		{16, 380, w - 32, 24}, {16, 414, col, 22}, {16, 438, col, 200},
 		{32 + col, 414, col, 22}, {32 + col, 438, col, 28},
 		{48 + 2*col, 414, col, 22}, {48 + 2*col, 438, col, 28},
-		{16, 480, 200, 30}, {230, 480, 210, 30}, {16, 522, w - 32, max(int32(40), h-538)},
+		{16, 480, 200, 30}, {230, 480, 210, 30}, {16, 522, w - 32, max(int32(40), h-690)},
+		{16, h - 152, w - 32, 24}, {16, h - 122, w - 260, 28}, {w - 232, h - 122, 216, 28}, {16, h - 82, w - 32, 60},
 	}
 	for i, p := range positions {
 		move.Call(controls[i], uintptr(p[0]), uintptr(p[1]), uintptr(max(int32(1), p[2])), uintptr(p[3]), 1)
@@ -134,7 +140,11 @@ func begin() {
 		return
 	}
 	replay, _, _ := send.Call(replayBox, 0xF0, 0, 0)
-	store = repairStore{}
+	if queue == nil {
+		put(statusText, "Sauvegarde locale indisponible : suivi non démarré")
+		return
+	}
+	store = repairStore{save: queue.save}
 	knownPilots = map[string]bool{}
 	send.Call(pilotEdit, 0x14B, 0, 0) // CB_RESETCONTENT
 	put(pilotEdit, "")
@@ -155,6 +165,15 @@ func begin() {
 	go watch(ctx, dir, replay == 1, ch)
 }
 func drain() {
+	for {
+		select {
+		case status := <-deliveries:
+			put(deliveryStatus, status)
+		default:
+			goto drained
+		}
+	}
+drained:
 	changed := false
 	for i := 0; i < 2000 && updates != nil; i++ {
 		select {
@@ -184,9 +203,16 @@ func drain() {
 			if e := u.Event; e != nil {
 				if err := store.add(*e); err != nil {
 					lastError = err.Error()
+					put(statusText, lastError)
 					continue
 				}
 				changed = true
+				if e.Kind == "loss-candidate" {
+					if w := store.pilots[e.Listener]; w != nil && w.lastReport != nil {
+						put(pilotEdit, e.Listener)
+						prepareReport()
+					}
+				}
 				if !knownPilots[e.Listener] {
 					knownPilots[e.Listener] = true
 					send.Call(pilotEdit, 0x143, 0, uintptr(unsafe.Pointer(wide(e.Listener))))
@@ -204,43 +230,75 @@ func drain() {
 	}
 }
 func prepareReport() (string, error) {
-	loss := Loss{Pilot: strings.TrimSpace(textOf(pilotEdit)), Ship: strings.TrimSpace(textOf(shipEdit)), Time: strings.TrimSpace(textOf(lossEdit))}
-	p, err := store.prepare(loss)
-	if err != nil {
-		put(reportEdit, "Rapport non préparé : "+err.Error())
-		return "", err
+	pilot := strings.TrimSpace(textOf(pilotEdit))
+	w := store.pilots[pilot]
+	if w == nil || w.lastReport == nil {
+		return "", fmt.Errorf("aucune perte sauvegardée pour ce personnage")
 	}
+	p := *w.lastReport
 	raw, err := p.JSON()
 	if err != nil {
 		return "", err
 	}
-	put(reportEdit, p.Summary()+fmt.Sprintf("\r\n\r\nFormat EVEOSINT : JSON compact, %d octets. Aucun envoi effectué.", len(raw)))
+	ship := p.Victim.Ship
+	if ship == "" {
+		ship = "À confirmer par killmail"
+	}
+	put(shipEdit, ship)
+	at, _ := time.Parse(time.RFC3339, p.LossTime)
+	put(lossEdit, at.Format(logTimeLayout))
+	put(reportEdit, p.Summary()+fmt.Sprintf("\r\n\r\nJSON sauvegardé localement : %d octets. Réception EVEOSINT suivie ci-dessous.", len(raw)))
 	return raw, nil
 }
-
+func startDelivery() {
+	if queue == nil {
+		return
+	}
+	token := strings.TrimSpace(textOf(tokenEdit))
+	if token == "" {
+		put(deliveryStatus, "Copiez la clé créée dans EVEOSINT > Compte > Collecteur de soins.")
+		return
+	}
+	if deliveryCancel != nil {
+		deliveryCancel()
+	}
+	ctx, cancelSend := context.WithCancel(context.Background())
+	deliveryCancel = cancelSend
+	put(deliveryStatus, "Envoi activé. Les fichiers restent conservés jusqu’à confirmation de la base.")
+	go queue.run(ctx, token, deliveries)
+}
 func windowProc(hwnd uintptr, msg uint32, wp, lp uintptr) uintptr {
 	switch msg {
 	case 1:
 		child(hwnd, "STATIC", "Dossier des logs de combat EVE", 0, 0)
 		pathEdit = child(hwnd, "EDIT", defaultFolder(), 0x00800000|0x80, 0)
 		child(hwnd, "BUTTON", "Parcourir…", 0x10000, 103)
-		child(hwnd, "STATIC", "Lecture seule • Aucun envoi réseau • Aucune modification des logs ou de leurs permissions", 0, 0)
+		child(hwnd, "STATIC", "Logs et permissions inchangés • Sauvegarde locale des rapports • Envoi avec votre clé EVEOSINT", 0, 0)
 		replayBox = child(hwnd, "BUTTON", "Relire les fichiers existants (sinon : nouveaux événements seulement)", 3|0x10000, 0)
 		startButton = child(hwnd, "BUTTON", "Démarrer", 0x10000, 101)
 		stopButton = child(hwnd, "BUTTON", "Arrêter", 0x10000, 102)
 		statusText = child(hwnd, "STATIC", "Prêt — choisissez le dossier puis cliquez sur Démarrer", 0, 0)
 		child(hwnd, "STATIC", "Soins reçus — résumé des 30 dernières minutes de logs par personnage", 0, 0)
 		summaryEdit = child(hwnd, "EDIT", "En attente de soins…", 0x00800000|0x00200000|0x4|0x800|0x40, 0)
-		child(hwnd, "STATIC", "Préparer une perte — renseignez les informations du killmail (détection automatique à venir)", 0, 0)
+		child(hwnd, "STATIC", "Dernière perte sauvegardée — signal du log en attente de confirmation par killmail", 0, 0)
 		child(hwnd, "STATIC", "Pilote soigné", 0, 0)
 		pilotEdit = child(hwnd, "COMBOBOX", "", 0x00200000|0x10000|2, 201)
-		child(hwnd, "STATIC", "Vaisseau perdu", 0, 0)
-		shipEdit = child(hwnd, "EDIT", "", 0x00800000|0x80|0x10000, 202)
-		child(hwnd, "STATIC", "Heure de perte UTC : AAAA.MM.JJ HH:MM:SS", 0, 0)
-		lossEdit = child(hwnd, "EDIT", "", 0x00800000|0x80|0x10000, 203)
-		child(hwnd, "BUTTON", "Préparer le résumé", 0x10000, 104)
+		child(hwnd, "STATIC", "Vaisseau perdu (si connu)", 0, 0)
+		shipEdit = child(hwnd, "EDIT", "", 0x00800000|0x80|0x800, 202)
+		child(hwnd, "STATIC", "Heure du signal de perte UTC", 0, 0)
+		lossEdit = child(hwnd, "EDIT", "", 0x00800000|0x80|0x800, 203)
+		child(hwnd, "BUTTON", "Afficher la dernière perte", 0x10000, 104)
 		child(hwnd, "BUTTON", "Copier pour EVEOSINT", 0x10000, 105)
-		reportEdit = child(hwnd, "EDIT", "Le résumé regroupe les soins par pilote logi et par vaisseau. La copie contient uniquement le JSON compact.", 0x00800000|0x00200000|0x4|0x800|0x40, 0)
+		reportEdit = child(hwnd, "EDIT", "Le JSON est figé et sauvegardé au signal de mort. Aucun compteur n’est vidé si la sauvegarde échoue.", 0x00800000|0x00200000|0x4|0x800|0x40, 0)
+		child(hwnd, "STATIC", "Envoi automatique — clé depuis eveosint.com/account/combat-collector", 0, 0)
+		tokenEdit = child(hwnd, "EDIT", "", 0x00800000|0x80|0x20|0x10000, 204)
+		child(hwnd, "BUTTON", "Activer / réessayer l’envoi", 0x10000, 106)
+		deliveryStatus = child(hwnd, "STATIC", "Sans clé : les JSON restent sauvegardés en attente sur ce PC.", 0, 0)
+		var err error
+		queue, err = defaultOutbox()
+		if err != nil {
+			put(deliveryStatus, "Dossier de sauvegarde indisponible")
+		}
 		send.Call(summaryEdit, 0xC5, 1024*1024, 0)
 		send.Call(reportEdit, 0xC5, 1024*1024, 0)
 		stop()
@@ -251,8 +309,12 @@ func windowProc(hwnd uintptr, msg uint32, wp, lp uintptr) uintptr {
 		return 0
 	case 0x111:
 		switch wp & 0xffff {
+		case 106:
+			startDelivery()
 		case 104:
-			prepareReport()
+			if _, err := prepareReport(); err != nil {
+				put(reportEdit, err.Error())
+			}
 		case 105:
 			if raw, err := prepareReport(); err == nil {
 				if err = copyText(hwnd, raw); err != nil {
@@ -261,9 +323,11 @@ func windowProc(hwnd uintptr, msg uint32, wp, lp uintptr) uintptr {
 					put(reportEdit, textOf(reportEdit)+"\r\nCopié dans le presse-papiers.")
 				}
 			}
-		case 201, 202, 203:
+		case 201:
 			if reportEdit != 0 {
-				put(reportEdit, "Informations de perte modifiées : préparez à nouveau le résumé.")
+				if _, err := prepareReport(); err != nil {
+					put(reportEdit, err.Error())
+				}
 			}
 		case 101:
 			begin()
@@ -278,6 +342,9 @@ func windowProc(hwnd uintptr, msg uint32, wp, lp uintptr) uintptr {
 		drain()
 		return 0
 	case 2:
+		if deliveryCancel != nil {
+			deliveryCancel()
+		}
 		stop()
 		user32.NewProc("PostQuitMessage").Call(0)
 		return 0
@@ -299,7 +366,7 @@ func main() {
 	if atom == 0 {
 		return
 	}
-	hwnd, _, _ := createWindow.Call(0, uintptr(unsafe.Pointer(class)), uintptr(unsafe.Pointer(wide("EVEOSINT — Combat Log Reader — Prototype 0.2"))), 0x00CF0000|0x10000000, 100, 100, 1100, 850, 0, 0, instance, 0)
+	hwnd, _, _ := createWindow.Call(0, uintptr(unsafe.Pointer(class)), uintptr(unsafe.Pointer(wide("EVEOSINT — Combat Log Reader — Prototype 0.3"))), 0x00CF0000|0x10000000, 100, 100, 1100, 980, 0, 0, instance, 0)
 	if hwnd == 0 {
 		return
 	}

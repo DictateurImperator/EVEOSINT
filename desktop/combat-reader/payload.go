@@ -18,9 +18,10 @@ type LogiContribution struct {
 }
 type Victim struct {
 	Pilot string `json:"pilot"`
-	Ship  string `json:"ship"`
+	Ship  string `json:"ship,omitempty"`
 }
 type CompactPayload struct {
+	Status        string             `json:"status,omitempty"`
 	Version       int                `json:"version"`
 	Victim        Victim             `json:"victim"`
 	LossTime      string             `json:"loss_time"`
@@ -83,7 +84,14 @@ func compactPayload(r Receipt, partial bool) (CompactPayload, error) {
 }
 func (p CompactPayload) JSON() (string, error) { b, err := json.Marshal(p); return string(b), err }
 func (p CompactPayload) Summary() string {
-	rows := []string{fmt.Sprintf("%s — %s | Perte : %s | Fenêtre : 30 minutes", p.Victim.Pilot, p.Victim.Ship, p.LossTime)}
+	ship := p.Victim.Ship
+	if ship == "" {
+		ship = "vaisseau à confirmer"
+	}
+	rows := []string{fmt.Sprintf("%s — %s | Signal : %s | Fenêtre : 30 minutes", p.Victim.Pilot, ship, p.LossTime)}
+	if p.Status == "pending_killmail" {
+		rows = append(rows, "Rapport candidat : heure exacte et vaisseau à confirmer par killmail.")
+	}
 	if p.Partial {
 		rows = append(rows, "Couverture partielle : la session ne couvre pas toute la fenêtre demandée.")
 	}
@@ -102,8 +110,15 @@ func (p CompactPayload) Summary() string {
 type repairWindow struct {
 	first, latest time.Time
 	repairs       []Event
+	lastDeath     time.Time
+	armed         bool
+	unsaved       *CompactPayload
+	lastReport    *CompactPayload
 }
-type repairStore struct{ pilots map[string]*repairWindow }
+type repairStore struct {
+	pilots map[string]*repairWindow
+	save   func(CompactPayload) error
+}
 
 func (s *repairStore) add(e Event) error {
 	at, err := time.Parse(logTimeLayout, e.Time)
@@ -115,8 +130,39 @@ func (s *repairStore) add(e Event) error {
 	}
 	w := s.pilots[e.Listener]
 	if w == nil {
-		w = &repairWindow{first: at, latest: at}
+		w = &repairWindow{first: at, latest: at, armed: true}
 		s.pilots[e.Listener] = w
+	}
+	if w.unsaved != nil {
+		if err := s.savePending(w); err != nil {
+			return err
+		}
+	}
+	if e.Kind == "loss-candidate" {
+		if !w.armed || (!w.lastDeath.IsZero() && !at.After(w.lastDeath)) {
+			return nil
+		}
+		if at.Before(w.latest) {
+			return fmt.Errorf("perte reçue dans le désordre : rapport non réinitialisé")
+		}
+		r, err := collectRepairs(w.repairs, Loss{e.Listener, "non déterminé", e.Time})
+		if err != nil {
+			return err
+		}
+		p, err := compactPayload(r, w.first.After(at.Add(-30*time.Minute)))
+		if err != nil {
+			return err
+		}
+		p.Victim.Ship = ""
+		p.Status = "pending_killmail"
+		w.unsaved = &p
+		return s.savePending(w)
+	}
+	if !w.lastDeath.IsZero() && !at.After(w.lastDeath) {
+		return nil
+	}
+	if isRepair(e) || e.Kind == "damage-in" {
+		w.armed = true
 	}
 	if at.Before(w.first) {
 		w.first = at
@@ -142,6 +188,29 @@ func (s *repairStore) add(e Event) error {
 	w.repairs = kept
 	return nil
 }
+
+// The old counter is cleared only after the frozen JSON is durably saved.
+func (s *repairStore) savePending(w *repairWindow) error {
+	if s.save == nil {
+		return fmt.Errorf("sauvegarde des pertes indisponible : compteur conservé")
+	}
+	if err := s.save(*w.unsaved); err != nil {
+		return fmt.Errorf("sauvegarde impossible, compteur conservé : %w", err)
+	}
+	at, err := time.Parse(time.RFC3339, w.unsaved.LossTime)
+	if err != nil {
+		return err
+	}
+	w.lastReport = w.unsaved
+	w.unsaved = nil
+	w.repairs = nil
+	w.lastDeath = at
+	w.first = at
+	w.latest = at
+	w.armed = false
+	return nil
+}
+
 func (s *repairStore) prepare(loss Loss) (CompactPayload, error) {
 	w := s.pilots[loss.Pilot]
 	if w == nil {

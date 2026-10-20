@@ -1,132 +1,93 @@
-# EVEOSINT Combat Reader — prototype 0.2
+# EVEOSINT Combat Reader — prototype 0.3
 
-Application Windows portable, interface native, sans installation de Python,
-.NET, Java ou WebView. Les exécutables embarquent le runtime Go. Aucun droit
-administrateur n'est demandé. Cible : Windows 10/11 (x64, x86 et ARM64 selon
-le binaire). Windows 7/8 ne sont pas pris en charge.
+Exécutable Windows 10/11 autonome, sans Python/.NET/Java à installer. Interface
+native, versions x64, x86 et ARM64. Pas de droits administrateur nécessaires.
 
-## Utilisation
+## Fonctionnement
 
-1. Lancer l'exécutable correspondant à l'architecture du PC (x64 en général).
-2. Vérifier le dossier détecté : Documents/EVE/logs/Gamelogs. Le dossier
-   Documents redirigé vers OneDrive est résolu par l'API Windows. Le bouton
-   Parcourir permet de choisir un autre dossier existant.
-3. Cliquer sur Démarrer puis jouer. Les nouveaux événements sont lus toutes
-   les 500 ms environ, sous réserve du délai d'écriture des logs par EVE.
-4. Pour analyser des sessions terminées, cocher « Relire aussi les fichiers
-   existants » avant de démarrer. Cela relit TOUS les .txt du dossier choisi ;
-   utiliser un dossier contenant des copies des seuls logs souhaités si besoin.
-5. Arrêter coupe le suivi. Démarrer à nouveau réinitialise les compteurs.
+1. Vérifier le dossier Documents/EVE/logs/Gamelogs, puis Démarrer.
+2. Le lecteur suit les écritures toutes les 500 ms environ. Une relecture des
+   fichiers existants est possible avant le démarrage.
+3. Les soins entrants des 30 dernières minutes de logs sont suivis séparément
+   pour chaque personnage. Docking et changements de système ou de vaisseau ne
+   remettent PAS le compteur à zéro, conformément à la règle finale retenue.
+4. Au message `Ship is out of control`, un JSON candidat est figé et sauvegardé
+   dans `%LOCALAPPDATA%\EVEOSINT\CombatReader\outbox`. Le compteur du personnage
+   est vidé uniquement après réussite de la sauvegarde durable. Les notifications
+   répétées sans nouveaux dégâts entrants/soins ne génèrent pas une autre perte.
+5. Chaque fichier est nommé par le SHA-256 de son contenu. Les JSON sauvegardés
+   sont conservés même après livraison. Un fichier `.ack.json` marque la réception.
+6. Créer une clé dans EVEOSINT > Compte > Collecteur de soins, la copier dans le
+   lecteur puis Activer l’envoi. La clé reste en mémoire, pas sur disque : il faut
+   la ressaisir au redémarrage pour reprendre les envois des fichiers en attente.
 
-Le suivi affiche uniquement les soins positifs, regroupés par personnage soigné,
-pilote logi et vaisseau logi, avec les totaux shield/armor/structure. Le flux de
-combat détaillé n'est plus affiché. La mémoire garde les soins des 30 dernières
-minutes de logs de chaque personnage, indépendamment des autres personnages.
-L'arrivée de nouveaux événements fait expirer les soins plus anciens.
+L’envoi POST est réessayé toutes les 15 secondes. Un rapport ne quitte l’état
+« en attente » qu’après HTTP 200 avec `status:stored`, le même identifiant et le
+même SHA-256. Les réponses HTML, redirections, erreurs, coupures et accusés
+incohérents ne sont pas considérés comme une réussite. Après un arrêt entre le
+commit serveur et la sauvegarde locale de l’accusé, le même envoi est rejoué ; la
+clé unique serveur évite le doublon. Le suivi peut continuer pendant l’attente.
 
-Pour préparer un résultat :
+La prochaine vie dispose d’un compteur neuf ; le rapport précédent reste dans
+la file persistante jusqu’à l’accusé. Une erreur de sauvegarde laisse l’ancien
+compteur en mémoire et affiche une erreur. En cas de panne locale prolongée, les
+logs d’origine restent disponibles pour une relecture. Le démarrage normal suit
+les nouvelles lignes seulement : il ne reconstitue pas automatiquement les pertes
+survenues pendant que l’application était arrêtée.
 
-1. Sélectionner le pilote soigné.
-2. Indiquer le vaisseau perdu et l'heure UTC exacte du killmail au format
-   `AAAA.MM.JJ HH:MM:SS`. Ces informations sont manuelles dans ce prototype ;
-   aucune notification ambiguë n'est convertie en perte automatique.
-3. Cliquer sur « Préparer le résumé » pour vérifier les totaux par logi/vaisseau.
-4. Cliquer sur « Copier pour EVEOSINT » pour copier le JSON compact sur une ligne.
-   Chaque copie recalcule le résultat à partir des champs actuels et des données
-   disponibles. Aucun envoi réseau ni endpoint d'import sur le site n'est ajouté.
+## Lecture seule des logs EVE
 
-Le presse-papiers n'est écrit que sur ce clic. Le résultat écarte les lignes de
-soins à zéro et les contributeurs dont tous les totaux sont nuls, sans changer
-les points réellement réparés. Les logs sources ne sont jamais modifiés.
+Les fichiers EVE sont ouverts avec `GENERIC_READ`, `OPEN_EXISTING` et
+`FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE`. Aucun log, permission,
+ACL ou paramètre du jeu n’est modifié. Les autres lecteurs et EVE peuvent
+continuer à accéder aux fichiers. Les seules écritures du lecteur concernent ses
+propres rapports et accusés dans son dossier AppData et la copie volontaire dans
+le presse-papiers. Aucun accès à la mémoire, au cache ou aux paquets d’EVE.
 
-Si le début ou la fin de la fenêtre manque, ou si des soins ont déjà expiré de la
-mémoire, le résumé l'indique et le JSON porte `partial:true`. `partial:false`
-indique seulement l'absence de lacune temporelle connue par ce suivi ; il ne
-certifie ni l'intégrité des fichiers ni l'absence d'autres événements manquants.
-Pour une ancienne perte, relire un dossier limité à ses logs : un replay de
-sessions plus récentes fait expirer les soins des sessions anciennes.
+UTF-8 et UTF-16 avec BOM, lignes partielles, nouvelles sessions et troncatures
+observées sont gérés. Les symlinks sont ignorés. Lectures limitées à 256 Kio par
+fichier/passage ; ligne incomplète limitée à 1 Mio. La relecture des fichiers d’un
+même personnage attend le rattrapage du plus ancien fichier avant le suivant.
+Un écrasement complet entre deux passages peut ne pas être identifié.
 
-## Lecture seule, coexistence avec EVE
+## Limites du signal et des données
 
-L'ouverture Windows est explicitement limitée à `GENERIC_READ` + `OPEN_EXISTING`,
-avec `FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE`. Aucune création,
-écriture, suppression, modification de permissions ou verrou exclusif n'est
-réalisé sur les logs. Les handles sont fermés après chaque lecture, avant
-l'affichage des événements. Si un autre logiciel refuse le partage, le lecteur
-signale l'échec au lieu d'essayer de forcer l'accès.
+Le marqueur a été rapproché d’une perte de Sacrilege à 23:34:43 UTC le 17 octobre
+2026 ; il apparaît à 23:34:44 et 23:34:46. Il peut être tardif, répété ou absent.
+Ce n’est pas une preuve universelle de mort. Le JSON automatique est donc
+`status:pending_killmail`, ancré sur l’heure du signal, et stocké côté serveur en
+`pending_validation`. L’heure exacte et le vaisseau doivent être confirmés par le
+killmail avant publication. Le type du vaisseau de la victime est omis si inconnu.
+La réconciliation automatique au killmail n’est pas implémentée dans cette étape.
+La fenêtre exacte précédant l’heure officielle ne peut être garantie par le seul
+signal retardé : ne pas présenter les données en attente comme validées.
 
-Le lecteur suit les fichiers ajoutés, les remplacements observés et les
-troncatures observées. Les lignes incomplètes sont attendues ; UTF-8 et UTF-16
-avec BOM sont pris en charge. Les liens symboliques sont ignorés. La mémoire
-d'une ligne incomplète est bornée à 1 Mio et les lectures à 256 Kio par fichier
-et par passage. Le parcours des métadonnées concerne tous les .txt du dossier.
-Une troncature suivie d'une réécriture complète entre deux passages peut ne pas
-être identifiée : ce prototype vise les fichiers de session ajoutés par EVE.
+Le champ `partial` signale une lacune temporelle connue. Faux ne garantit pas la
+complétude ni l’authenticité des logs, qui sont modifiables par un joueur. Seuls
+les soins reçus sont agrégés : les soins sortants du logi ne sont pas ajoutés une
+seconde fois. Les types de soin à zéro et les contributeurs entièrement à zéro
+sont omis de l’export. Les noms/module/path de fichiers restent hors du JSON.
+Les formats anglais sont reconnus ; le shield est vérifié sur des logs réels,
+armor/hull restent à valider avec d’autres exemples.
 
-## Données et future transmission à EVEOSINT
+## Serveur et activation
 
-Cette étape fonctionne entièrement en mémoire, sans réseau ni sauvegarde des
-logs. La copie volontaire du résumé utilise le presse-papiers Windows. Aucun accès au processus EVE, à sa mémoire, à son cache ou à ses paquets.
-Les notifications de voyage, invitations, liens et messages hors combat ne sont
-pas remontés à l'interface. Les noms des personnages de plusieurs sessions
-peuvent cependant être visibles ensemble dans cette interface locale.
+Le format figure dans `PROTOCOL.md`. Les préparatifs d’activation (tables,
+exception nginx, déploiement, création de clé et vérification publique) sont dans
+`../../docs/KILLMAIL_GENERATOR_OPERATIONS.md`. Le site doit être déployé et cette
+exception appliquée : la production actuelle bloque cette nouvelle API avec 444.
+Le lecteur conserve les rapports tant que la réception effective n’est pas active.
 
-Le parseur, la fenêtre de calcul, le format compact et l'interface sont séparés.
-Le format proposé pour le futur import EVEOSINT est décrit dans `PROTOCOL.md`.
-Aucun endpoint, aucune authentification et aucun envoi ne sont implémentés ici.
-La sélection et la confirmation automatiques d'une perte ainsi que les règles de
-validation/déduplication côté serveur restent à réaliser avant un import réseau.
-Un événement issu d'un fichier joueur ne constitue pas une preuve CCP.
+## Développement
 
-Le parseur reconnaît les messages anglais présents dans les logs fournis ; les
-autres langues ne sont pas encore prises en charge.
+Go 1.26+, bibliothèque standard uniquement. `go test -v ./...`, `go vet ./...`.
+Compilation : `GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -trimpath
+-ldflags='-s -w -H=windowsgui' -o dist/EVEOSINT-CombatReader.exe .` (sur une ligne).
+`GOARCH=386` et `GOARCH=arm64` produisent les autres versions. Les tests Windows
+vérifient aussi qu’un handle du lecteur ne bloque ni écriture, ni rename/delete.
 
-Le shield reçu est validé sur un vrai log : 6 événements, dont 3 à zéro, total
-1 092 points. Les formats armor/hull sont des reconnaissances provisoires, à
-confirmer avec des échantillons réels. Aucune liaison au killmail à ce stade.
-
-## Construire et tester
-
-Go 1.26 ou ultérieur, bibliothèque standard uniquement. Les prérequis suivants
-concernent le développement, pas l'utilisateur de l'exécutable.
-
-```sh
-go test -v ./...
-go vet ./...
-GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags='-s -w -H=windowsgui' -o dist/EVEOSINT-CombatReader-windows-x64.exe .
-```
-
-Utiliser `GOARCH=386` pour x86, `GOARCH=arm64` pour ARM64. Le workflow
-`.github/workflows/combat-reader.yml` exécute également les tests sur Windows et
-publie les trois binaires comme artefacts CI. Le test Windows garde le handle du
-lecteur ouvert pendant une écriture concurrente, puis un renommage et une
-suppression. Les logs utilisateurs ne sont pas inclus dans le dépôt.
-
-Test optionnel d'un log réel fourni pour ce prototype :
-
-```sh
-EVEOSINT_COMBAT_LOG_FIXTURE=/chemin/du/log.txt go test -run TestProvidedCombatFixture -v
-```
-
-Validation initiale : tests du parseur et du suivi exécutés sous Linux et binaires
-Windows compilés. L'interface graphique, la coexistence réelle sous Windows et
-les versions/architectures cibles nécessitent encore leur validation sur Windows.
-Les exécutables de prototype ne sont pas signés numériquement.
-
-## Collecte précédant une perte
-
-`collectRepairs` prépare un récapitulatif à partir d'une perte confirmée (pilote,
-vaisseau et horaire). La seule règle de sélection est la fenêtre fixe et inclusive
-[perte - 30 minutes, perte], pour le personnage concerné. Aucun docking, undocking,
-changement de système ou autre événement ne coupe ni ne prolonge cette fenêtre.
-
-Les soins reçus sont détaillés et regroupés par pilote logi, vaisseau logi et type
-(shield, armor ou structure). Les quantités nulles restent des événements à zéro.
-Le résultat sérialisable exclut les fichiers sources, chemins, déplacements,
-notifications et armes. Aucune donnée de déplacement n'est nécessaire au calcul.
-
-Le calcul et la copie sont raccordés au suivi ; la sélection de la perte est
-manuelle. La confirmation automatique par killmail reste à implémenter.
-`Ship stopping`, l'approche de station et `Ship is out of control` ne sont pas
-traités comme des confirmations de perte. Le prototype 0.2 inclut le récapitulatif et la copie, sans déclenchement automatique
-de perte. Aucun déploiement du site.
+Les tests sous Linux couvrent le lecteur, le reset après sauvegarde, la reprise,
+les erreurs d’API et un échange réel Go → nginx isolé → FastAPI → commit PostgreSQL
+→ ACK, avec deux envois et une seule ligne. L’interface, le presse-papiers et la
+persistance Windows doivent encore être vérifiés sur un vrai Windows. Les
+exécutables ne sont pas signés numériquement. Aucun log joueur n’est commité.

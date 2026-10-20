@@ -31,3 +31,31 @@ les quantités et la politique de remplacement/déduplication d'un rapport. Il n
 devra jamais considérer un nouveau collage du même JSON comme de nouveaux soins.
 Une empreinte ou une compression de ce JSON ne constitue pas une signature CCP.
 Aucun log brut n'a besoin d'être transmis.
+
+## Livraison (prototype 0.3)
+
+`status:pending_killmail` indique un signal de perte issu du log. Le type du
+vaisseau victime peut être omis ; `loss_time` est alors l’heure du signal, et non
+une heure officielle garantie. Tous les rapports reçus restent
+`pending_validation` en base, même si un client prétend autre chose. Les autres
+valeurs de status autorisées se limitent à `manual` (ou absence, ancienne version).
+
+POST HTTPS `/api/combat-repairs`, `Content-Type: application/json`,
+`Authorization: Bearer <clé personnelle>`, `Idempotency-Key: <SHA-256 du corps
+UTF-8 exact>`. Corps limité à 64 Kio. Le serveur valide les champs, authentifie
+un utilisateur actif, puis insère et commit avec `synchronous_commit=on` dans
+`"KillmailGenerator".repair_reports`. La clé primaire (owner_user_id, report_id)
+empêche le double enregistrement des mêmes octets envoyés par le même compte.
+
+Après commit seulement, réponse HTTP 200 :
+
+```json
+{"report_id":"<SHA-256>","sha256":"<même SHA-256>","status":"stored"}
+```
+
+Le client exige les trois valeurs et refuse redirections et réponses parasites.
+Il conserve le JSON original et sauvegarde l’accusé dans un fichier distinct.
+Sans accusé valide il réessaie, y compris après redémarrage une fois la clé
+ressaisie. Les rapports différents d’une même perte n’ont pas encore de règle de
+fusion ; aucun total public de soins n’est publié à partir de cette table brute.
+Les tokens de collecte sont stockés uniquement sous forme de hash côté serveur.

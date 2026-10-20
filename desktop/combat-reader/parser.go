@@ -13,6 +13,7 @@ type Event struct {
 }
 
 var tags = regexp.MustCompile(`<[^>]*>`)
+var deathNotice = regexp.MustCompile(`^\[ ([0-9.]+ [0-9:]+) \] \(notify\) Ship is out of control$`)
 var envelope = regexp.MustCompile(`^\[ ([0-9.]+ [0-9:]+) \] \(combat\) (.*)$`)
 var damage = regexp.MustCompile(`^(\d+) (from|to) (.+?) - (.+)$`)
 var rep = regexp.MustCompile(`^(\d+) (remote shield boosted|remote armor repaired|remote hull repaired) by (.+?) - - (.+)$`)
@@ -21,6 +22,9 @@ var brackets = regexp.MustCompile(`\[([^\]]+)\]`)
 // Only structured combat events leave the parser. Chat, URLs and travel notices do not.
 func parseLine(line, listener, source string) (Event, bool) {
 	clean := html.UnescapeString(tags.ReplaceAllString(line, ""))
+	if m := deathNotice.FindStringSubmatch(strings.TrimSpace(clean)); m != nil {
+		return Event{Time: m[1], Listener: listener, Source: source, Kind: "loss-candidate"}, true
+	}
 	m := envelope.FindStringSubmatch(strings.TrimSpace(clean))
 	if m == nil {
 		return Event{}, false

@@ -1,0 +1,14 @@
+{% extends "base.html" %}
+{% block content %}
+<h1 class="h3 fw-bold mb-3">Collecteur de soins</h1>
+<section class="content-card p-3 p-md-4">
+  <p>La clé relie ton lecteur Windows à ton compte EVEOSINT. Elle autorise uniquement le dépôt de rapports de soins.</p>
+  {% if collector_token %}
+  <div class="alert alert-success">Clé créée. Copie-la maintenant dans le lecteur ; elle ne sera plus affichée.</div>
+  <input class="form-control mb-3" type="text" readonly value="{{ collector_token }}" aria-label="Clé du collecteur" autocomplete="off">
+  {% endif %}
+  <form method="post" action="/account/combat-collector/token" class="mb-3"><button class="btn btn-primary" type="submit">Créer / remplacer ma clé</button></form>
+  <form method="post" action="/account/combat-collector/revoke"><button class="btn btn-outline-danger" type="submit">Révoquer ma clé</button></form>
+  <p class="muted-line mt-3">Les rapports reçus sont conservés en attente de validation par killmail. Le lecteur garde chaque JSON jusqu’à confirmation de son enregistrement.</p>
+</section>
+{% endblock %}

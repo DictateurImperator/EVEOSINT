@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 	"unicode/utf16"
@@ -75,6 +76,8 @@ func (w *watcher) poll(ctx context.Context, emit func(Update)) error {
 		return err
 	}
 	present := make(map[string]bool)
+	blocked := make(map[string]bool)
+	var batch []Event
 	for _, entry := range entries {
 		if ctx.Err() != nil {
 			return ctx.Err()
@@ -139,6 +142,10 @@ func (w *watcher) poll(ctx context.Context, emit func(Update)) error {
 			}
 			c.initialized = true
 		}
+		if blocked[c.listener] {
+			f.Close()
+			continue
+		}
 		_, err = f.Seek(c.offset, io.SeekStart)
 		var chunk []byte
 		if err == nil {
@@ -151,6 +158,9 @@ func (w *watcher) poll(ctx context.Context, emit func(Update)) error {
 		}
 		c.offset += int64(len(chunk))
 		c.info = opened
+		if c.offset < opened.Size() {
+			blocked[c.listener] = true
+		}
 		c.pending = append(c.pending, chunk...)
 		newline := []byte{'\n'}
 		if c.encoding == 1 {
@@ -189,7 +199,7 @@ func (w *watcher) poll(ctx context.Context, emit func(Update)) error {
 				if e.Listener == "" {
 					e.Listener = entry.Name()
 				}
-				emit(Update{Event: &e})
+				batch = append(batch, e)
 			}
 		}
 		c.pending = append([]byte(nil), c.pending[consumed:]...)
@@ -203,6 +213,10 @@ func (w *watcher) poll(ctx context.Context, emit func(Update)) error {
 		if !present[p] {
 			delete(w.files, p)
 		}
+	}
+	sort.SliceStable(batch, func(i, j int) bool { return batch[i].Time < batch[j].Time })
+	for i := range batch {
+		emit(Update{Event: &batch[i]})
 	}
 	// Only the initial directory snapshot skips historical contents. New files start at zero.
 	w.replay = true
