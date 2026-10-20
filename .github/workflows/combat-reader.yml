@@ -1,0 +1,36 @@
+name: Combat Reader
+on:
+  workflow_dispatch:
+  push:
+    paths: ['desktop/combat-reader/**', '.github/workflows/combat-reader.yml']
+  pull_request:
+    paths: ['desktop/combat-reader/**', '.github/workflows/combat-reader.yml']
+permissions:
+  contents: read
+jobs:
+  windows:
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: desktop/combat-reader
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: desktop/combat-reader/go.mod
+          cache: false
+      - run: go test -v ./...
+      - run: go vet ./...
+      - shell: pwsh
+        run: |
+          $env:CGO_ENABLED = '0'
+          foreach ($arch in @('amd64', '386', 'arm64')) {
+            $env:GOOS = 'windows'
+            $env:GOARCH = $arch
+            go build -trimpath -ldflags='-s -w -H=windowsgui' -o "dist/EVEOSINT-CombatReader-windows-$arch.exe" .
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: EVEOSINT-CombatReader-Windows
+          path: desktop/combat-reader/dist/*.exe
