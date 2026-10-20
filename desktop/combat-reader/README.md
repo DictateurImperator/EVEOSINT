@@ -91,3 +91,26 @@ Validation initiale : tests du parseur et du suivi exécutés sous Linux et bina
 Windows compilés. L'interface graphique, la coexistence réelle sous Windows et
 les versions/architectures cibles nécessitent encore leur validation sur Windows.
 Les exécutables de prototype ne sont pas signés numériquement.
+
+## Collecte précédant une perte (moteur, pas encore raccordé à l'interface)
+
+`collectRepairs` prépare un récapitulatif à partir d'une perte confirmée (pilote,
+vaisseau et horaire). Il conserve les soins reçus dans l'intervalle inclusif
+[perte - 1 heure, perte], séparés par pilote logi, vaisseau logi et type de soin.
+Les quantités nulles restent des événements à zéro. Le résultat sérialisable ne
+contient pas les fichiers sources, chemins, déplacements, notifications ou armes.
+
+Chaque soin expire après la visite de deux systèmes distincts autres que son
+système d'origine : A → B → A conserve les soins reçus en A ; A → B → C les
+exclut. Les soins reçus plus récemment en B restent éligibles à l'arrivée en C.
+Les personnages sont isolés. Un docking confirmé ou un undocking coupe les
+soins antérieurs ; un undocking est une preuve tardive d'un passage en station,
+pas une détection immédiate du docking.
+
+Les logs fournis montrent les sauts et certains undockings. La version de test
+reçue après le docking annoncé se termine à 20:00:41 et ne contient aucun nouveau
+marqueur de docking/undocking après les soins. `Ship stopping`, l'approche de
+station et `Ship is out of control` ne sont pas traités comme des confirmations
+de docking ou de perte. Le raccordement automatique au suivi et à une perte
+confirmée reste à implémenter après validation des marqueurs et/ou du killmail.
+Aucun binaire 0.2 n'est publié avec une détection automatique supposée.
