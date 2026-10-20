@@ -6,7 +6,6 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
-	"sort"
 	"strings"
 	"syscall"
 	"unsafe"
@@ -21,12 +20,12 @@ var setText = user32.NewProc("SetWindowTextW")
 var getText = user32.NewProc("GetWindowTextW")
 var move = user32.NewProc("MoveWindow")
 var controls []uintptr
-var pathEdit, replayBox, startButton, stopButton, statusText, summaryEdit, eventsEdit uintptr
+var pathEdit, replayBox, startButton, stopButton, statusText, summaryEdit, reportEdit uintptr
+var pilotEdit, shipEdit, lossEdit uintptr
 var updates <-chan Update
 var cancel context.CancelFunc
-var history []string
-var totals = map[string]int64{}
-var count int
+var store repairStore
+var knownPilots = map[string]bool{}
 var lastError string
 
 type point struct{ X, Y int32 }
@@ -100,7 +99,16 @@ func defaultFolder() string {
 	return filepath.Join(home, "Documents", "EVE", "logs", "Gamelogs")
 }
 func layout(w, h int32) {
-	positions := [][4]int32{{16, 12, w - 32, 24}, {16, 40, w - 170, 28}, {w - 144, 40, 128, 28}, {16, 78, w - 32, 24}, {16, 110, w - 32, 26}, {16, 145, 130, 30}, {158, 145, 130, 30}, {16, 188, w - 32, 28}, {16, 220, w - 32, 125}, {16, 355, w - 32, 24}, {16, 382, w - 32, max(int32(50), h-398)}}
+	col := max(int32(80), (w-64)/3)
+	positions := [][4]int32{
+		{16, 12, w - 32, 24}, {16, 40, w - 170, 28}, {w - 144, 40, 128, 28},
+		{16, 78, w - 32, 24}, {16, 108, w - 32, 26}, {16, 142, 130, 30}, {158, 142, 130, 30},
+		{16, 182, w - 32, 28}, {16, 218, w - 32, 24}, {16, 246, w - 32, 120},
+		{16, 380, w - 32, 24}, {16, 414, col, 22}, {16, 438, col, 200},
+		{32 + col, 414, col, 22}, {32 + col, 438, col, 28},
+		{48 + 2*col, 414, col, 22}, {48 + 2*col, 438, col, 28},
+		{16, 480, 200, 30}, {230, 480, 210, 30}, {16, 522, w - 32, max(int32(40), h-538)},
+	}
 	for i, p := range positions {
 		move.Call(controls[i], uintptr(p[0]), uintptr(p[1]), uintptr(max(int32(1), p[2])), uintptr(p[3]), 1)
 	}
@@ -126,11 +134,14 @@ func begin() {
 		return
 	}
 	replay, _, _ := send.Call(replayBox, 0xF0, 0, 0)
-	history = nil
-	totals = map[string]int64{}
-	count = 0
+	store = repairStore{}
+	knownPilots = map[string]bool{}
+	send.Call(pilotEdit, 0x14B, 0, 0) // CB_RESETCONTENT
+	put(pilotEdit, "")
+	put(shipEdit, "")
+	put(lossEdit, "")
 	lastError = ""
-	put(eventsEdit, "")
+	put(reportEdit, "")
 	put(summaryEdit, "En attente d’événements…")
 	ctx, c := context.WithCancel(context.Background())
 	cancel = c
@@ -171,17 +182,17 @@ func drain() {
 				}
 			}
 			if e := u.Event; e != nil {
-				count++
-				changed = true
-				labels := map[string]string{"shield": "Shield reçu", "armor": "Armor reçue", "hull": "Structure reçue", "damage-in": "Dégâts reçus", "damage-out": "Dégâts infligés"}
-				key := e.Listener + " | " + labels[e.Kind]
-				if e.Kind == "shield" || e.Kind == "armor" || e.Kind == "hull" {
-					key += " | " + e.Actor
+				if err := store.add(*e); err != nil {
+					lastError = err.Error()
+					continue
 				}
-				totals[key] += e.Amount
-				history = append(history, fmt.Sprintf("%s | %s | %s : %d | %s | %s", e.Time, e.Listener, labels[e.Kind], e.Amount, e.Actor, e.Module))
-				if len(history) > 300 {
-					history = history[len(history)-300:]
+				changed = true
+				if !knownPilots[e.Listener] {
+					knownPilots[e.Listener] = true
+					send.Call(pilotEdit, 0x143, 0, uintptr(unsafe.Pointer(wide(e.Listener))))
+					if textOf(pilotEdit) == "" {
+						put(pilotEdit, e.Listener)
+					}
 				}
 			}
 		default:
@@ -189,37 +200,49 @@ func drain() {
 		}
 	}
 	if changed {
-		keys := make([]string, 0, len(totals))
-		for k := range totals {
-			keys = append(keys, k)
-		}
-		sort.Strings(keys)
-		rows := []string{fmt.Sprintf("%d événements analysés depuis le démarrage de cette surveillance", count)}
-		for _, k := range keys {
-			rows = append(rows, fmt.Sprintf("%s : %d", k, totals[k]))
-		}
-		put(summaryEdit, strings.Join(rows, "\r\n"))
-		put(eventsEdit, strings.Join(history, "\r\n"))
-		send.Call(eventsEdit, 0xB1, ^uintptr(0), ^uintptr(0))
-		send.Call(eventsEdit, 0xB7, 0, 0)
+		put(summaryEdit, store.liveSummary())
 	}
 }
+func prepareReport() (string, error) {
+	loss := Loss{Pilot: strings.TrimSpace(textOf(pilotEdit)), Ship: strings.TrimSpace(textOf(shipEdit)), Time: strings.TrimSpace(textOf(lossEdit))}
+	p, err := store.prepare(loss)
+	if err != nil {
+		put(reportEdit, "Rapport non préparé : "+err.Error())
+		return "", err
+	}
+	raw, err := p.JSON()
+	if err != nil {
+		return "", err
+	}
+	put(reportEdit, p.Summary()+fmt.Sprintf("\r\n\r\nFormat EVEOSINT : JSON compact, %d octets. Aucun envoi effectué.", len(raw)))
+	return raw, nil
+}
+
 func windowProc(hwnd uintptr, msg uint32, wp, lp uintptr) uintptr {
 	switch msg {
 	case 1:
 		child(hwnd, "STATIC", "Dossier des logs de combat EVE", 0, 0)
 		pathEdit = child(hwnd, "EDIT", defaultFolder(), 0x00800000|0x80, 0)
 		child(hwnd, "BUTTON", "Parcourir…", 0x10000, 103)
-		child(hwnd, "STATIC", "Lecture seule • Aucun envoi réseau • Les logs restent disponibles pour EVE et les autres outils", 0, 0)
-		replayBox = child(hwnd, "BUTTON", "Relire aussi les fichiers existants (sinon : nouveaux événements seulement)", 3|0x10000, 0)
+		child(hwnd, "STATIC", "Lecture seule • Aucun envoi réseau • Aucune modification des logs ou de leurs permissions", 0, 0)
+		replayBox = child(hwnd, "BUTTON", "Relire les fichiers existants (sinon : nouveaux événements seulement)", 3|0x10000, 0)
 		startButton = child(hwnd, "BUTTON", "Démarrer", 0x10000, 101)
 		stopButton = child(hwnd, "BUTTON", "Arrêter", 0x10000, 102)
 		statusText = child(hwnd, "STATIC", "Prêt — choisissez le dossier puis cliquez sur Démarrer", 0, 0)
-		summaryEdit = child(hwnd, "EDIT", "Totaux de la session", 0x00800000|0x00200000|0x4|0x800|0x40, 0)
-		child(hwnd, "STATIC", "Derniers événements — horaires tels qu’enregistrés dans les logs", 0, 0)
-		eventsEdit = child(hwnd, "EDIT", "", 0x00800000|0x00200000|0x00100000|0x4|0x800|0x40|0x80, 0)
-		send.Call(eventsEdit, 0xC5, 1024*1024, 0)
+		child(hwnd, "STATIC", "Soins reçus — résumé des 30 dernières minutes de logs par personnage", 0, 0)
+		summaryEdit = child(hwnd, "EDIT", "En attente de soins…", 0x00800000|0x00200000|0x4|0x800|0x40, 0)
+		child(hwnd, "STATIC", "Préparer une perte — renseignez les informations du killmail (détection automatique à venir)", 0, 0)
+		child(hwnd, "STATIC", "Pilote soigné", 0, 0)
+		pilotEdit = child(hwnd, "COMBOBOX", "", 0x00200000|0x10000|2, 201)
+		child(hwnd, "STATIC", "Vaisseau perdu", 0, 0)
+		shipEdit = child(hwnd, "EDIT", "", 0x00800000|0x80|0x10000, 202)
+		child(hwnd, "STATIC", "Heure de perte UTC : AAAA.MM.JJ HH:MM:SS", 0, 0)
+		lossEdit = child(hwnd, "EDIT", "", 0x00800000|0x80|0x10000, 203)
+		child(hwnd, "BUTTON", "Préparer le résumé", 0x10000, 104)
+		child(hwnd, "BUTTON", "Copier pour EVEOSINT", 0x10000, 105)
+		reportEdit = child(hwnd, "EDIT", "Le résumé regroupe les soins par pilote logi et par vaisseau. La copie contient uniquement le JSON compact.", 0x00800000|0x00200000|0x4|0x800|0x40, 0)
 		send.Call(summaryEdit, 0xC5, 1024*1024, 0)
+		send.Call(reportEdit, 0xC5, 1024*1024, 0)
 		stop()
 		user32.NewProc("SetTimer").Call(hwnd, 1, 250, 0)
 		return 0
@@ -228,6 +251,20 @@ func windowProc(hwnd uintptr, msg uint32, wp, lp uintptr) uintptr {
 		return 0
 	case 0x111:
 		switch wp & 0xffff {
+		case 104:
+			prepareReport()
+		case 105:
+			if raw, err := prepareReport(); err == nil {
+				if err = copyText(hwnd, raw); err != nil {
+					put(reportEdit, err.Error())
+				} else {
+					put(reportEdit, textOf(reportEdit)+"\r\nCopié dans le presse-papiers.")
+				}
+			}
+		case 201, 202, 203:
+			if reportEdit != 0 {
+				put(reportEdit, "Informations de perte modifiées : préparez à nouveau le résumé.")
+			}
 		case 101:
 			begin()
 		case 103:
@@ -262,7 +299,7 @@ func main() {
 	if atom == 0 {
 		return
 	}
-	hwnd, _, _ := createWindow.Call(0, uintptr(unsafe.Pointer(class)), uintptr(unsafe.Pointer(wide("EVEOSINT — Combat Log Reader — Prototype 0.1"))), 0x00CF0000|0x10000000, 100, 100, 1100, 740, 0, 0, instance, 0)
+	hwnd, _, _ := createWindow.Call(0, uintptr(unsafe.Pointer(class)), uintptr(unsafe.Pointer(wide("EVEOSINT — Combat Log Reader — Prototype 0.2"))), 0x00CF0000|0x10000000, 100, 100, 1100, 850, 0, 0, instance, 0)
 	if hwnd == 0 {
 		return
 	}
@@ -271,6 +308,10 @@ func main() {
 		r, _, _ := user32.NewProc("GetMessageW").Call(uintptr(unsafe.Pointer(&m)), 0, 0, 0)
 		if int32(r) <= 0 {
 			break
+		}
+		handled, _, _ := user32.NewProc("IsDialogMessageW").Call(hwnd, uintptr(unsafe.Pointer(&m)))
+		if handled != 0 {
+			continue
 		}
 		user32.NewProc("TranslateMessage").Call(uintptr(unsafe.Pointer(&m)))
 		user32.NewProc("DispatchMessageW").Call(uintptr(unsafe.Pointer(&m)))

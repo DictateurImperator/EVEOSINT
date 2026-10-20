@@ -1,4 +1,4 @@
-# EVEOSINT Combat Reader — prototype 0.1
+# EVEOSINT Combat Reader — prototype 0.2
 
 Application Windows portable, interface native, sans installation de Python,
 .NET, Java ou WebView. Les exécutables embarquent le runtime Go. Aucun droit
@@ -18,11 +18,33 @@ le binaire). Windows 7/8 ne sont pas pris en charge.
    utiliser un dossier contenant des copies des seuls logs souhaités si besoin.
 5. Arrêter coupe le suivi. Démarrer à nouveau réinitialise les compteurs.
 
-Les compteurs séparent le personnage observé, les dégâts reçus/infligés et les
-réparations reçues par type et pilote logi. Les 300 derniers événements restent
-visibles ; les totaux portent sur tous les événements analysés durant le suivi.
-Les événements de réparation à zéro restent visibles et n'ajoutent aucun point.
-Les heures sont affichées telles qu'enregistrées dans les logs, sans conversion.
+Le suivi affiche uniquement les soins positifs, regroupés par personnage soigné,
+pilote logi et vaisseau logi, avec les totaux shield/armor/structure. Le flux de
+combat détaillé n'est plus affiché. La mémoire garde les soins des 30 dernières
+minutes de logs de chaque personnage, indépendamment des autres personnages.
+L'arrivée de nouveaux événements fait expirer les soins plus anciens.
+
+Pour préparer un résultat :
+
+1. Sélectionner le pilote soigné.
+2. Indiquer le vaisseau perdu et l'heure UTC exacte du killmail au format
+   `AAAA.MM.JJ HH:MM:SS`. Ces informations sont manuelles dans ce prototype ;
+   aucune notification ambiguë n'est convertie en perte automatique.
+3. Cliquer sur « Préparer le résumé » pour vérifier les totaux par logi/vaisseau.
+4. Cliquer sur « Copier pour EVEOSINT » pour copier le JSON compact sur une ligne.
+   Chaque copie recalcule le résultat à partir des champs actuels et des données
+   disponibles. Aucun envoi réseau ni endpoint d'import sur le site n'est ajouté.
+
+Le presse-papiers n'est écrit que sur ce clic. Le résultat écarte les lignes de
+soins à zéro et les contributeurs dont tous les totaux sont nuls, sans changer
+les points réellement réparés. Les logs sources ne sont jamais modifiés.
+
+Si le début ou la fin de la fenêtre manque, ou si des soins ont déjà expiré de la
+mémoire, le résumé l'indique et le JSON porte `partial:true`. `partial:false`
+indique seulement l'absence de lacune temporelle connue par ce suivi ; il ne
+certifie ni l'intégrité des fichiers ni l'absence d'autres événements manquants.
+Pour une ancienne perte, relire un dossier limité à ses logs : un replay de
+sessions plus récentes fait expirer les soins des sessions anciennes.
 
 ## Lecture seule, coexistence avec EVE
 
@@ -44,18 +66,17 @@ Une troncature suivie d'une réécriture complète entre deux passages peut ne p
 ## Données et future transmission à EVEOSINT
 
 Cette étape fonctionne entièrement en mémoire, sans réseau ni sauvegarde des
-logs. Aucun accès au processus EVE, à sa mémoire, à son cache ou à ses paquets.
+logs. La copie volontaire du résumé utilise le presse-papiers Windows. Aucun accès au processus EVE, à sa mémoire, à son cache ou à ses paquets.
 Les notifications de voyage, invitations, liens et messages hors combat ne sont
 pas remontés à l'interface. Les noms des personnages de plusieurs sessions
 peuvent cependant être visibles ensemble dans cette interface locale.
 
-Le parseur est séparé du suivi et de l'interface afin de permettre ensuite un
-transport minimal dédié aux soins : personnage soigné, source du soin, horaire,
-quantité et type. Aucun endpoint, aucune authentification et aucun envoi ne sont
-implémentés ici. La sélection de la fenêtre de combat, les identifiants EVE et
-la déduplication des envois doivent être définis avant cette future étape. Les
-fichiers bruts, chemins locaux, voyages et notifications ne devront pas être
-transmis. Un événement issu d'un fichier joueur ne constitue pas une preuve CCP.
+Le parseur, la fenêtre de calcul, le format compact et l'interface sont séparés.
+Le format proposé pour le futur import EVEOSINT est décrit dans `PROTOCOL.md`.
+Aucun endpoint, aucune authentification et aucun envoi ne sont implémentés ici.
+La sélection et la confirmation automatiques d'une perte ainsi que les règles de
+validation/déduplication côté serveur restent à réaliser avant un import réseau.
+Un événement issu d'un fichier joueur ne constitue pas une preuve CCP.
 
 Le parseur reconnaît les messages anglais présents dans les logs fournis ; les
 autres langues ne sont pas encore prises en charge.
@@ -92,7 +113,7 @@ Windows compilés. L'interface graphique, la coexistence réelle sous Windows et
 les versions/architectures cibles nécessitent encore leur validation sur Windows.
 Les exécutables de prototype ne sont pas signés numériquement.
 
-## Collecte précédant une perte (moteur, pas encore raccordé à l'interface)
+## Collecte précédant une perte
 
 `collectRepairs` prépare un récapitulatif à partir d'une perte confirmée (pilote,
 vaisseau et horaire). La seule règle de sélection est la fenêtre fixe et inclusive
@@ -104,7 +125,8 @@ Les soins reçus sont détaillés et regroupés par pilote logi, vaisseau logi e
 Le résultat sérialisable exclut les fichiers sources, chemins, déplacements,
 notifications et armes. Aucune donnée de déplacement n'est nécessaire au calcul.
 
-Le raccordement automatique au suivi et à une perte confirmée reste à implémenter.
+Le calcul et la copie sont raccordés au suivi ; la sélection de la perte est
+manuelle. La confirmation automatique par killmail reste à implémenter.
 `Ship stopping`, l'approche de station et `Ship is out of control` ne sont pas
-traités comme des confirmations de perte. L'exécutable prototype 0.1 déjà fourni
-n'intègre pas encore ce récapitulatif automatique. Aucun déploiement du site.
+traités comme des confirmations de perte. Le prototype 0.2 inclut le récapitulatif et la copie, sans déclenchement automatique
+de perte. Aucun déploiement du site.
