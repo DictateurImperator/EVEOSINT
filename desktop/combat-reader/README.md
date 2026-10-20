@@ -95,22 +95,16 @@ Les exécutables de prototype ne sont pas signés numériquement.
 ## Collecte précédant une perte (moteur, pas encore raccordé à l'interface)
 
 `collectRepairs` prépare un récapitulatif à partir d'une perte confirmée (pilote,
-vaisseau et horaire). Il conserve les soins reçus dans l'intervalle inclusif
-[perte - 1 heure, perte], séparés par pilote logi, vaisseau logi et type de soin.
-Les quantités nulles restent des événements à zéro. Le résultat sérialisable ne
-contient pas les fichiers sources, chemins, déplacements, notifications ou armes.
+vaisseau et horaire). La seule règle de sélection est la fenêtre fixe et inclusive
+[perte - 30 minutes, perte], pour le personnage concerné. Aucun docking, undocking,
+changement de système ou autre événement ne coupe ni ne prolonge cette fenêtre.
 
-Chaque soin expire après la visite de deux systèmes distincts autres que son
-système d'origine : A → B → A conserve les soins reçus en A ; A → B → C les
-exclut. Les soins reçus plus récemment en B restent éligibles à l'arrivée en C.
-Les personnages sont isolés. Un docking confirmé ou un undocking coupe les
-soins antérieurs ; un undocking est une preuve tardive d'un passage en station,
-pas une détection immédiate du docking.
+Les soins reçus sont détaillés et regroupés par pilote logi, vaisseau logi et type
+(shield, armor ou structure). Les quantités nulles restent des événements à zéro.
+Le résultat sérialisable exclut les fichiers sources, chemins, déplacements,
+notifications et armes. Aucune donnée de déplacement n'est nécessaire au calcul.
 
-Les logs fournis montrent les sauts et certains undockings. La version de test
-reçue après le docking annoncé se termine à 20:00:41 et ne contient aucun nouveau
-marqueur de docking/undocking après les soins. `Ship stopping`, l'approche de
-station et `Ship is out of control` ne sont pas traités comme des confirmations
-de docking ou de perte. Le raccordement automatique au suivi et à une perte
-confirmée reste à implémenter après validation des marqueurs et/ou du killmail.
-Aucun binaire 0.2 n'est publié avec une détection automatique supposée.
+Le raccordement automatique au suivi et à une perte confirmée reste à implémenter.
+`Ship stopping`, l'approche de station et `Ship is out of control` ne sont pas
+traités comme des confirmations de perte. L'exécutable prototype 0.1 déjà fourni
+n'intègre pas encore ce récapitulatif automatique. Aucun déploiement du site.

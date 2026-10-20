@@ -10,7 +10,6 @@ import (
 type Event struct {
 	Time, Listener, Kind, Actor, Ship, Module, Source string
 	Amount                                            int64
-	FromSystem, ToSystem                              string
 }
 
 var tags = regexp.MustCompile(`<[^>]*>`)
@@ -56,33 +55,6 @@ func parseLine(line, listener, source string) (Event, bool) {
 		} else {
 			e.Kind = "damage-out"
 		}
-		return e, true
-	}
-	return Event{}, false
-}
-
-// These movement messages have been observed in the provided client logs. They
-// remain local inputs to the receipt calculation, not data for transmission.
-var lifecycleEnvelope = regexp.MustCompile(`^\[ ([0-9.]+ [0-9:]+) \] \(None\) (.*)$`)
-var jumpMessage = regexp.MustCompile(`^Jumping from (.+) to (.+)$`)
-var undockMessage = regexp.MustCompile(`^Undocking from (.+) to (.+) solar system\.$`)
-
-func parseMovement(line, listener, source string) (Event, bool) {
-	clean := html.UnescapeString(tags.ReplaceAllString(line, ""))
-	m := lifecycleEnvelope.FindStringSubmatch(strings.TrimSpace(clean))
-	if m == nil {
-		return Event{}, false
-	}
-	e := Event{Time: m[1], Listener: listener, Source: source}
-	if j := jumpMessage.FindStringSubmatch(m[2]); j != nil {
-		e.Kind = "jump"
-		e.FromSystem = j[1]
-		e.ToSystem = j[2]
-		return e, true
-	}
-	if u := undockMessage.FindStringSubmatch(m[2]); u != nil {
-		e.Kind = "undock"
-		e.ToSystem = u[2]
 		return e, true
 	}
 	return Event{}, false
