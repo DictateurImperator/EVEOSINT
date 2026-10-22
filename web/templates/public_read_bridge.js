@@ -7,9 +7,13 @@
   const url=new URL(input instanceof Request?input.url:String(input),location.origin);
   const method=(options.method || (typeof input==='object'?input.method:'GET') || 'GET').toUpperCase();
   if(url.origin!==location.origin) return Promise.reject(new Error('External requests are unavailable.'));
-  if(url.pathname.startsWith('/public/')) return nativeFetch(input,options);
+  if(url.pathname.startsWith('/public/') || url.pathname.startsWith('/static/')) return nativeFetch(input,options);
   if(url.pathname==='/api/update-status' && {{ (not public_site)|tojson }}) return nativeFetch(input,options);
-  if(method!=='GET') return Promise.reject(new Error('This action requires login.'));
+  if(method!=='GET') {
+   if(method!=='POST')return Promise.reject(new Error('This action requires login.'));
+   const payload=typeof options.body==='string'?JSON.parse(options.body):null;
+   return nativeFetch('/public/compute',{...options,method:'POST',credentials:'omit',cache:'no-store',headers:{'Content-Type':'application/json'},body:JSON.stringify({source,path:url.pathname,payload})});
+  }
   const params=new URLSearchParams({source,path:url.pathname+url.search});
   const forwarded={...options,method:'GET',cache:'default',credentials:'omit'};
   delete forwarded.body;
@@ -19,7 +23,7 @@
  XMLHttpRequest.prototype.open=function(method,input,...rest) {
   const url=new URL(String(input),location.origin);
   if(url.origin!==location.origin) throw new Error('External requests are unavailable.');
-  if(!url.pathname.startsWith('/public/')) {
+  if(!(url.pathname.startsWith('/public/') || url.pathname.startsWith('/static/'))) {
    if(String(method).toUpperCase()!=='GET') throw new Error('This action requires login.');
    input='/public/read?'+new URLSearchParams({source,path:url.pathname+url.search});
   }
@@ -29,10 +33,12 @@
   const raw=anchor.getAttribute('href'); if(!raw || raw.startsWith('#')) return;
   const url=new URL(raw,location.origin); if(url.origin!==location.origin) return;
   let path=url.pathname.replace(/^\/public(?=\/)/,'');
-  let match=path.match(/^\/(character|corporation|alliance|system|constellation|region|ship|kill)\/[1-9]\d*$/);
-  let nested=path.match(/^\/(corporation|alliance)\/[1-9]\d*\/pilotable-ships\/[1-9]\d*$/);
-  let key=match?match[1]:nested?nested[1]:path.startsWith('/kill/mer/')?'kill':path==='/leaderboard'?'leaderboard':path.startsWith('/superintel')?'superintel':path==='/killboard'?'killboard':null;
-  let tab=key==='leaderboard'?(url.searchParams.get('kind')||'character'):key==='superintel'?(path==='/superintel'?'dashboard':path.split('/').pop()):key==='kill'?'detail':key==='killboard'?'killboard':nested?'pilotable-ships':url.searchParams.get('stats_view')==='top-kills'?'top-kills':url.searchParams.get('tab')||'overview';
+  let match=path.match(/^\/(character|corporation|alliance|coalition|system|constellation|region|ship|kill|weapon|skill|commodity)\/[1-9]\d*$/);
+  let nested=path.match(/^\/(corporation|alliance|coalition)\/[1-9]\d*\/pilotable-ships\/[1-9]\d*$/);
+  let extra={{ extra_public_pages|default({})|tojson }};
+  let mapPath=path.match(/^\/map(?:\/(region|constellation|system)\/[1-9]\d*)?$/);
+  let key=extra[path]?extra[path][0]:mapPath?'map':match?({weapon:'modules',skill:'skills',commodity:'commodities'}[match[1]]||match[1]):nested?nested[1]:path.startsWith('/kill/mer/')?'kill':path==='/leaderboard'?'leaderboard':path.startsWith('/superintel')?'superintel':path==='/killboard'?'killboard':null;
+  let tab=extra[path]?extra[path][1]:mapPath?(mapPath[1]||'universe'):key==='leaderboard'?(url.searchParams.get('kind')||'character'):key==='superintel'?(path==='/superintel'?'dashboard':path.split('/').pop()):key==='kill'?'detail':key==='killboard'?'killboard':nested?'pilotable-ships':url.searchParams.get('stats_view')==='top-kills'?'top-kills':url.searchParams.get('tab')||(key==='coalition'?'killboard':'overview');
   if(key && policy[key]?.enabled && policy[key].tabs.includes(tab)) anchor.href='/public'+path+url.search+url.hash;
   else { const span=document.createElement('span');span.className=anchor.className;span.replaceChildren(...anchor.childNodes);anchor.replaceWith(span); }
  }

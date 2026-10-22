@@ -10,7 +10,10 @@ at the top right. Logged-in visitors keep the standard app menu. Existing
 its desired tabs, then save. Both switches must be on. Home is public; all other
 families/tabs default off. Character/corporation/alliance Combat stats, Top kills,
 History, Pilotable ships and Population (where supported) are selectable.
-Unfinished item pages and calculation tools remain excluded.
+Every catalog page and tab is selectable, including coalitions, maps, unfinished
+item pages and calculation tools. Notes about load and completion are informational;
+they never disable publication controls. Only the administrator decides which
+ones become public. Admin, Account and Profiles remain private.
 
 Public URLs use `/public/leaderboard`, `/public/killboard`,
 `/public/character/94036773?tab=stats`, etc. Valid links, GET forms, standard
@@ -51,10 +54,16 @@ only cache files. Lowering X prunes existing entries immediately.
 
 ## Read access boundary
 
-The public bridge forwards only GET data requests through `/public/read`.
+The public bridge forwards GET data requests through `/public/read`.
+Explicitly published Ship analysis and Super evolution tools can also submit
+their read-only calculations through `/public/compute`, with a 64 KiB payload
+limit and the same bounded result cache. These tool responses are collected
+before being returned; streamed progress is delivered with the completed response.
 The gateway validates the published source, matching entity ID, required tab and
 an explicit endpoint allowlist. It never accepts arbitrary internal URLs,
-external URLs, POST actions, admin/account routes or forced scan restarts.
+external URLs, management POST actions, admin/account routes or forced scan restarts.
+The separate computation gateway accepts only the selected tool’s explicit
+calculation endpoints and rechecks publication before returning results.
 
 An internal ContextVar grants a public **read identity** (`entities.view` and
 `superintel.view`, no admin/jobs/account permissions) only while invoking these

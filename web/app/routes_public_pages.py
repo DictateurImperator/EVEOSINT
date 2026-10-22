@@ -44,7 +44,7 @@ def admin_page(request: Request):
     context.update(public_catalog=public.CATALOG, policy=public.settings(), snapshots=public.entries(),
                    prepared=_status(), timestamp=public.timestamp,
                    saved=request.query_params.get('saved') == '1', cache_limit=public.settings().get('_cache',{}).get('max_entries',public.MAX_ENTRIES))
-    return templates.TemplateResponse(request=request, name='admin_public_pages.html', context=context)
+    return templates.TemplateResponse(request=request, name='admin_public_pages.html', context=context,headers={'Cache-Control':'no-store'})
 
 
 @router.get('/admin/public-pages/preview', response_class=HTMLResponse)
@@ -154,7 +154,7 @@ def _public_layout(request, policy=None):
         if not page.get('enabled'):
             continue
         for tab in public.FAMILIES[key]['tabs']:
-            if tab['reason'] or tab['key'] not in page.get('tabs', []):
+            if tab['key'] not in page.get('tabs', []):
                 continue
             if key == 'killboard':
                 navigation.append(dict(label=label,href='/public/killboard'))
@@ -210,6 +210,58 @@ def _rewrite_data(data,policy,source):
     if isinstance(data,list):
         return [_rewrite_data(v,policy,source) for v in data]
     return data
+
+
+@router.post('/public/compute')
+async def compute(request: Request):
+    """Owner-published tool calculations only; no management/job endpoints."""
+    import json
+    from hashlib import sha256
+    from .public_read import read_scope, read_get
+    # Public read computations carry no account/session credentials.
+    origin=request.headers.get('origin')
+    if origin:
+        from urllib.parse import urlsplit
+        if urlsplit(origin).netloc!=request.headers.get('host'):
+            return Response(status_code=403,headers={'Cache-Control':'no-store'})
+    if request.headers.get('content-length','0').isdigit() and int(request.headers.get('content-length','0'))>65536:
+        return Response(status_code=413,headers={'Cache-Control':'no-store'})
+    raw=await request.body()
+    if len(raw)>65536:return Response(status_code=413,headers={'Cache-Control':'no-store'})
+    try:
+        payload=json.loads(raw)
+        source=public.resolve(payload['source'])
+        body=json.dumps(payload['payload'],sort_keys=True,separators=(',',':')).encode()
+        path=payload['path']
+        target=public.compute_target(source,path,sha256(body).hexdigest())
+    except (ValueError,KeyError,TypeError):
+        return Response(status_code=404,headers={'Cache-Control':'no-store'})
+    if not public.published(target,public.settings()):
+        return Response(status_code=404,headers={'Cache-Control':'no-store'})
+    cached=public.load(target)
+    try:
+        if not cached:
+            with public.render_slot(target):
+                cached=public.load(target)
+                if not cached:
+                    with read_scope():result=await read_get(request.app,path,method='POST',request_body=body)
+                    if result.status_code!=200:
+                        return Response(result.content,status_code=result.status_code,media_type=result.headers.get('content-type'),headers={'Cache-Control':'no-store'})
+                    value=json.dumps(dict(body=result.text,media_type=result.headers.get('content-type','application/json'),
+                        download=result.headers.get('content-disposition')))
+                    try:public.store(target,value)
+                    except ValueError:pass
+                    cached={'html':value}
+    except public.CacheBusy:
+        return JSONResponse({'error':'Another result is loading. Please retry shortly.'},status_code=503,headers={'Cache-Control':'no-store'})
+    except Exception:
+        LOG.exception('Published tool computation failed')
+        return JSONResponse({'error':'Computation failed. Please retry.'},status_code=503,headers={'Cache-Control':'no-store'})
+    if not public.published(target,public.settings()):
+        return Response(status_code=404,headers={'Cache-Control':'no-store'})
+    value=json.loads(cached['html']);headers={'Cache-Control':'no-store'}
+    if value.get('download'):headers['Content-Disposition']=value['download']
+    return Response(value['body'],media_type=value['media_type'].split(';')[0],headers=headers)
 
 
 @router.get('/public/read')
@@ -291,14 +343,17 @@ def public_page(request: Request, path: str):
         return HTMLResponse(status_code=404,headers={'Cache-Control':'no-store'})
     tabs = []
     for entry in public.FAMILIES[target.key]['tabs']:
-        if entry['reason'] or entry['key'] not in policy[target.key].get('tabs', []):
+        if entry['key'] not in policy[target.key].get('tabs', []):
             continue
         if target.key == 'leaderboard':
             url = '/leaderboard' + ('?kind=' + entry['key'] if entry['key'] != 'character' else '')
         elif target.key == 'superintel':
             url = '/superintel' + ('/' + entry['key'] if entry['key'] != 'dashboard' else '')
+        elif target.key in ('map','tools'):
+            url = public.tab_path(target.key,entry['key'],target.path)
         else:
-            url = target.path + ('?tab=' + entry['key'] if entry['key'] not in ('overview', 'detail') else '')
+            base_path=f'/{target.key}/{target.entity_id}' if target.key in ('coalition','character','corporation','alliance') else target.path
+            url = base_path + ('?tab=' + entry['key'] if entry['key'] not in ('overview', 'detail') else '')
         tabs.append(dict(label=entry['label'], url='/public' + url, active=entry['key'] == target.tab))
     # Small bounded list of snapshots, no database access and no public job queue.
     variants = [row for row in public.entries() if not row.get('internal') and row['fresh'] and
@@ -307,5 +362,5 @@ def public_page(request: Request, path: str):
     context.update(title='EVEOSINT - ' + public.FAMILIES[target.key]['label'], public_links=variants,
         public_tabs=tabs, missing=snapshot is None,
         snapshot_html=public.sanitize(snapshot['html'], policy, target.source, interactive=True),
-        public_target=target, public_policy=policy, snapshot_date=public.timestamp(snapshot['created']))
+        public_target=target, public_policy=policy, extra_public_pages=public.EXTRA_PAGES, snapshot_date=public.timestamp(snapshot['created']))
     return _page_response(request,context)

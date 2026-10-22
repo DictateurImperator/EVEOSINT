@@ -1,16 +1,15 @@
 {% extends 'base.html' %}
 {% block content %}
 <h1 class="h3">Public pages</h1>
-<p class="muted-line">Choose each page and its tabs. Unchecked pages stay private. Disabling a page or tab also removes its public links, including links in existing snapshots. Home is the public landing page. Account, Profiles and Admin pages are never published.</p>
+<p class="muted-line">Choose each page and its tabs. Unchecked pages stay private. Load and completion notes are informational: every checkbox is available for your decision. Disabling a page or tab also removes its public links, including links in existing snapshots. Home is the public landing page. Account, Profiles and Admin pages are never published.</p>
 {% if saved %}<div class="alert alert-success" role="status">Publication settings saved.</div>{% endif %}
 <form method="post" action="/admin/public-pages/settings">
 <div class="row g-3">{% for page in public_catalog %}{% set state=policy.get(page.key,{}) %}
 <section class="col-lg-6"><div class="content-card p-3 h-100">
-<label class="d-flex align-items-center gap-2 fw-bold"><input type="checkbox" name="enabled" value="{{ page.key }}" {% if state.get('enabled') %}checked{% endif %} {% if page.reason %}disabled{% endif %}>{{ page.label }}</label>
-{% if page.reason %}<p class="muted-line small mt-2 mb-0">{{ page.reason }}</p>{% else %}
+<label class="d-flex align-items-center gap-2 fw-bold"><input type="checkbox" name="enabled" value="{{ page.key }}" {% if state.get('enabled') %}checked{% endif %}>{{ page.label }}</label>
+{% if page.reason %}<p class="muted-line small mt-2 mb-0">{{ page.reason }}</p>{% endif %}
 <div class="muted-line small mt-2 mb-2">Example: <code>/public{{ page.example }}</code></div>
-{% for tab in page.tabs %}<div class="mb-2"><label class="d-flex align-items-center gap-2 small"><input type="checkbox" name="enabled" value="{{ page.key }}:{{ tab.key }}" {% if tab.key in state.get('tabs',[]) %}checked{% endif %} {% if tab.reason %}disabled{% endif %}>{{ tab.label }}</label>{% if tab.reason %}<div class="muted-line small ms-4">{{ tab.reason }}</div>{% endif %}</div>{% endfor %}
-{% endif %}
+{% for tab in page.tabs %}<div class="mb-2"><label class="d-flex align-items-center gap-2 small"><input type="checkbox" name="enabled" value="{{ page.key }}:{{ tab.key }}" {% if tab.key in state.get('tabs',[]) %}checked{% endif %}>{{ tab.label }}</label>{% if tab.reason %}<div class="muted-line small ms-4">{{ tab.reason }}</div>{% endif %}</div>{% endfor %}
 </div></section>{% endfor %}</div>
 <label class="d-block mt-3 small">Recent results to retain (X)<input class="form-control" style="max-width:180px" type="number" name="cache_entries" min="8" max="4096" value="{{ cache_limit }}"></label>
 <button class="btn btn-primary my-3" type="submit">Save publication settings</button>

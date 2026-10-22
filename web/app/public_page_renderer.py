@@ -22,7 +22,7 @@ def source_request(request, target):
 def render(request, target):
     # Caller checked current publication policy (or authenticated admin preview).
     # The read identity is internal and carries no management permissions.
-    from . import routes_admin_rankings, routes_superintel, routes_entities
+    from . import routes_admin_rankings, routes_superintel, routes_entities, routes_home
     request = source_request(request, target)
     context = dict(request=request, user=None, username='', show_app_layout=False, public_mode=True)
     with read_scope():
@@ -41,7 +41,9 @@ def render(request, target):
             else:
                 response = routes_entities.kill_profile(request, target.entity_id)
         elif '/pilotable-ships/' in target.path:
-            response=routes_entities._group_pilotable_ship_detail_response(request,target.key,target.entity_id,int(target.path.rsplit('/',1)[-1]))
+            ship_id=int(target.path.rsplit('/',1)[-1])
+            response=(routes_entities._coalition_pilotable_ship_detail_response(request,target.entity_id,ship_id)
+                      if target.key=='coalition' else routes_entities._group_pilotable_ship_detail_response(request,target.key,target.entity_id,ship_id))
         elif target.key == 'ship':
             from .entities import get_entity_profile
             from markupsafe import Markup
@@ -49,6 +51,20 @@ def render(request, target):
             fragment=templates.env.get_template('public_ship_killboard.html').render(profile=profile) if target.tab=='killboard' else ''
             return content('entity_profile.html',dict(context,profile=profile,profile_tab=target.tab,
                            public_snapshot=Markup(fragment),location_previews={}))
+        elif target.key == 'coalition':
+            response=routes_entities.coalition_profile(request,target.entity_id)
+        elif target.key in ('modules','skills','commodities'):
+            response=routes_entities.entity_profile(request,target.path.split('/')[1],target.entity_id)
+        elif target.key == 'tools':
+            if target.tab=='overview':response=routes_home.tools(request)
+            elif target.tab=='ship-analysis':response=routes_entities.ship_analysis_page(request)
+            elif target.tab=='super-evolution':response=routes_superintel.superintel_evolution(request)
+            else:response=routes_home.comparison_tool(request)
+        elif target.key == 'map':
+            handler={'universe':routes_entities.map_universe,'2d':routes_entities.map_eve_2d,
+                     'region':routes_entities.map_region,'constellation':routes_entities.map_constellation,
+                     'system':routes_entities.map_system}[target.tab]
+            response=handler(request) if target.tab in ('universe','2d') else handler(request,int(target.path.rsplit('/',1)[-1]))
         elif target.key == 'killboard':
             # Existing global KB streams bounded historical windows for filters.
             # Its own JS requests the public read gateway, never private APIs.

@@ -88,20 +88,48 @@ class PublicTests(unittest.TestCase):
         self.assertEqual(public.resolve('/character/42?tab=overview').source, '/character/42')
         for value in ('https://evil/leaderboard', '//evil/leaderboard', '/leaderboard?kind=character&kind=alliance',
                       '/leaderboard?through=2026-99',
-                      '/character/42?tab=population', '/weapon/1', '/public/groups/token', '/admin/jobs',
+                      '/character/42?tab=population', '/public/groups/token', '/admin/jobs',
                       '/leaderboard?retry=1', '/character/42?tab=stats&secret=x'):
             with self.subTest(value=value), self.assertRaises(ValueError):
                 public.resolve(value)
 
-    def test_real_entity_tabs_are_selectable_but_unfinished_tools_stay_blocked(self):
+    def test_all_pages_selectable_despite_informational_notes(self):
         policy=self.enable('modules','tools','character','character:top-kills','character:history',
                            'character:pilotable-ships','character:stats','corporation','corporation:population')
-        self.assertNotIn('modules',policy)
-        self.assertNotIn('tools',policy)
+        self.assertTrue(policy['modules']['enabled'])
+        self.assertTrue(policy['tools']['enabled'])
+        values=[value for page in public.CATALOG for value in [page['key'],*[page['key']+':'+tab['key'] for tab in page['tabs']]]]
+        all_policy=self.enable(*values)
+        for page in public.CATALOG:
+            with self.subTest(page=page['key']):
+                self.assertTrue(public.published(public.resolve(page['example']),all_policy))
+                self.assertEqual(self.client.get('/public'+page['example']).status_code,200)
+        self.enable('character','character:top-kills','character:history','character:pilotable-ships','character:stats','corporation','corporation:population')
         self.assertEqual(set(policy['character']['tabs']),{'top-kills','history','pilotable-ships','stats'})
         for tab in ('top-kills','history','pilotable-ships'):
             self.assertEqual(self.client.get('/public/character/42?tab='+tab).status_code,200)
         self.assertEqual(self.client.get('/public/corporation/42?tab=population').status_code,200)
+
+    def test_published_tool_computation_cached_and_revoked(self):
+        from fastapi import Request
+        calls=[]
+        @self.client.app.post('/api/ship-analysis')
+        async def calculate(request: Request):
+            calls.append(await request.json())
+            return {'answer':len(calls)}
+        envelope={'source':'/ship-analysis','path':'/api/ship-analysis','payload':{'ships':[1]}}
+        self.assertEqual(self.client.post('/public/compute',json=envelope).status_code,404)
+        self.enable('tools','tools:ship-analysis')
+        for _ in range(2):
+            response=self.client.post('/public/compute',json=envelope)
+            self.assertEqual(response.status_code,200,response.text)
+            self.assertEqual(response.json(),{'answer':1})
+        self.assertEqual(calls,[{'ships':[1]}])
+        self.assertEqual(self.client.post('/public/compute',json=envelope,headers={'origin':'https://foreign.example'}).status_code,403)
+        for path in ('/admin/jobs','/api/superintel/evolution/data','https://foreign.example'):
+            self.assertEqual(self.client.post('/public/compute',json={**envelope,'path':path}).status_code,404)
+        self.enable('tools')
+        self.assertEqual(self.client.post('/public/compute',json=envelope).status_code,404)
 
     def test_remove_scripts_forms_events_private_links_preserve_css_svg_and_names(self):
         policy = self.enable('character', 'character:overview')

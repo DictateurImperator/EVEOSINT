@@ -1,7 +1,7 @@
 """Trusted, narrowly scoped identity for published read-only adapters.
 
 Never selected by an HTTP parameter/header. Only the publication gateway enters
-this scope after checking the page/tab and an explicit GET endpoint allowlist.
+this scope after checking the page/tab and an explicit data/calculation endpoint allowlist.
 It grants no account, admin, job or management permission.
 """
 from contextlib import contextmanager
@@ -24,17 +24,18 @@ def read_scope():
         _READER.reset(token)
 
 
-async def read_get(app, url, accept='*/*'):
-    """Run a validated local GET through ASGI, without HTTP/network dependencies."""
+async def read_get(app, url, accept='*/*', *, method='GET', request_body=b''):
+    """Run a validated local data request through ASGI, without network dependencies."""
     import asyncio
     from types import SimpleNamespace
     from urllib.parse import urlsplit
     parts = urlsplit(url)
     scope = dict(type='http', asgi={'version':'3.0','spec_version':'2.4'}, http_version='1.1',
-                 method='GET', scheme='http', path=parts.path, raw_path=parts.path.encode(),
+                 method=method, scheme='http', path=parts.path, raw_path=parts.path.encode(),
                  query_string=parts.query.encode(), root_path='', client=None,
                  server=('public-read.internal',80),
-                 headers=[(b'host',b'public-read.internal'),(b'accept',accept.encode())])
+                 headers=[(b'host',b'public-read.internal'),(b'accept',accept.encode()),
+                          (b'content-type',b'application/json'),(b'content-length',str(len(request_body)).encode())])
     status=500
     headers={}
     body=bytearray()
@@ -45,7 +46,7 @@ async def read_get(app, url, accept='*/*'):
         nonlocal received
         if not received:
             received=True
-            return {'type':'http.request','body':b'','more_body':False}
+            return {'type':'http.request','body':request_body,'more_body':False}
         await complete.wait()
         return {'type':'http.disconnect'}
 

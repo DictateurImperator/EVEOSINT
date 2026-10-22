@@ -36,30 +36,47 @@ def family(key, label, example, tabs, reason=''):
 
 
 _ENTITY_TABS = [tab('overview', 'Overview'), tab('killboard', 'Killboard'),
-                tab('stats', 'Combat stats · monthly history'),
-                tab('top-kills', 'Combat stats · top kills'),
-                tab('history', 'Affiliation history'),
-                tab('pilotable-ships', 'Pilotable ships')]
+                tab('stats', 'Combat stats · monthly history', 'Reads stored monthly scores; usually light.'),
+                tab('top-kills', 'Combat stats · top kills', 'Scans killmail history on demand; can be expensive.'),
+                tab('history', 'Affiliation history', 'Historical membership queries; cost depends on the selected period.'),
+                tab('pilotable-ships', 'Pilotable ships', 'Capability queries can be expensive for large groups.')]
 CATALOG = [
     family('leaderboard', 'Leaderboard', '/leaderboard', [tab(k, label) for k, label in
            [('character', 'Characters'), ('corporation', 'Corporations'), ('alliance', 'Alliances')]]),
     family('superintel', 'SuperINTEL', '/superintel', [tab('dashboard', 'Dashboard'), tab('detailed', 'Detailed dashboard'),
            tab('monthly-analysis', 'Monthly analysis')]),
     *[family(k, label, f'/{k}/' + {'character':'94036773','corporation':'98502318','alliance':'1354830081'}[k], list(_ENTITY_TABS) +
-             ([tab('population', 'Population')] if k != 'character' else []))
+             ([tab('population', 'Population', 'Population scans can be expensive for large groups or long periods.')] if k != 'character' else []))
       for k, label in [('character', 'Characters'), ('corporation', 'Corporations'), ('alliance', 'Alliances')]],
     *[family(k, label, f'/{k}/1', [tab('overview', 'Overview'), tab('killboard', 'Killboard')])
       for k, label in [('system', 'Systems'), ('constellation', 'Constellations'), ('region', 'Regions'), ('ship', 'Ships')]],
     family('kill', 'Killmail details', '/kill/138779791', [tab('detail', 'Details and fitting')]),
-    family('coalition', 'Coalitions', '/coalition/1', [], 'Historical group expansion needs a separate public adapter.'),
+    family('coalition', 'Coalitions', '/coalition/1', [tab('killboard','Killboard'),tab('population','Population'),tab('history','History'),tab('pilotable-ships','Pilotable ships')], 'Historical membership expansion can be expensive for large coalitions.'),
     family('killboard', 'Killboard', '/killboard', [tab('killboard', 'Killboard')]),
-    family('map', 'Universe map', '/map', [], 'Interactive map and heatmap endpoints are not yet reviewed for public use.'),
-    family('modules', 'Modules / weapons', '/weapon/1', [], 'Unfinished entity pages.'),
-    family('skills', 'Skills', '/skill/1', [], 'Unfinished entity pages.'),
-    family('commodities', 'Commodities', '/commodity/1', [], 'Unfinished entity pages.'),
-    family('tools', 'Tools', '/tools', [], 'Tools that launch calculations stay behind login.'),
+    family('map', 'Universe map', '/map', [tab('universe','Universe'),tab('2d','2D map'),tab('region','Region'),tab('constellation','Constellation'),tab('system','System')], 'Interactive maps and heatmaps can run expensive queries on demand.'),
+    family('modules', 'Modules / weapons', '/weapon/1', [tab('overview','Page')], 'Unfinished entity pages.'),
+    family('skills', 'Skills', '/skill/1', [tab('overview','Page')], 'Unfinished entity pages.'),
+    family('commodities', 'Commodities', '/commodity/1', [tab('overview','Page')], 'Unfinished entity pages.'),
+    family('tools', 'Tools', '/tools', [tab('overview','Tools menu'),tab('ship-analysis','Ship analysis'),tab('super-evolution','Super evolution'),tab('population','Population comparison'),tab('economics','Economics comparison')], 'Heavy calculations: work starts when a visitor requests a result.'),
 ]
 FAMILIES = {row['key']: row for row in CATALOG}
+
+
+EXTRA_PAGES = {
+    '/tools':('tools','overview'), '/ship-analysis':('tools','ship-analysis'),
+    '/superintel/evolution':('tools','super-evolution'),
+    '/tools/population':('tools','population'), '/tools/economics':('tools','economics'),
+    '/map':('map','universe'), '/map/eve-2d':('map','2d'),
+}
+
+
+def tab_path(key, selected, current):
+    for path,(family_key,tab_key) in EXTRA_PAGES.items():
+        if (family_key,tab_key)==(key,selected):return path
+    if key=='map' and selected in ('region','constellation','system'):
+        if current.startswith('/map/'+selected+'/'):return current
+        return '/map/'+selected+'/'+{'region':'10000002','constellation':'20000020','system':'30000142'}[selected]
+    return current
 
 
 @dataclass(frozen=True)
@@ -85,7 +102,7 @@ class Target:
         if self.key == 'leaderboard':
             return '/leaderboard?' + urlencode({'kind':self.tab})
         if self.entity_id is not None and self.key != 'kill':
-            return f'/{self.key}/{self.entity_id}' + ('?' + urlencode({'tab':self.tab}) if self.tab != 'overview' else '')
+            return f"/{ {'modules':'weapon','skills':'skill','commodities':'commodity'}.get(self.key,self.key) }/{self.entity_id}" + ('?' + urlencode({'tab':self.tab}) if self.tab != 'overview' else '')
         return self.path
 
     @property
@@ -108,12 +125,20 @@ def resolve(value):
         'affiliation_alliance_ids', 'involved_corporation_ids', 'involved_alliance_ids',
         'builder_ship_include','builder_ship_exclude','builder_entity_include','builder_entity_exclude',
         'builder_zone_include','builder_zone_exclude'}
-    if repeated - list_names:
+    if repeated - list_names and not (path in EXTRA_PAGES or path.startswith('/map/')):
         raise ValueError('Repeated scalar parameters are not supported.')
     key = selected = None
     entity_id = None
     allowed = {}
-    if path == '/leaderboard':
+    if path in EXTRA_PAGES:
+        key,selected=EXTRA_PAGES[path]
+        allowed={name:r'.{0,200}' for name in params if re.fullmatch(r'[a-zA-Z][a-zA-Z0-9_-]{0,60}',name)}
+        defaults={}
+    elif re.fullmatch(r'/map/(region|constellation|system)/[1-9]\d{0,11}',path):
+        key,selected='map',path.split('/')[2]
+        allowed={name:r'.{0,200}' for name in params if re.fullmatch(r'[a-zA-Z][a-zA-Z0-9_-]{0,60}',name)}
+        defaults={}
+    elif path == '/leaderboard':
         key = 'leaderboard'
         selected = params.get('kind', 'character')
         allowed = {'kind': ('character', 'corporation', 'alliance'), 'mode': ('classic', 'weighted'),
@@ -142,27 +167,30 @@ def resolve(value):
     elif re.fullmatch(r'/kill/mer/20\d{2}-\d{2}-01/[1-9]\d{0,14}(?:/hidden)?',path):
         key,selected,defaults='kill','detail',{}
         allowed={'kill_datetime':r'[0-9TZ:+. -]{10,40}'}
-    elif re.fullmatch(r'/(corporation|alliance)/[1-9]\d{0,11}/pilotable-ships/[1-9]\d{0,11}',path):
+    elif re.fullmatch(r'/(corporation|alliance|coalition)/[1-9]\d{0,11}/pilotable-ships/[1-9]\d{0,11}',path):
         key=path.split('/')[1]
         entity_id=int(path.split('/')[2])
         selected='pilotable-ships'
         allowed={'page':r'[1-9]\d{0,7}','q':r'.{0,100}'}
         defaults={'page':'1'}
     else:
-        match = re.fullmatch(r'/(character|corporation|alliance|system|constellation|region|ship|kill)/([1-9]\d{0,11})', path)
+        match = re.fullmatch(r'/(character|corporation|alliance|coalition|system|constellation|region|ship|kill|weapon|skill|commodity)/([1-9]\d{0,11})', path)
         if match:
             key, raw_id = match.groups()
             entity_id = int(raw_id)
+            key = {'weapon':'modules','skill':'skills','commodity':'commodities'}.get(key,key)
         if key == 'kill':
             selected = 'detail'
             defaults = {}
         elif key:
-            selected = params.get('tab', 'overview')
+            selected = params.get('tab', 'killboard' if key=='coalition' else 'overview')
             if params.get('stats_view') == 'top-kills':
                 selected = 'top-kills'
             allowed = {'tab': tuple(t['key'] for t in FAMILIES[key]['tabs']), 'stats_view': ('history', 'top-kills'),
                        'page': r'[1-9]\d{0,7}', 'mode': ('api', 'hidden', 'total'), 'tier':r'.{1,40}', 'group':r'.{1,80}', 'size':r'.{1,40}', 'faction':r'.{1,80}' }
-            defaults = {'tab': 'overview', 'stats_view': 'history', 'page': '1', 'mode': 'api'}
+            defaults = {'tab': 'killboard' if key=='coalition' else 'overview', 'stats_view': 'history', 'page': '1', 'mode': 'api'}
+    if key=='coalition' and selected=='history':
+        allowed['history_view']=('members','coalitions')
     if selected == 'killboard':
         allowed.update(mode=('api','hidden','total'), page=r'[1-9]\d{0,7}', participation=('both','kills','losses'),
             date_from=r'20\d{2}-\d{2}-\d{2}', date_to=r'20\d{2}-\d{2}-\d{2}',
@@ -179,7 +207,7 @@ def resolve(value):
             continue
         if rule is None or (value not in rule if isinstance(rule, tuple) else not re.fullmatch(rule, value)):
             raise ValueError('Unsupported public filter: ' + name)
-    if not any(t['key'] == selected and not t['reason'] for t in FAMILIES[key]['tabs']):
+    if not any(t['key'] == selected for t in FAMILIES[key]['tabs']):
         raise ValueError('This tab is not ready for public access.')
     if key not in ('character', 'corporation', 'alliance') and selected == 'stats':
         raise ValueError('Combat stats are unavailable for this entity.')
@@ -223,10 +251,8 @@ def save_settings(enabled, max_entries=None):
     elif settings().get('_cache'):
         result['_cache'] = settings()['_cache']
     for page in CATALOG:
-        if page['reason']:
-            continue
         result[page['key']] = {'enabled': page['key'] in enabled,
-            'tabs': [t['key'] for t in page['tabs'] if not t['reason'] and page['key'] + ':' + t['key'] in enabled]}
+            'tabs': [t['key'] for t in page['tabs'] if page['key'] + ':' + t['key'] in enabled]}
     with locked():
         _atomic(ROOT / 'settings.json', result)
         _prune([row for row in entries() if row['fresh']], result.get('_cache',{}).get('max_entries',MAX_ENTRIES))
@@ -251,7 +277,7 @@ def entries():
         for row in rows[:4096]:
             target = cache_target(row['source'])
             result.append(dict(source=target.source, public=target.public, key=target.key, tab=target.tab,
-                               created=row['created'], bytes=row['bytes'], internal=target.path == '/_read',
+                               created=row['created'], bytes=row['bytes'], internal=target.path in ('/_read','/_compute'),
                                fresh=time.time() - row['created'] < MAX_AGE))
         return sorted(result, key=lambda row: row['created'], reverse=True)
     except (OSError, ValueError, KeyError, TypeError):
@@ -489,7 +515,21 @@ def read_target(private_url, source):
     params = [(k,v) for k,v in params if k != 'retry']
     path = url.path
     required = source.tab
-    if source.key == 'leaderboard':
+    if source.key == 'map':
+        if not re.fullmatch(r'/api/map(?:/[a-zA-Z0-9_-]+)*',path):
+            raise ValueError('Data endpoint unavailable.')
+    elif source.key == 'tools':
+        allowed_paths={
+            'ship-analysis': ('/api/ship-analysis/search','/api/ship-selection-ranking'),
+            'super-evolution': (),
+            'population': ('/api/tools/entity-search',),
+            'economics': ('/api/tools/entity-search',),
+            'overview': (),
+        }
+        comparison = source.tab in ('population','economics') and re.fullmatch(r'/api/(?:alliance|coalition)/[1-9]\d{0,11}/(?:population(?:-intelligence(?:/(?:group|series))?)?|population-economics(?:/(?:options|evolution|comparison|best-month))?)',path)
+        if path not in allowed_paths.get(source.tab,()) and not comparison and path not in ('/api/entity-search','/killboard/search'):
+            raise ValueError('Data endpoint unavailable.')
+    elif source.key == 'leaderboard':
         if path != '/leaderboard/lookup':
             raise ValueError('Data endpoint unavailable.')
         kind = dict(params).get('kind','character')
@@ -525,7 +565,22 @@ def read_target(private_url, source):
     return Target(source.key, required, '/_read', urlencode({'source':source.source,'path':private_url}), source.entity_id)
 
 
+COMPUTE_PATHS = {
+    'ship-analysis':('/api/ship-analysis',),
+    'super-evolution':('/api/superintel/evolution/data','/superintel/evolution/download'),
+}
+
+
+def compute_target(source, path, body_hash):
+    if source.key!='tools' or path not in COMPUTE_PATHS.get(source.tab,()) or not re.fullmatch(r'[a-f0-9]{64}',body_hash):
+        raise ValueError('This computation is unavailable.')
+    return Target(source.key,source.tab,'/_compute',urlencode({'source':source.read_scope_url,'path':path,'body':body_hash}))
+
+
 def cache_target(value):
+    if value.startswith('/_compute?'):
+        params=dict(parse_qsl(urlsplit(value).query))
+        return compute_target(resolve(params['source']),params['path'],params['body'])
     if value.startswith('/_read?'):
         params = dict(parse_qsl(urlsplit(value).query))
         return read_target(params['path'],resolve(params['source']))
