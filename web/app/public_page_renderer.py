@@ -1,7 +1,7 @@
-"""Explicit admin-only snapshot adapters. Never called by a public GET."""
-from markupsafe import Markup
+"""Published read adapters: same templates/data paths, no admin/user operations."""
 from starlette.requests import Request
 from .main_objects import templates
+from .public_read import read_scope
 
 
 def content(name, context):
@@ -10,64 +10,61 @@ def content(name, context):
 
 
 def source_request(request, target):
-    scope = dict(request.scope, method='GET', path=target.path, raw_path=target.path.encode(),
-                 query_string=target.query.encode())
-    return Request(scope)
+    query = target.query
+    if target.tab == 'top-kills':
+        from urllib.parse import parse_qsl, urlencode
+        params = dict(parse_qsl(query));params.update(tab='stats',stats_view='top-kills')
+        query = urlencode(params)
+    return Request(dict(request.scope, method='GET', path=target.path, raw_path=target.path.encode(), query_string=query.encode(),
+                        headers=[(k,v) for k,v in request.scope.get('headers',[]) if k not in (b'cookie',b'authorization')]))
 
 
 def render(request, target):
-    """Use the requesting admin's real session; no synthetic user or auth bypass."""
+    # Caller checked current publication policy (or authenticated admin preview).
+    # The read identity is internal and carries no management permissions.
     from . import routes_admin_rankings, routes_superintel, routes_entities
-    from .entities import get_entity_profile
-    from . import killmail_rankings
     request = source_request(request, target)
-    if target.key == 'leaderboard':
-        response = routes_admin_rankings.page(request)
-    elif target.key == 'superintel':
-        handler = {'dashboard': routes_superintel.superintel_dashboard,
-                   'detailed': routes_superintel.superintel_detailed_dashboard,
-                   'monthly-analysis': routes_superintel.superintel_monthly_analysis}[target.tab]
-        response = handler(request)
-    elif target.key == 'kill':
-        response = routes_entities.kill_profile(request, target.entity_id)
-    else:
-        # Do not invoke entity_profile: its private population enrichment is
-        # unnecessary here. Reuse its exact header and shared result templates.
-        profile = get_entity_profile(target.key, target.entity_id)
-        if not profile:
-            raise ValueError('Entity not found.')
-        fragment = ''
-        if target.tab == 'stats':
-            history = killmail_rankings.combat_history(target.key, target.entity_id)
-            fragment = templates.env.get_template('entity_combat_stats.html').render(
-                profile=profile, combat_stats=history, combat_stats_view='history',
-                compact_isk=killmail_rankings.compact_isk, full_isk=killmail_rankings.full_isk)
-        elif target.tab == 'killboard':
-            if target.key in ('system', 'constellation', 'region'):
-                response = routes_entities.location_killmails_fragment(request, target.key, target.entity_id)
+    context = dict(request=request, user=None, username='', show_app_layout=False, public_mode=True)
+    with read_scope():
+        if target.key == 'leaderboard':
+            response = routes_admin_rankings.ranking_response(request, context)
+        elif target.key == 'superintel':
+            handler = {'dashboard': routes_superintel.dashboard_response,
+                       'detailed': routes_superintel.detailed_response,
+                       'monthly-analysis': routes_superintel.monthly_response}[target.tab]
+            response = handler(request, context)
+        elif target.key == 'kill':
+            if target.path.startswith('/kill/mer/'):
+                parts=target.path.split('/')
+                handler=routes_entities.mer_hidden_killmail if target.path.endswith('/hidden') else routes_entities.mer_killmail_ambiguous
+                response=handler(request,parts[3],int(parts[4]),request.query_params.get('kill_datetime'))
             else:
-                handler = {'character': routes_entities.character_killmails_fragment,
-                           'corporation': routes_entities.corporation_killmails_fragment,
-                           'alliance': routes_entities.alliance_killmails_fragment,
-                           'ship': routes_entities.ship_killmails_fragment}[target.key]
-                response = handler(request, target.entity_id)
-            if response.status_code != 200 or not hasattr(response, 'context') or response.context.get('error'):
-                raise ValueError('Killboard could not be prepared. Check the application log.')
-            fragment = response.body.decode()
-        return content('entity_profile.html', dict(request=request, profile=profile,
-            profile_tab=target.tab, public_snapshot=Markup(fragment), location_previews={},
-            error=None, user=None))
-    if response.status_code != 200 or not hasattr(response, 'context') or response.context.get('error'):
-        raise ValueError('Source page could not be prepared. Check the application log.')
-    context = dict(response.context)
-    if target.key == 'superintel' and target.tab == 'dashboard' and context.get('dashboard'):
-        dashboard = dict(context['dashboard'])
-        # The private template embeds hidden rows for client-side searching.
-        # Anonymous snapshots contain only displayed rows, never that full set.
-        limit = 100 if dashboard.get('full_ranking') else 10
-        if dashboard.get('score_ranking_month_all'):
-            dashboard['score_ranking_month_all'] = dashboard['score_ranking_month_all'][:limit]
-        context['dashboard'] = dashboard
-        if limit == 100:
-            return '<p class="muted-line">Public snapshot: first 100 results.</p>' + content(response.template.name, context)
-    return content(response.template.name, context)
+                response = routes_entities.kill_profile(request, target.entity_id)
+        elif '/pilotable-ships/' in target.path:
+            response=routes_entities._group_pilotable_ship_detail_response(request,target.key,target.entity_id,int(target.path.rsplit('/',1)[-1]))
+        elif target.key == 'ship':
+            from .entities import get_entity_profile
+            from markupsafe import Markup
+            profile=get_entity_profile('ship',target.entity_id)
+            fragment=templates.env.get_template('public_ship_killboard.html').render(profile=profile) if target.tab=='killboard' else ''
+            return content('entity_profile.html',dict(context,profile=profile,profile_tab=target.tab,
+                           public_snapshot=Markup(fragment),location_previews={}))
+        elif target.key == 'killboard':
+            # Existing global KB streams bounded historical windows for filters.
+            # Its own JS requests the public read gateway, never private APIs.
+            response = routes_entities.global_killboard(request)
+        else:
+            response = routes_entities.entity_profile(request, target.key, target.entity_id)
+        if response.status_code != 200 or not hasattr(response,'context') or response.context.get('error'):
+            raise ValueError('Page could not be loaded. Please retry.')
+        context = dict(response.context, public_mode=True)
+        # Public-only overview is the normal shared header without a data tab.
+        if target.tab == 'overview':
+            from markupsafe import Markup
+            context['public_snapshot'] = Markup('')
+        if target.key == 'superintel' and target.tab == 'dashboard' and context.get('dashboard'):
+            dashboard = dict(context['dashboard'])
+            if not dashboard.get('full_ranking') and dashboard.get('score_ranking_month_all'):
+                dashboard['score_ranking_month_all'] = dashboard['score_ranking_month_all'][:10]
+            context['dashboard'] = dashboard
+        return content(response.template.name, context)

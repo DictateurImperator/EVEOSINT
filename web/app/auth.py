@@ -2,6 +2,7 @@ import hashlib
 import secrets
 from datetime import datetime, timedelta, timezone
 
+from fastapi import HTTPException
 from fastapi.responses import RedirectResponse
 
 from .config import SESSION_COOKIE, SESSION_DAYS
@@ -197,7 +198,15 @@ def get_current_user(request):
 
 
 def require_login(request):
-    return get_current_user(request)
+    from .public_read import current_reader
+    user = current_reader() or get_current_user(request)
+    if not user and (request.url.path.startswith('/api/') or request.url.path in {
+        '/killboard/data','/killboard/scan','/killboard/search','/leaderboard/lookup'
+    }):
+        # Legacy GET data handlers sometimes ignored the returned user. They
+        # must not bypass publication controls through the private API URL.
+        raise HTTPException(status_code=401)
+    return user
 
 
 def has_permission(user, permission_key):

@@ -19,6 +19,9 @@ class PublicTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.root = patch.object(public, 'ROOT', Path(self.temp.name))
         self.root.start()
+        renderer=f.load('public_page_renderer')
+        self.render_patch=patch.object(renderer,'render',return_value='<h1>On demand</h1>')
+        self.renderer=self.render_patch.start()
         app = FastAPI()
         # Independent group routes must win over the generic public gateway.
         @app.get('/public/groups/{token}')
@@ -28,6 +31,7 @@ class PublicTests(unittest.TestCase):
         self.client = TestClient(app)
 
     def tearDown(self):
+        self.render_patch.stop()
         self.root.stop()
         self.temp.cleanup()
 
@@ -45,16 +49,20 @@ class PublicTests(unittest.TestCase):
         self.enable('character:overview')  # tab alone cannot publish its parent
         self.assertEqual(self.client.get('/public/character/1').status_code, 404)
 
-    def test_no_query_or_work_on_public_cache_miss(self):
-        self.enable('leaderboard', 'leaderboard:character')
-        with patch.object(routes, '_prepare', side_effect=AssertionError('No public work')):
-            response = self.client.get('/public/leaderboard')
-        self.assertEqual(response.status_code, 200)
-        self.assertIn('No calculation has been started', response.text)
-        self.assertNotIn('<script', response.text)
-        self.assertNotIn('/api/update-status', response.text)
-        self.assertEqual(response.headers['cache-control'], 'no-store')
-        self.assertIn("connect-src 'none'", response.headers['content-security-policy'])
+    def test_cache_miss_calculates_then_hits_cache_and_browser_revalidates(self):
+        self.enable('leaderboard','leaderboard:character')
+        first=self.client.get('/public/leaderboard')
+        self.assertEqual(first.status_code,200)
+        self.assertIn('On demand',first.text)
+        self.assertEqual(self.renderer.call_count,1)
+        second=self.client.get('/public/leaderboard')
+        self.assertEqual(self.renderer.call_count,1)
+        self.assertIn('private, max-age=60',second.headers['cache-control'])
+        third=self.client.get('/public/leaderboard',headers={'If-None-Match':second.headers['etag']})
+        self.assertEqual(third.status_code,304)
+        self.assertEqual(third.content,b'')
+        self.enable()
+        self.assertEqual(self.client.get('/public/leaderboard',headers={'If-None-Match':second.headers['etag']}).status_code,404)
 
     def test_cached_links_revoke_immediately_without_mutating_source(self):
         self.enable('character', 'character:overview', 'character:stats', 'leaderboard', 'leaderboard:character')
@@ -79,22 +87,25 @@ class PublicTests(unittest.TestCase):
         self.assertEqual(public.resolve('/public/leaderboard?kind=character&page=1').source, '/leaderboard')
         self.assertEqual(public.resolve('/character/42?tab=overview').source, '/character/42')
         for value in ('https://evil/leaderboard', '//evil/leaderboard', '/leaderboard?kind=character&kind=alliance',
-                      '/leaderboard?include=alliance:1', '/leaderboard?page=500000', '/leaderboard?through=2026-99',
-                      '/character/42?tab=top-kills', '/character/42?tab=stats&stats_view=top-kills',
+                      '/leaderboard?through=2026-99',
                       '/character/42?tab=population', '/weapon/1', '/public/groups/token', '/admin/jobs',
                       '/leaderboard?retry=1', '/character/42?tab=stats&secret=x'):
             with self.subTest(value=value), self.assertRaises(ValueError):
                 public.resolve(value)
 
-    def test_unfinished_tabs_cannot_be_enabled_by_crafted_admin_form(self):
-        policy = self.enable('modules', 'tools', 'character', 'character:top-kills', 'character:history', 'character:stats')
-        self.assertNotIn('modules', policy)
-        self.assertNotIn('tools', policy)
-        self.assertEqual(policy['character']['tabs'], ['stats'])
+    def test_real_entity_tabs_are_selectable_but_unfinished_tools_stay_blocked(self):
+        policy=self.enable('modules','tools','character','character:top-kills','character:history',
+                           'character:pilotable-ships','character:stats','corporation','corporation:population')
+        self.assertNotIn('modules',policy)
+        self.assertNotIn('tools',policy)
+        self.assertEqual(set(policy['character']['tabs']),{'top-kills','history','pilotable-ships','stats'})
+        for tab in ('top-kills','history','pilotable-ships'):
+            self.assertEqual(self.client.get('/public/character/42?tab='+tab).status_code,200)
+        self.assertEqual(self.client.get('/public/corporation/42?tab=population').status_code,200)
 
     def test_remove_scripts_forms_events_private_links_preserve_css_svg_and_names(self):
         policy = self.enable('character', 'character:overview')
-        html = '''<style>.x{color:red}</style><script>secret()</script><form action="/admin/jobs"><input name="token" value="secret"><button>Run</button></form>
+        html = '''<style>.x{color:red}</style><script>secret()</script><form method="post" action="/admin/jobs"><input name="token" value="secret"><button>Run</button></form>
         <a href="/admin/jobs">Job</a><a href="javascript:evil()">Bad</a><a href="//evil/x">Remote</a>
         <img src="https://images.evetech.net/types/1/icon" onerror="secret()" data-url="/api/private">
         <svg viewBox="0 0 100 100"><circle cx="50"/></svg><a href="/character/1">Pilot</a>'''
@@ -215,7 +226,11 @@ class RendererTests(unittest.TestCase):
         target = public.resolve('/character/42?tab=stats')
         request = f.Request({'type':'http','method':'GET','path':'/admin/public-pages/prepare',
                              'headers':[], 'query_string':b'', 'scheme':'http','server':('testserver',80)})
-        with patch.dict(sys.modules, stubs),patch.object(f.entities, 'get_entity_profile',return_value=profile):
+        stubs[f.PACKAGE+'.routes_entities'].entity_profile=lambda request,kind,id: f.templates.TemplateResponse(
+            request=request,name='entity_profile.html',context=dict(request=request,profile=profile,profile_tab='stats',
+            combat_stats=ranking.combat_history(kind,id),combat_stats_view='history',location_previews={},
+            compact_isk=ranking.compact_isk,full_isk=ranking.full_isk,user=None))
+        with patch.dict(sys.modules, stubs):
             html = renderer.render(request,target)
         result = public.sanitize(html, {'character':dict(enabled=True,tabs=['stats'])},target.source)
         self.assertIn('Public Pilot',result)
@@ -259,6 +274,99 @@ class LandingTests(unittest.TestCase):
         self.assertIn('My account',response.text)
         self.assertNotIn('href="/login">Log in</a>',response.text)
         self.assertNotIn('Content-Security-Policy',response.headers)
+
+
+class PublicDataTests(unittest.TestCase):
+    setUp=PublicTests.setUp
+    tearDown=PublicTests.tearDown
+    enable=PublicTests.enable
+    def test_data_gate_uses_read_identity_caches_and_revokes_per_tab(self):
+        from fastapi import Request
+        calls=[]
+        @self.client.app.get('/api/character/42/history')
+        def history(request:Request):
+            user=f.auth.require_login(request)
+            self.assertTrue(user['is_public'])
+            self.assertNotIn('admin.system.view',user['permissions'])
+            calls.append(1)
+            return {'history':[{'name':'Old corp'}]}
+        self.enable('character','character:history')
+        params={'source':'/character/42?tab=history','path':'/api/character/42/history'}
+        first=self.client.get('/public/read',params=params)
+        self.assertEqual(first.status_code,200,first.text)
+        self.assertEqual(first.json()['history'][0]['name'],'Old corp')
+        self.assertEqual(self.client.get('/public/read',params=params).status_code,200)
+        self.assertEqual(len(calls),1)
+        self.assertEqual(self.client.get('/public/read',params=params,headers={'If-None-Match':first.headers['etag']}).status_code,304)
+        self.assertTrue(any(row['internal'] for row in public.entries()))
+        self.assertNotIn('/_read',self.client.get('/public').text)
+        self.enable('character','character:overview')
+        self.assertEqual(self.client.get('/public/read',params=params).status_code,404)
+        from importlib import import_module
+        self.assertIsNone(import_module(f.PACKAGE+'.public_read').current_reader())
+
+    def test_direct_private_data_url_requires_login_and_scope_does_not_leak(self):
+        from fastapi import Request
+        calls=[]
+        @self.client.app.get('/api/character/42/history')
+        def history(request:Request):
+            f.auth.require_login(request)
+            calls.append(1)
+            return {'history':[]}
+        self.assertEqual(self.client.get('/api/character/42/history').status_code,401)
+        self.assertEqual(calls,[])
+        self.enable('character','character:history')
+        response=self.client.get('/public/read',params={'source':'/character/42?tab=history','path':'/api/character/42/history'})
+        self.assertEqual(response.status_code,200,response.text)
+        self.assertEqual(self.client.get('/api/character/42/history').status_code,401)
+        self.assertEqual(calls,[1])
+
+    def test_read_proxy_never_calls_other_entities_admin_or_post_actions(self):
+        self.enable('character','character:history','character:population','character:top-kills')
+        source='/character/42?tab=history'
+        for path in ('/admin/jobs','/account','https://evil/api/character/42/history',
+                     '/api/character/43/history','/api/character/42/population-history-check',
+                     '/api/character/42/delete','/api/character/42/history/../../admin'):
+            self.assertEqual(self.client.get('/public/read',params={'source':source,'path':path}).status_code,404,path)
+        self.assertEqual(self.client.post('/public/read',json={'source':source,'path':'/api/character/42/history'}).status_code,405)
+
+    def test_running_scan_responses_are_not_frozen_in_cache(self):
+        calls=[]
+        @self.client.app.get('/api/character/42/combat-stats/top-kills')
+        def progress():
+            calls.append(1)
+            return {'status':'running','progress':{'checked':len(calls)}}
+        self.enable('character','character:top-kills')
+        params={'source':'/character/42?tab=stats&stats_view=top-kills','path':'/api/character/42/combat-stats/top-kills?retry=1'}
+        for count in (1,2):
+            response=self.client.get('/public/read',params=params)
+            self.assertEqual(response.status_code,200,response.text)
+            self.assertEqual(response.json()['progress']['checked'],count)
+            self.assertEqual(response.headers['cache-control'],'no-store')
+        self.assertFalse(public.entries())
+
+    def test_recently_accessed_results_survive_lru_eviction(self):
+        one,two,three=[public.resolve('/character/'+str(id)) for id in (1,2,3)]
+        with patch.object(public,'MAX_ENTRIES',2):
+            public.store(one,'one');public.store(two,'two')
+            public.load(one)
+            public.store(three,'three')
+        self.assertIsNotNone(public.load(one))
+        self.assertIsNone(public.load(two))
+        self.assertIsNotNone(public.load(three))
+
+    def test_get_forms_filters_and_pagination_have_no_20_page_ceiling(self):
+        target=public.resolve('/leaderboard?page=21&q=&target_id=&position=&kind=character')
+        self.assertEqual(target.source,'/leaderboard?page=21')
+        target=public.resolve('/character/42?tab=killboard&page=51&builder_entity_include=both:alliance:1&builder_entity_include=victim:corporation:2')
+        self.assertEqual(target.tab,'killboard')
+        policy=self.enable('character','character:killboard')
+        html='<form><select name="participation"><option value="kills">Kills</option></select><button type="submit">Show</button></form><button data-killmail-mode="hidden">Hidden</button>'
+        result=public.sanitize(html,policy,target.source,interactive=True)
+        self.assertIn('action="/public/character/42"',result)
+        self.assertIn('name="participation"',result)
+        self.assertIn('mode=hidden',result)
+        self.assertIn('>Hidden</a>',result)
 
 
 if __name__ == '__main__':

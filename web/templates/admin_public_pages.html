@@ -12,18 +12,19 @@
 {% for tab in page.tabs %}<div class="mb-2"><label class="d-flex align-items-center gap-2 small"><input type="checkbox" name="enabled" value="{{ page.key }}:{{ tab.key }}" {% if tab.key in state.get('tabs',[]) %}checked{% endif %} {% if tab.reason %}disabled{% endif %}>{{ tab.label }}</label>{% if tab.reason %}<div class="muted-line small ms-4">{{ tab.reason }}</div>{% endif %}</div>{% endfor %}
 {% endif %}
 </div></section>{% endfor %}</div>
+<label class="d-block mt-3 small">Recent results to retain (X)<input class="form-control" style="max-width:180px" type="number" name="cache_entries" min="8" max="4096" value="{{ cache_limit }}"></label>
 <button class="btn btn-primary my-3" type="submit">Save publication settings</button>
 </form>
 <section class="content-card p-3 mt-3">
-<h2 class="h5">Prepare or refresh a cached view</h2>
-<p class="muted-line small">Visitors only read snapshots and never start queries or scans. Prepare the exact page URL below, including its month or ranking options if needed. Preparing a snapshot does not publish it. Cache: at most 256 views, 64 MiB total, 2 MiB per view. Snapshots expire after 24 hours; expired views do not trigger a calculation.</p>
+<h2 class="h5">Optional: warm a result in advance</h2>
+<p class="muted-line small">Published pages load on demand, including pagination and filters. No preparation is required. The server retains at most X recent page/data results within 64 MiB. Results refresh after five minutes. Visitors’ browsers can reuse responses for one minute, then revalidate them. You can optionally warm one URL here before opening it. This does not publish it.</p>
 <form id="publicPrepare" class="d-flex flex-wrap gap-2"><label class="flex-grow-1">Page URL<input class="form-control" id="publicSource" value="/leaderboard" maxlength="1000" required placeholder="/character/94036773?tab=stats"></label><button class="btn btn-outline-primary align-self-end" type="submit">Prepare snapshot</button></form>
 <p id="publicPrepareStatus" class="muted-line mt-3" aria-live="polite">{{ prepared.message }}</p>
 <a class="btn btn-sm btn-outline-light" href="/public" target="_blank" rel="noopener">Open public site</a>
 </section>
-<section class="content-card p-3 mt-3"><h2 class="h5">Cached views ({{ snapshots|length }} / 256)</h2>
+<section class="content-card p-3 mt-3"><h2 class="h5">Recent results ({{ snapshots|length }} / {{ cache_limit }})</h2>
 <div class="table-responsive"><table class="table align-middle"><thead><tr><th>Page</th><th>Prepared</th><th>Cache</th><th>Public link</th><th></th></tr></thead><tbody>
-{% for row in snapshots %}{% set state=policy.get(row.key,{}) %}<tr><td><a href="/admin/public-pages/preview?source={{ row.source|urlencode }}" target="_blank" rel="noopener"><code>{{ row.source }}</code></a></td><td>{{ timestamp(row.created) }}</td><td>{{ 'Ready' if row.fresh else 'Expired' }} · {{ (row.bytes/1024)|round(1) }} KiB</td><td>{% if state.get('enabled') and row.tab in state.get('tabs',[]) %}<a href="{{ row.public }}" target="_blank" rel="noopener">{{ row.public }}</a>{% else %}Private{% endif %}</td><td><button type="button" class="btn btn-sm btn-outline-light" data-refresh-source="{{ row.source }}">Refresh</button></td></tr>{% else %}<tr><td colspan="5" class="muted-line">No snapshots prepared. Everything is private by default.</td></tr>{% endfor %}
+{% for row in snapshots %}{% set state=policy.get(row.key,{}) %}<tr><td>{% if row.internal %}<span class="muted-line">Data response · {{ row.key }} · {{ row.tab }}</span>{% else %}<a href="/admin/public-pages/preview?source={{ row.source|urlencode }}" target="_blank" rel="noopener"><code>{{ row.source }}</code></a>{% endif %}</td><td>{{ timestamp(row.created) }}</td><td>{{ 'Ready' if row.fresh else 'Expired' }} · {{ (row.bytes/1024)|round(1) }} KiB</td><td>{% if row.internal %}Page data{% elif state.get('enabled') and row.tab in state.get('tabs',[]) %}<a href="{{ row.public }}" target="_blank" rel="noopener">{{ row.public }}</a>{% else %}Private{% endif %}</td><td>{% if not row.internal %}<button type="button" class="btn btn-sm btn-outline-light" data-refresh-source="{{ row.source }}">Refresh</button>{% endif %}</td></tr>{% else %}<tr><td colspan="5" class="muted-line">No results cached yet. Published views calculate when opened.</td></tr>{% endfor %}
 </tbody></table></div><form method="post" action="/admin/public-pages/clear"><button type="submit" class="btn btn-sm btn-outline-danger">Clear public cache</button></form>
 </section>
 <script>

@@ -15,7 +15,7 @@
   document.querySelectorAll('[data-rank-kind]').forEach(tab=>tab.addEventListener('click',()=>{
     const params=new URLSearchParams(new FormData(kind.form));
     for(const name of ['q','target_id','position','page'])params.delete(name);
-    params.set('kind',tab.dataset.rankKind);tab.href='/leaderboard?'+params.toString();
+    params.set('kind',tab.dataset.rankKind);tab.href=(location.pathname.startsWith('/public/')?'/public':'')+'/leaderboard?'+params.toString();
   }));
   const typeLabel=kind=>({universe:'Universe',coalition:'Coalition',alliance:'Alliance',corporation:'Corporation',character:'Character'}[kind]||kind);
   function logo(item){

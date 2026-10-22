@@ -1,9 +1,9 @@
-"""Admin publication switches and cache-only anonymous pages."""
+"""Admin publication switches and bounded, on-demand public views."""
 import fcntl
 import logging
 import time
 from fastapi import APIRouter, BackgroundTasks, Request
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from .auth import require_login, require_permission_or_redirect
 from .layout import app_context
 from .main_objects import templates
@@ -43,7 +43,7 @@ def admin_page(request: Request):
     context = app_context(request=request, user=user, title='EVEOSINT - Public pages', active_module='admin', active_menu_key='admin.public_pages')
     context.update(public_catalog=public.CATALOG, policy=public.settings(), snapshots=public.entries(),
                    prepared=_status(), timestamp=public.timestamp,
-                   saved=request.query_params.get('saved') == '1')
+                   saved=request.query_params.get('saved') == '1', cache_limit=public.settings().get('_cache',{}).get('max_entries',public.MAX_ENTRIES))
     return templates.TemplateResponse(request=request, name='admin_public_pages.html', context=context)
 
 
@@ -72,7 +72,10 @@ async def change_settings(request: Request):
         return redirect
     form = await request.form()
     enabled = set(form.getlist('enabled'))
-    public.save_settings(enabled)
+    try:
+        public.save_settings(enabled, max_entries=form.get('cache_entries', public.MAX_ENTRIES))
+    except (ValueError,TypeError):
+        return JSONResponse({'error':'Choose a whole number of cached results.'},status_code=400)
     return RedirectResponse('/admin/public-pages?saved=1', status_code=303)
 
 
@@ -146,13 +149,16 @@ def _public_layout(request, policy=None):
         return dict(app_context(request=request, user=user, title='EVEOSINT', active_module='home',
                                 active_menu_key='home'), public_site=False)
     navigation = []
-    for key, label in (('leaderboard', 'Leaderboard'), ('superintel', 'SuperINTEL')):
+    for key, label in (('killboard', 'Killboard'), ('leaderboard', 'Leaderboard'), ('superintel', 'SuperINTEL')):
         page = (policy or {}).get(key, {})
         if not page.get('enabled'):
             continue
         for tab in public.FAMILIES[key]['tabs']:
             if tab['reason'] or tab['key'] not in page.get('tabs', []):
                 continue
+            if key == 'killboard':
+                navigation.append(dict(label=label,href='/public/killboard'))
+                break
             url = ('/leaderboard' + ('?kind=' + tab['key'] if tab['key'] != 'character' else '')) if key == 'leaderboard' else ('/superintel' + ('/' + tab['key'] if tab['key'] != 'dashboard' else ''))
             navigation.append(dict(label=label, href='/public' + url))
             break
@@ -160,9 +166,10 @@ def _public_layout(request, policy=None):
 
 
 def _public_headers(context):
-    headers = {'Cache-Control': 'no-store', 'X-Robots-Tag': 'noindex'}
+    headers = {'Cache-Control': 'no-store', 'Vary':'Cookie'}
     if context.get('public_site'):
-        headers['Content-Security-Policy'] = "connect-src 'none'; form-action 'none'; frame-src 'none'; object-src 'none'; base-uri 'none'"
+        headers['Cache-Control'] = f'private, max-age={public.BROWSER_MAX_AGE}, must-revalidate'
+        headers['Content-Security-Policy'] = "connect-src 'self'; form-action 'self'; frame-src 'none'; object-src 'none'; base-uri 'none'"
     return headers
 
 
@@ -170,7 +177,7 @@ def _public_headers(context):
 @router.get('/public/', response_class=HTMLResponse)
 def public_home(request: Request):
     policy = public.settings()
-    links = [row for row in public.entries() if row['fresh'] and
+    links = [row for row in public.entries() if not row.get('internal') and row['fresh'] and
              public.published(public.resolve(row['source']), policy)]
     # Static shared Home/changelog: no report query, cache or preparation needed.
     from .public_page_renderer import content
@@ -178,8 +185,86 @@ def public_home(request: Request):
     context.update(title='EVEOSINT - Home', public_links=links, public_tabs=[], missing=False,
                    snapshot_html=public.sanitize(content('home.html', {'public_home':True}), policy, '/public'),
                    snapshot_date=None)
-    return templates.TemplateResponse(request=request, name='public_page.html', context=context,
-                                      headers=_public_headers(context))
+    return _page_response(request,context)
+
+
+def _conditional(request, body, media_type, headers, status=200):
+    from hashlib import sha256
+    if status == 200 and headers.get('Cache-Control') != 'no-store':
+        etag = '"' + sha256(body).hexdigest() + '"'
+        headers = dict(headers, ETag=etag)
+        if request.headers.get('if-none-match') in (etag,'*'):
+            return Response(status_code=304,headers=headers)
+    return Response(body,status_code=status,media_type=media_type,headers=headers)
+
+
+def _page_response(request,context):
+    response=templates.TemplateResponse(request=request,name='public_page.html',context=context)
+    return _conditional(request,response.body,'text/html',_public_headers(context))
+
+
+def _rewrite_data(data,policy,source):
+    if isinstance(data,dict):
+        return {k:public.sanitize(v,policy,source,interactive=True) if k=='html' and isinstance(v,str)
+                else _rewrite_data(v,policy,source) for k,v in data.items()}
+    if isinstance(data,list):
+        return [_rewrite_data(v,policy,source) for v in data]
+    return data
+
+
+@router.get('/public/read')
+async def read_data(request: Request):
+    import json
+    from .public_read import read_scope, read_get
+    try:
+        source=public.resolve(request.query_params.get('source',''))
+        target=public.read_target(request.query_params.get('path',''),source)
+    except (ValueError,KeyError):
+        return Response(status_code=404,headers={'Cache-Control':'no-store'})
+    policy=public.settings()
+    if not public.published(source,policy) or not public.published(target,policy):
+        return Response(status_code=404,headers={'Cache-Control':'no-store'})
+    cached=public.load(target)
+    transient=False
+    try:
+        if not cached:
+            with public.render_slot(target):
+                cached=public.load(target)
+                if not cached:
+                    from urllib.parse import parse_qsl
+                    private_url=dict(parse_qsl(target.query))['path']
+                    # In-process ASGI only: no remote HTTP, cookies or credentials.
+                    # read_target accepted an explicit GET data endpoint for this entity/tab.
+                    with read_scope():
+                        result=await read_get(request.app,private_url,request.headers.get('accept','*/*'))
+                    if result.status_code != 200:
+                        return Response(result.content,status_code=result.status_code,media_type=result.headers.get('content-type'),headers={'Cache-Control':'no-store'})
+                    payload=dict(body=result.text,media_type=result.headers.get('content-type','text/html'),
+                                 headers={k:v for k,v in result.headers.items() if k.lower().startswith('x-kb-')})
+                    if 'json' in payload['media_type']:
+                        data=json.loads(payload['body'])
+                        transient=isinstance(data,dict) and data.get('status') in ('running','started','pending','failed')
+                    else:
+                        transient='data-pilotable-refresh="1"' in payload['body'] or 'alert-danger' in payload['body']
+                    if not transient:
+                        try:public.store(target,json.dumps(payload))
+                        except ValueError:pass
+                    cached=dict(html=json.dumps(payload))
+    except public.CacheBusy:
+        return JSONResponse({'error':'Another result is loading. Please retry shortly.'},status_code=503,headers={'Retry-After':'2','Cache-Control':'no-store'})
+    except Exception:
+        LOG.exception('Published data request failed')
+        return JSONResponse({'error':'This data could not be loaded. Please retry.'},status_code=503,headers={'Cache-Control':'no-store'})
+    policy=public.settings()
+    if not public.published(source,policy) or not public.published(target,policy):
+        return Response(status_code=404,headers={'Cache-Control':'no-store'})
+    payload=json.loads(cached['html'])
+    if 'json' in payload['media_type']:
+        body=json.dumps(_rewrite_data(json.loads(payload['body']),policy,source.source)).encode()
+    else:
+        body=public.sanitize(payload['body'],policy,source.source,interactive=True).encode()
+    headers=dict(payload['headers'], **{'Cache-Control':'no-store' if transient else f'private, max-age={public.BROWSER_MAX_AGE}, must-revalidate'})
+    return _conditional(request,body,payload['media_type'].split(';')[0],headers)
 
 
 # Include AFTER personal_groups_router so /public/groups/{token} remains independent.
@@ -192,7 +277,18 @@ def public_page(request: Request, path: str):
     policy = public.settings()
     if not public.published(target, policy):
         return HTMLResponse(status_code=404, headers={'Cache-Control': 'no-store'})
-    snapshot = public.load(target)
+    from .public_page_renderer import render
+    try:
+        snapshot, hit = public.cached_result(target, lambda: render(request,target))
+    except public.CacheBusy as exc:
+        return HTMLResponse('<p>'+str(exc)+'</p>', status_code=503, headers={'Retry-After':'2','Cache-Control':'no-store'})
+    except Exception:
+        LOG.exception('Published page failed source=%s',target.source)
+        return HTMLResponse('<p>This view could not be loaded. Please retry.</p>',status_code=503,headers={'Cache-Control':'no-store'})
+    # Publication may have changed while the query was running.
+    policy = public.settings()
+    if not public.published(target,policy):
+        return HTMLResponse(status_code=404,headers={'Cache-Control':'no-store'})
     tabs = []
     for entry in public.FAMILIES[target.key]['tabs']:
         if entry['reason'] or entry['key'] not in policy[target.key].get('tabs', []):
@@ -205,12 +301,11 @@ def public_page(request: Request, path: str):
             url = target.path + ('?tab=' + entry['key'] if entry['key'] not in ('overview', 'detail') else '')
         tabs.append(dict(label=entry['label'], url='/public' + url, active=entry['key'] == target.tab))
     # Small bounded list of snapshots, no database access and no public job queue.
-    variants = [row for row in public.entries() if row['fresh'] and
+    variants = [row for row in public.entries() if not row.get('internal') and row['fresh'] and
                 public.published(public.resolve(row['source']), policy)]
     context = _public_layout(request, policy)
     context.update(title='EVEOSINT - ' + public.FAMILIES[target.key]['label'], public_links=variants,
         public_tabs=tabs, missing=snapshot is None,
-        snapshot_html=public.sanitize(snapshot['html'], policy, target.source) if snapshot else '',
-        snapshot_date=public.timestamp(snapshot['created']) if snapshot else None)
-    return templates.TemplateResponse(request=request, name='public_page.html', context=context,
-                                      headers=_public_headers(context))
+        snapshot_html=public.sanitize(snapshot['html'], policy, target.source, interactive=True),
+        public_target=target, public_policy=policy, snapshot_date=public.timestamp(snapshot['created']))
+    return _page_response(request,context)

@@ -21,12 +21,17 @@ LOG = logging.getLogger(__name__)
 @router.get('/leaderboard', response_class=HTMLResponse)
 @router.get('/admin/debug/rankings', response_class=HTMLResponse, include_in_schema=False)
 def page(request: Request):
-    import time
     user=require_login(request)
     redirect=require_permission_or_redirect(user,'entities.view' if 'entities.view' in user.get('permissions',set()) else 'admin.jobs.view')
     if redirect:
         return redirect
     context=app_context(request=request,user=user,title='EVEOSINT - ISK rankings',active_module='leaderboard',active_menu_key='leaderboard.rankings')
+    return ranking_response(request, context)
+
+
+def ranking_response(request, context):
+    """Read-only shared renderer; caller enforces private/public access policy."""
+    import time
     params=request.query_params
     kind=params.get('kind','character');mode=params.get('mode','classic');sort=params.get('sort','destroyed')
     aggregation=params.get('aggregation','cumulative');monthly=aggregation=='monthly'

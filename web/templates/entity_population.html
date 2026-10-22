@@ -82,6 +82,7 @@
     if (state.initialization_done) return;
 
     show('Checking DOTLAN population history…');
+    {% if public_mode %}root.hidden = true; return;{% endif %}
     const response = await fetch(startUrl, {
       method:'POST', credentials:'same-origin', cache:'no-store', headers:{'Accept':'application/json'}
     });

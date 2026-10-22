@@ -42,6 +42,11 @@ def superintel_dashboard(request: Request):
         active_menu_key="superintel.dashboard",
     )
 
+    return dashboard_response(request, context)
+
+
+def dashboard_response(request, context):
+    """Read-only report rendering; caller enforces access policy."""
     error = None
     status = None
     dashboard = None
@@ -92,6 +97,11 @@ def superintel_detailed_dashboard(request: Request):
         active_menu_key="superintel.detailed",
     )
 
+    return detailed_response(request, context)
+
+
+def detailed_response(request, context):
+    """Read-only report rendering; caller enforces access policy."""
     error = None
     status = None
     detailed = None
@@ -244,6 +254,11 @@ def superintel_monthly_analysis(request: Request):
         active_menu_key="superintel.monthly_analysis",
     )
 
+    return monthly_response(request, context)
+
+
+def monthly_response(request, context):
+    """Read-only report rendering; caller enforces access policy."""
     error = None
     analysis = None
 

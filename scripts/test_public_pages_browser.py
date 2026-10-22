@@ -37,7 +37,10 @@ def main():
             expect(page.get_by_role('heading',name='Public pages',exact=True)).to_be_visible()
             expect(page.locator('input[value="leaderboard"]')).not_to_be_checked()
             expect(page.locator('input[value="modules"]')).to_be_disabled()
-            expect(page.locator('input[value="character:top-kills"]')).to_be_disabled()
+            expect(page.locator('input[value="character:top-kills"]')).to_be_enabled()
+            expect(page.locator('input[value="character:history"]')).to_be_enabled()
+            expect(page.locator('input[value="character:pilotable-ships"]')).to_be_enabled()
+            expect(page.locator('input[value="corporation:population"]')).to_be_enabled()
             page.locator('#publicSource').fill('/leaderboard')
             page.get_by_role('button',name='Prepare snapshot',exact=True).click()
             expect(page.locator('#publicPrepareStatus')).to_contain_text('Snapshot ready')
@@ -72,5 +75,116 @@ def main():
         fixture.tearDown()
 
 
+
+
+
+def navigation():
+    from fastapi import Request
+    from fastapi.responses import HTMLResponse
+    fixture=PublicTests();fixture.setUp()
+    renderer=f.load('public_page_renderer')
+    requests=[];errors=[];calls=[]
+    profile=dict(entity_type='character',entity_id=42,name='Test Pilot',subtitle='',ticker=None,
+                 image_url='',url='/character/42',current_corporation=None,current_alliance=None)
+    context=dict(profile=profile,profile_tab='killboard',user=None,location_previews={},
+                 killmail_ship_options=[],killmail_ship_options_error=None,killmail_page=None,killmail_mode='api')
+    html=renderer.content('entity_profile.html',context)
+    rows=f.page_fixture(limit=1)
+    @fixture.client.app.get('/api/character/42/killmails')
+    def killmails(request:Request):
+        params=dict(request.query_params);calls.append(params)
+        number=int(params.get('page','1'))
+        result=dict(rows,killmail_pagination=dict(page=number,per_page=1,has_prev=number>1,
+            has_next=number<2,prev_page=max(1,number-1),next_page=min(2,number+1)),killmail_participation='both')
+        return HTMLResponse(f.templates.env.get_template('entity_killmails_fragment.html').render(killmail_page=result,character_id=42))
+    public.save_settings({'character','character:killboard','character:overview'})
+    try:
+      with patch.object(renderer,'render',return_value=html),sync_playwright() as pw:
+        browser=pw.chromium.launch(args=['--no-sandbox']);page=browser.new_page()
+        page.on('pageerror',lambda e:errors.append(str(e)))
+        def handle(route):
+            request=route.request;url=urlsplit(request.url)
+            if url.netloc!='publication.test':route.abort();return
+            requests.append(url.path)
+            response=fixture.client.request(request.method,url.path+('?' +url.query if url.query else ''),
+                content=request.post_data,headers={'content-type':request.headers.get('content-type','')},follow_redirects=True)
+            route.fulfill(status=response.status_code,body=response.content,headers={k:v for k,v in response.headers.items() if k not in ('content-length','content-encoding')})
+        page.route('**/*',handle)
+        page.goto('http://publication.test/public/character/42?tab=killboard')
+        page.wait_for_timeout(500)
+        expect(page.locator('.killmail-table tbody tr.killmail-row-loss')).to_have_count(1)
+        page.locator('[data-killmail-page="2"]').first.click()
+        expect(page.locator('[data-killmail-page="1"]').first).to_be_visible()
+        assert any(c.get('page')=='2' for c in calls),calls
+        page.locator('[data-killmail-page="1"]').first.click()
+        expect(page.locator('[data-killmail-page="2"]').first).to_be_visible()
+        assert len(calls)==2,calls
+        page.locator('[data-kb-toggle]').click()
+        page.locator('[data-kb-zone-preset="highsec"]').click()
+        page.locator('[data-kb-apply]').click()
+        expect(page.locator('.killmail-table tbody tr.killmail-row-loss')).to_have_count(1)
+        page.wait_for_timeout(250)
+        assert any('security:highsec' in c.get('builder_zone_include','') for c in calls),calls
+        assert not any(path.startswith('/api/') for path in requests),requests
+        assert not errors,errors
+        browser.close()
+      print('Chromium: shared entity KB, page 2/back, filters and read-cache reuse passed.')
+    finally:fixture.tearDown()
+
+
+
+
+
+def browser_cache():
+    import socket
+    import threading
+    import time
+    import uvicorn
+    from fastapi.responses import HTMLResponse
+    fixture=PublicTests();fixture.setUp()
+    app=fixture.client.app;network=[];queries=[]
+    @app.middleware('http')
+    async def count_reads(request,call_next):
+        if request.url.path=='/public/read':network.append(1)
+        return await call_next(request)
+    @app.get('/')
+    def entry():return HTMLResponse('<!doctype html><title>Cache test</title>Cache test')
+    @app.get('/api/character/42/history')
+    def history():queries.append(1);return {'rows':['Corporation history']}
+    public.save_settings({'character','character:history'})
+    sock=socket.socket();sock.bind(('127.0.0.1',0));port=sock.getsockname()[1]
+    server=uvicorn.Server(uvicorn.Config(app,log_level='error',access_log=False))
+    thread=threading.Thread(target=lambda:server.run(sockets=[sock]),daemon=True);thread.start()
+    try:
+      deadline=time.monotonic()+10
+      while not server.started and time.monotonic()<deadline:time.sleep(.02)
+      assert server.started,'Fixture server did not start'
+      with sync_playwright() as pw:
+        browser=pw.chromium.launch(args=['--no-sandbox']);page=browser.new_page()
+        # No request interception here: real Chromium HTTP cache is enabled.
+        page.goto('http://127.0.0.1:'+str(port)+'/')
+        result=page.evaluate("""async()=>{
+          const url='/public/read?'+new URLSearchParams({source:'/character/42?tab=history',path:'/api/character/42/history'});
+          const one=await fetch(url);await one.json();
+          const two=await fetch(url);await two.json();
+          return {cache:two.headers.get('cache-control'),etag:two.headers.get('etag')};
+        }""")
+        assert len(network)==1,network
+        assert len(queries)==1,queries
+        assert 'max-age=60' in result['cache'] and result['etag'],result
+        page.evaluate("""async()=>{
+          const url='/public/read?'+new URLSearchParams({source:'/character/42?tab=history',path:'/api/character/42/history'});
+          const response=await fetch(url,{cache:'no-cache'});return response.json();
+        }""")
+        assert len(network)==2,network
+        assert len(queries)==1,queries
+        browser.close()
+      print('Chromium native HTTP cache: second read stays in browser; revalidation reuses server result.')
+    finally:
+      server.should_exit=True;thread.join(5);sock.close();fixture.tearDown()
+
+
 if __name__ == '__main__':
     main()
+    navigation()
+    browser_cache()

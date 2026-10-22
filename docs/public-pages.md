@@ -1,76 +1,86 @@
-# Public pages and tab publication
+# Published pages: on-demand reads with bounded caching
 
-The anonymous landing page is `/public` (the shared Home/changelog, without
-session information). `/` and `/home` send anonymous visitors there. Login is
-at the top right; authenticated visitors keep their normal application menu.
-The existing `/public/groups/{token}` feature is independent and unchanged.
+Anonymous visitors land on `/public`, the shared Home/changelog with **Log in**
+at the top right. Logged-in visitors keep the standard app menu. Existing
+`/public/groups/{token}` links remain independent.
 
-## Admin workflow
+## Publication
 
-Open **Admin → Public pages** (`admin.system.view` permission).
+**Admin → Public pages** requires `admin.system.view`. Enable a page family and
+its desired tabs, then save. Both switches must be on. Home is public; all other
+families/tabs default off. Character/corporation/alliance Combat stats, Top kills,
+History, Pilotable ships and Population (where supported) are selectable.
+Unfinished item pages and calculation tools remain excluded.
 
-1. Prepare an exact local URL, such as `/leaderboard`,
-   `/leaderboard?kind=alliance&mode=weighted&through=2025-12`, or
-   `/character/94036773?tab=stats`. Preparation uses the admin's real session.
-   Only one preparation may run at a time across web workers. Status shows
-   running, complete, failed or interrupted, with elapsed time.
-2. Click the cached URL for a **private preview**. Preparation/preview never
-   changes publication settings.
-3. Enable the page family and the desired tabs, then save. Both switches must
-   be on. Every configurable page/tab starts off.
-4. Public URLs use `/public/leaderboard`, `/public/character/94036773`, etc.
-   Unpublishing a page/tab rejects direct URLs and disables its links on the
-   next response, including links inside older cached snapshots.
+Public URLs use `/public/leaderboard`, `/public/killboard`,
+`/public/character/94036773?tab=stats`, etc. Valid links, GET forms, standard
+filters, pagination and the existing tab scripts work normally. The original
+read/render paths and shared templates are reused, rather than summing
+preselected prepared views. There is no artificial 20-page browsing cutoff.
 
-Available adapters: leaderboard (characters/corporations/alliances), the three
-SuperINTEL report views, character/corporation/alliance overview, killboard and
-monthly combat stats, location/ship overview and killboard, killmail detail.
-The catalog also shows blocked/unreviewed families and tabs, with reasons.
-Unfinished modules/skills/commodities, interactive population/capability/history
-queries, top-kill scans, global killboard scanning, coalition expansion, map
-queries and calculation tools cannot be enabled through crafted requests.
-Admin, account and Profiles management routes have no public adapters.
+**No preparation is required.** An uncached published page/data request reads or
+calculates its requested result immediately. The optional Admin warm/preview
+action is only a convenience. Nothing is computed just because a tab exists or
+a group is managed. Opening a tab triggers that tab's normal reads/scans; top-kill
+and pilotable-ship progress continues using the existing interfaces. Running
+results are not frozen in the response cache.
 
-## Cache and resource behavior
+## Server and browser cache
 
-Public requests **never** call report adapters, start a scan or populate the
-cache. Only the explicit admin preparation action queries existing report/KM
-sources. There is no automatic refresh or daily precomputation. Prepare/refresh
-only the desired exact URLs; public visitors can navigate the available cached
-views. Unsupported arbitrary search/filter parameters are rejected. Killboard
-pages and leaderboard pages are restricted to the first 20 pages. Dynamic
-forms/scripts are removed from snapshots; valid pagination is ordinary public
-GET navigation. Missing/expired snapshots show an explanation and start no work.
+- Admin chooses **X recent results**, default 256, range 8–4096. HTML views and
+  data responses share this limit. Recently accessed entries survive eviction.
+- Disk cache (including its index) is capped at 64 MiB total and 2 MiB per entry. An oversized result
+  can display without being retained. Results refresh after five minutes.
+- A small metadata index avoids reading all cached bodies for navigation.
+- Cross-worker locks bound demand rendering to two concurrent reads and prevent
+  duplicate work on the same result; busy requests can retry. Existing heavy
+  tab workers retain their own concurrency limits.
+- Anonymous HTML/data responses use `private, max-age=60, must-revalidate` and an
+  ETag. Browsers can answer repeated requests locally for one minute, then use
+  conditional requests; unchanged responses return 304 without retransmitting
+  the body. Logged-in page chrome uses `no-store`; public data is independent of
+  the viewer's identity. Running progress responses use `no-store`.
+- Publication is checked before cache reads and again after calculations.
+  Disabled pages/tabs reject direct access and their links are removed from
+  responses. A browser may retain its already-fresh page for the remaining
+  **60-second browser freshness window**; origin revocation is immediate.
 
-Snapshots expire after 24 hours. Limits: 256 views, 64 MiB total, 2 MiB per view;
-oldest snapshots are evicted first. A small metadata index avoids loading every
-HTML file to build navigation. Disk data lives in `data/public_pages/`; no new
-analytics/fact tables or entity-month materializations are introduced. Clear
-cache removes only snapshot files and the index, retaining publication settings.
-SuperINTEL snapshots omit the private template's hidden search rows: dashboard
-lists contain 10 rows, or at most 100 when `more=1` is explicitly prepared.
+Cache files live under `data/public_pages/`. There are no new fact/analytics
+result tables and no daily/full-universe precomputation. Cache eviction removes
+only cache files. Lowering X prunes existing entries immediately.
 
-Links are checked against the current policy on every render. Page content
-reuses the existing Jinja templates/fragments; account chrome is generated
-separately per request and never stored in a snapshot. Responses use `no-store`
-so reverse proxies/browser caches cannot bypass revocation. Anonymous pages
-have no application JavaScript or API polling; their CSP blocks network fetches,
-forms and frames. Authenticated requests may still query session/menu tables for
-normal navigation; anonymous report views never query report or KM tables.
+## Read access boundary
 
-No production publication settings, report data, services or timers are modified
-by deploying the code alone, apart from making the requested static Home public.
-All other pages require explicit publication and cached content.
+The public bridge forwards only GET data requests through `/public/read`.
+The gateway validates the published source, matching entity ID, required tab and
+an explicit endpoint allowlist. It never accepts arbitrary internal URLs,
+external URLs, POST actions, admin/account routes or forced scan restarts.
 
-## Offline validation
+An internal ContextVar grants a public **read identity** (`entities.view` and
+`superintel.view`, no admin/jobs/account permissions) only while invoking these
+validated read adapters. It cannot be selected through a request parameter,
+header or cookie. Internal ASGI requests forward no cookies or credentials;
+normal authentication resumes after the scope ends. Private data handlers reject anonymous direct API requests instead of ignoring a missing user. Account chrome is generated
+separately and never cached with public results. Public population views do not
+launch the private affiliation-refresh initializer.
+
+Links created dynamically by tab scripts are also restricted to published
+pages. API responses containing HTML are checked against the current link
+policy when served. Both fetch and the legacy killboard XMLHttpRequest path
+use the same public gateway/cache.
+
+## Verification
 
 ```
 python -m unittest scripts.test_public_pages -v
 python -m scripts.test_public_pages_browser
 ```
 
-Fixtures prevent real database connections. HTTP tests cover permission gates,
-closed defaults, malformed URLs, direct tab access, link revocation, private
-preview, cache limits/expiry, preparation locking, shared combat-stats rendering,
-Home/login routing and template compilation. Chromium checks preparation,
-publication controls and revocation on an existing cached page.
+All fixtures prevent real DB access. Tests cover demand rendering, cache hits,
+ETag/304, LRU/size/expiry limits, direct tab revocation, publication controls,
+read-identity isolation, proxy allowlists, transient scan progress, Home/login
+routing and template compilation. Chromium exercises the shared entity killboard,
+page 2/back navigation, standard zone filters and cached result reuse.
+
+The native Chromium cache test uses a real local HTTP fixture (no interception):
+the second read makes no server request, and forced revalidation reads no DB again.
