@@ -16,7 +16,7 @@ def index(request: Request):
     user = get_current_user(request)
     if user:
         return RedirectResponse(url="/home", status_code=302)
-    return RedirectResponse(url="/login", status_code=302)
+    return RedirectResponse(url="/public", status_code=302)
 
 
 @router.get("/login", response_class=HTMLResponse)

@@ -305,6 +305,11 @@ def build_context_menu(user, active_module, active_menu_key):
                     break
             items.insert(insert_at, sov_colors_item)
 
+    if active_module == "admin" and "admin.system.view" in user.get("permissions", set()):
+        if not any(item.get("menu_key") == "admin.public_pages" for item in items):
+            items.append({"id": None, "menu_key": "admin.public_pages", "label": "Public pages",
+                          "href": "/admin/public-pages", "icon": "◉", "permission_key": "admin.system.view"})
+
     for item in items:
         item["active"] = (
             item["menu_key"] == active_menu_key

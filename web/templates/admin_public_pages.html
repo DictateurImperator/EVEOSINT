@@ -1,0 +1,53 @@
+{% extends 'base.html' %}
+{% block content %}
+<h1 class="h3">Public pages</h1>
+<p class="muted-line">Choose each page and its tabs. Unchecked pages stay private. Disabling a page or tab also removes its public links, including links in existing snapshots. Home is the public landing page. Account, Profiles and Admin pages are never published.</p>
+{% if saved %}<div class="alert alert-success" role="status">Publication settings saved.</div>{% endif %}
+<form method="post" action="/admin/public-pages/settings">
+<div class="row g-3">{% for page in public_catalog %}{% set state=policy.get(page.key,{}) %}
+<section class="col-lg-6"><div class="content-card p-3 h-100">
+<label class="d-flex align-items-center gap-2 fw-bold"><input type="checkbox" name="enabled" value="{{ page.key }}" {% if state.get('enabled') %}checked{% endif %} {% if page.reason %}disabled{% endif %}>{{ page.label }}</label>
+{% if page.reason %}<p class="muted-line small mt-2 mb-0">{{ page.reason }}</p>{% else %}
+<div class="muted-line small mt-2 mb-2">Example: <code>/public{{ page.example }}</code></div>
+{% for tab in page.tabs %}<div class="mb-2"><label class="d-flex align-items-center gap-2 small"><input type="checkbox" name="enabled" value="{{ page.key }}:{{ tab.key }}" {% if tab.key in state.get('tabs',[]) %}checked{% endif %} {% if tab.reason %}disabled{% endif %}>{{ tab.label }}</label>{% if tab.reason %}<div class="muted-line small ms-4">{{ tab.reason }}</div>{% endif %}</div>{% endfor %}
+{% endif %}
+</div></section>{% endfor %}</div>
+<button class="btn btn-primary my-3" type="submit">Save publication settings</button>
+</form>
+<section class="content-card p-3 mt-3">
+<h2 class="h5">Prepare or refresh a cached view</h2>
+<p class="muted-line small">Visitors only read snapshots and never start queries or scans. Prepare the exact page URL below, including its month or ranking options if needed. Preparing a snapshot does not publish it. Cache: at most 256 views, 64 MiB total, 2 MiB per view. Snapshots expire after 24 hours; expired views do not trigger a calculation.</p>
+<form id="publicPrepare" class="d-flex flex-wrap gap-2"><label class="flex-grow-1">Page URL<input class="form-control" id="publicSource" value="/leaderboard" maxlength="1000" required placeholder="/character/94036773?tab=stats"></label><button class="btn btn-outline-primary align-self-end" type="submit">Prepare snapshot</button></form>
+<p id="publicPrepareStatus" class="muted-line mt-3" aria-live="polite">{{ prepared.message }}</p>
+<a class="btn btn-sm btn-outline-light" href="/public" target="_blank" rel="noopener">Open public site</a>
+</section>
+<section class="content-card p-3 mt-3"><h2 class="h5">Cached views ({{ snapshots|length }} / 256)</h2>
+<div class="table-responsive"><table class="table align-middle"><thead><tr><th>Page</th><th>Prepared</th><th>Cache</th><th>Public link</th><th></th></tr></thead><tbody>
+{% for row in snapshots %}{% set state=policy.get(row.key,{}) %}<tr><td><a href="/admin/public-pages/preview?source={{ row.source|urlencode }}" target="_blank" rel="noopener"><code>{{ row.source }}</code></a></td><td>{{ timestamp(row.created) }}</td><td>{{ 'Ready' if row.fresh else 'Expired' }} · {{ (row.bytes/1024)|round(1) }} KiB</td><td>{% if state.get('enabled') and row.tab in state.get('tabs',[]) %}<a href="{{ row.public }}" target="_blank" rel="noopener">{{ row.public }}</a>{% else %}Private{% endif %}</td><td><button type="button" class="btn btn-sm btn-outline-light" data-refresh-source="{{ row.source }}">Refresh</button></td></tr>{% else %}<tr><td colspan="5" class="muted-line">No snapshots prepared. Everything is private by default.</td></tr>{% endfor %}
+</tbody></table></div><form method="post" action="/admin/public-pages/clear"><button type="submit" class="btn btn-sm btn-outline-danger">Clear public cache</button></form>
+</section>
+<script>
+(() => {
+ const form = document.getElementById('publicPrepare'), status = document.getElementById('publicPrepareStatus');
+ let timer, busy = false;
+ async function poll() {
+  try {
+   const r=await fetch('/admin/public-pages/status', {cache:'no-store', headers:{'Accept':'application/json'}});
+   if(!r.ok || r.redirected) throw new Error('Sign in again to read preparation status.');
+   const s=await r.json(); status.textContent=s.message+(s.source?' · '+s.source:'')+(s.seconds!==undefined?' · '+s.seconds+' s':'');
+   busy=s.state==='running'; form.querySelector('button').disabled=busy;
+   if(busy) timer=setTimeout(poll,1000);
+   else if(s.state==='complete') {const a=document.createElement('a');a.href='/admin/public-pages';a.textContent=' Reload cached views';status.append(a);}
+  } catch(e) {status.textContent=e.message;busy=false;form.querySelector('button').disabled=false;}
+ }
+ form.addEventListener('submit', async e => {e.preventDefault();if(busy)return;busy=true;form.querySelector('button').disabled=true;clearTimeout(timer);status.textContent='Preparing selected view…';
+  try {const r=await fetch('/admin/public-pages/prepare',{method:'POST',headers:{'Content-Type':'application/json','Accept':'application/json'},body:JSON.stringify({source:document.getElementById('publicSource').value})});
+   if(!r.ok || r.redirected) throw new Error(r.status===409?'Another snapshot is being prepared.':'Preparation refused: check the URL and your session.');
+   await poll();
+  } catch(e) {status.textContent=e.message;busy=false;form.querySelector('button').disabled=false;}
+ });
+ document.querySelectorAll('[data-refresh-source]').forEach(b=>b.addEventListener('click',()=>{document.getElementById('publicSource').value=b.dataset.refreshSource;form.requestSubmit();}));
+ if({{ (prepared.state == 'running')|tojson }}) poll();
+})();
+</script>
+{% endblock %}

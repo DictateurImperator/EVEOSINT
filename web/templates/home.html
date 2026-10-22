@@ -112,7 +112,7 @@
 <div class="d-flex justify-content-between align-items-start gap-3 flex-wrap mb-4">
   <div>
     <h1 class="h3 fw-bold mb-1">Home</h1>
-    <div class="muted-line">Active session : {{ username }}</div>
+    {% if not public_home %}<div class="muted-line">Active session : {{ username }}</div>{% endif %}
   </div>
   <div class="home-version-badge">EVEOSINT changelog</div>
 </div>

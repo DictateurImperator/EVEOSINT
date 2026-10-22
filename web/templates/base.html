@@ -538,7 +538,7 @@
       line-height: 1.45;
     }
   </style>
-<script>{% include "entity_search_results.js" %}</script>
+{% if not public_site %}<script>{% include "entity_search_results.js" %}</script>{% endif %}
 </head>
 
 <body>
@@ -633,6 +633,7 @@
     All EVE related materials are property of <a href="https://fenriscreations.com/" target="_blank" rel="noopener noreferrer">Fenris Creation</a>.
   </footer>
 
+  {% if not public_site %}
   <script>
     (() => {
       const nativeFetch = window.fetch.bind(window);
@@ -941,5 +942,6 @@
       });
     });
   </script>
+  {% endif %}
 </body>
 </html>

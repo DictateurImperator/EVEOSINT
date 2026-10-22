@@ -37,6 +37,7 @@ from .routes_population_economics import router as population_economics_router
 from .routes_personal_groups import router as personal_groups_router
 from .routes_superintel import router as superintel_router
 from .routes_update_status import router as update_status_router
+from .routes_public_pages import router as public_pages_router
 from .schema import ensure_tables
 
 logger = logging.getLogger(__name__)
@@ -286,3 +287,6 @@ app.include_router(admin_update_pipeline_router)
 app.include_router(admin_mer_router)
 app.include_router(admin_killmail_forensics_router)
 app.include_router(admin_audit_router)
+
+# Register the generic public gateway after the independent public group routes.
+app.include_router(public_pages_router)

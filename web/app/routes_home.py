@@ -28,7 +28,7 @@ def tools(request: Request):
 def home(request: Request):
     user = require_login(request)
     if not user:
-        return RedirectResponse(url="/login", status_code=302)
+        return RedirectResponse(url="/public", status_code=302)
 
     redirect = require_permission_or_redirect(user, "home.view")
     if redirect:
