@@ -4262,6 +4262,48 @@ def _coalition_mer_scope_params(scope):
     return [scope["alliance_ids"], scope["corporation_ids"]]
 
 
+def _alliance_partition_killmail_rows(cur, relation, corporation_column, alliance_column,
+                                      alliance_id, side, limit):
+    """Find distinct kills through alliance/corporation indexes before pagination.
+
+    Separate explicit membership from inferred membership so a correlated OR
+    cannot force a full monthly scan. The per-history lateral lookup preserves
+    membership dates and uses the existing corporation/time index.
+    """
+    cur.execute(
+        f"""
+        SELECT %s::text AS side, matched.killmail_id, matched.killmail_time
+        FROM (
+            (SELECT DISTINCT k.killmail_id, k.killmail_time
+             FROM {relation} k
+             WHERE k.{alliance_column} = %s
+             ORDER BY k.killmail_time DESC, k.killmail_id DESC
+             LIMIT %s)
+            UNION
+            (SELECT DISTINCT hits.killmail_id, hits.killmail_time
+             FROM entities.corporation_alliance_history cah
+             CROSS JOIN LATERAL (
+                 SELECT DISTINCT k.killmail_id, k.killmail_time
+                 FROM {relation} k
+                 WHERE k.{corporation_column} = cah.corporation_id
+                   AND k.{alliance_column} IS NULL
+                   AND k.killmail_time >= cah.start_date
+                   AND (cah.end_date IS NULL OR k.killmail_time < cah.end_date)
+                 ORDER BY k.killmail_time DESC, k.killmail_id DESC
+                 LIMIT %s
+             ) hits
+             WHERE cah.alliance_id = %s
+             ORDER BY hits.killmail_time DESC, hits.killmail_id DESC
+             LIMIT %s)
+        ) matched
+        ORDER BY matched.killmail_time DESC, matched.killmail_id DESC
+        LIMIT %s
+        """,
+        [side, alliance_id, limit, limit, alliance_id, limit, limit],
+    )
+    return cur.fetchall()
+
+
 def _entity_killmail_page_entries(conn, entity_type, entity_id, page=1, per_page=100, timing_marks=None):
     scope = _entity_killmail_scope(entity_type)
     victim_column = scope["victim_column"]
@@ -4359,40 +4401,52 @@ def _entity_killmail_page_entries(conn, entity_type, entity_id, page=1, per_page
             killmail_relation = _qualified_rawkm_table(killmail_schema, killmail_table)
 
             victim_side = "kill" if scope["entity_type"] == "system" else "loss"
-            cur.execute(
-                f"""
-                SELECT
-                    %s::text AS side,
-                    km.killmail_id,
-                    km.killmail_time
-                FROM {killmail_relation} km
-                WHERE {victim_predicate}
-                ORDER BY km.killmail_time DESC, km.killmail_id DESC
-                LIMIT %s
-                """,
-                [victim_side] + victim_params + [fetch_limit],
-            )
-            loss_rows = cur.fetchall()
+            if scope["entity_type"] == "alliance":
+                loss_rows = _alliance_partition_killmail_rows(
+                    cur, killmail_relation, "victim_corporation_id", "victim_alliance_id",
+                    scope_value, victim_side, fetch_limit,
+                )
+            else:
+                cur.execute(
+                    f"""
+                    SELECT
+                        %s::text AS side,
+                        km.killmail_id,
+                        km.killmail_time
+                    FROM {killmail_relation} km
+                    WHERE {victim_predicate}
+                    ORDER BY km.killmail_time DESC, km.killmail_id DESC
+                    LIMIT %s
+                    """,
+                    [victim_side] + victim_params + [fetch_limit],
+                )
+                loss_rows = cur.fetchall()
             loss_rows_count += len(loss_rows)
             month_rows.extend(loss_rows)
 
             attacker_table = _matching_attacker_table_for_killmail_table(attacker_by_name, killmail_table)
             if attacker_table and attacker_predicate:
                 attacker_relation = _qualified_rawkm_table(attacker_table[0], attacker_table[1])
-                cur.execute(
-                    f"""
-                    SELECT
-                        'kill'::text AS side,
-                        ka.killmail_id,
-                        ka.killmail_time
-                    FROM {attacker_relation} ka
-                    WHERE {attacker_predicate}
-                    ORDER BY ka.killmail_time DESC, ka.killmail_id DESC
-                    LIMIT %s
-                    """,
-                    attacker_params + [fetch_limit],
-                )
-                attack_rows = cur.fetchall()
+                if scope["entity_type"] == "alliance":
+                    attack_rows = _alliance_partition_killmail_rows(
+                        cur, attacker_relation, "corporation_id", "alliance_id",
+                        scope_value, "kill", fetch_limit,
+                    )
+                else:
+                    cur.execute(
+                        f"""
+                        SELECT
+                            'kill'::text AS side,
+                            ka.killmail_id,
+                            ka.killmail_time
+                        FROM {attacker_relation} ka
+                        WHERE {attacker_predicate}
+                        ORDER BY ka.killmail_time DESC, ka.killmail_id DESC
+                        LIMIT %s
+                        """,
+                        attacker_params + [fetch_limit],
+                    )
+                    attack_rows = cur.fetchall()
                 attack_rows_count += len(attack_rows)
                 month_rows.extend(attack_rows)
 

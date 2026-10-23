@@ -19,7 +19,7 @@ import time
 from urllib.parse import parse_qsl, urlencode, urlsplit
 
 ROOT = Path(__file__).resolve().parents[2] / 'data' / 'public_pages'
-CACHE_VERSION = 3
+CACHE_VERSION = 4
 MAX_ENTRIES = 256
 MAX_BYTES = 64 * 1024 * 1024
 MAX_ENTRY_BYTES = 2 * 1024 * 1024
