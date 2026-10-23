@@ -48,6 +48,57 @@ def page_key(url):
     return '/public'+path+('?'+'&'.join(suffix) if suffix else '')
 
 
+def requested_path(url):
+    """Readable requested path, excluding queries and obvious capability values."""
+    path = url.split('?',1)[0].split('#',1)[0]
+    if path.startswith('/public/groups/'):
+        return page_key(path)
+    parts = []
+    hide_next = False
+    for part in path.split('/')[:16]:
+        if not part:
+            parts.append('')
+            continue
+        sensitive_name = part.lower() in {'token','access_token','password','passwd','secret','api_key','apikey','session','authorization'}
+        if (hide_next or len(part)>48 or re.search(r'[^a-zA-Z0-9_.~-]', part)
+                or re.fullmatch(r'[a-fA-F0-9]{24,}|[a-fA-F0-9]{8}(?:-[a-fA-F0-9]{4}){3}-[a-fA-F0-9]{12}', part)
+                or (len(part)>=24 and re.search('[A-Z]',part) and re.search('[0-9]',part))):
+            parts.append('[redacted-'+sha256(part.encode()).hexdigest()[:10]+']')
+        else:
+            parts.append(part)
+        hide_next = sensitive_name
+    return '/'.join(parts)[:300] or '/'
+
+
+def client_type(agent):
+    """Fixed labels only: UA strings are untrusted and can contain arbitrary data."""
+    agent = (agent or '')[:1024].lower()
+    for marker, label in [('googlebot','Googlebot (declared)'),('bingbot','Bingbot (declared)'),
+                          ('duckduckbot','DuckDuckBot (declared)'),('yandexbot','YandexBot (declared)'),
+                          ('bytespider','Bytespider (declared)'),('gptbot','GPTBot (declared)'),
+                          ('claudebot','ClaudeBot (declared)'),('ahrefsbot','AhrefsBot (declared)'),
+                          ('semrushbot','SemrushBot (declared)'),('curl/','curl'),('wget/','wget'),
+                          ('python-requests','Python requests'),('python-httpx','Python HTTPX'),
+                          ('headlesschrome','Headless Chrome'),('edg/','Edge'),('firefox/','Firefox'),
+                          ('chrome/','Chrome'),('safari/','Safari')]:
+        if marker in agent:
+            return label
+    return 'Other bot (declared)' if re.search(r'bot|crawler|spider',agent) else 'Unidentified client'
+
+
+def request_details(request):
+    target = requested_path(request.url.path)
+    if request.url.path == '/public/read':
+        endpoint = request.query_params.get('path','')
+        if endpoint.startswith('/'):
+            target += ' → '+requested_path(endpoint)
+    agent = client_type(request.headers.get('user-agent'))
+    probe = bool(re.search(r'(?i)(?:/\.env(?:[./]|$)|/\.git(?:/|$)|wp-admin|wp-login|xmlrpc\.php|phpmyadmin|/vendor/phpunit)', target))
+    return dict(target=target,method=request.method[:12],client=agent,
+                signal='Scanner-like path' if probe else 'Declared crawler' if '(declared)' in agent else
+                'Automation client' if agent in ('curl','wget','Python requests','Python HTTPX','Headless Chrome') else 'Unclassified')
+
+
 def visitor_id(value, day):
     if not re.fullmatch(r'[a-f0-9]{32}', value or ''):
         return None
@@ -72,6 +123,8 @@ def connection():
             visitor BLOB, page TEXT, seen REAL, PRIMARY KEY(visitor,page)) WITHOUT ROWID;
         CREATE TABLE IF NOT EXISTS recent (
             id INTEGER PRIMARY KEY, at REAL, page TEXT, kind TEXT, status INTEGER, elapsed REAL);
+        CREATE TABLE IF NOT EXISTS request_details (
+            id INTEGER PRIMARY KEY, target TEXT, method TEXT, client TEXT, signal TEXT);
         CREATE TABLE IF NOT EXISTS metadata (key TEXT PRIMARY KEY, value TEXT);
         CREATE INDEX IF NOT EXISTS visitors_page ON visitors(day,page);
         CREATE INDEX IF NOT EXISTS presence_seen ON presence(seen);
@@ -82,7 +135,7 @@ def connection():
         conn.close()
 
 
-def record(page, kind, status, elapsed, cookie=None, now=None, presence=False):
+def record(page, kind, status, elapsed, cookie=None, now=None, presence=False, details=None):
     global _last_error, _last_warning
     now = time.time() if now is None else now
     day = datetime.fromtimestamp(now, timezone.utc).strftime('%Y-%m-%d')
@@ -99,8 +152,12 @@ def record(page, kind, status, elapsed, cookie=None, now=None, presence=False):
                     ON CONFLICT(day,page,kind,status) DO UPDATE SET
                     count=count+1, elapsed=elapsed+excluded.elapsed, maximum=MAX(maximum,excluded.maximum)''',
                     (day,page,kind,status,elapsed,elapsed))
-                conn.execute('INSERT INTO recent(at,page,kind,status,elapsed) VALUES (?,?,?,?,?)', (now,page,kind,status,elapsed))
+                inserted = conn.execute('INSERT INTO recent(at,page,kind,status,elapsed) VALUES (?,?,?,?,?)', (now,page,kind,status,elapsed))
+                if details:
+                    conn.execute('INSERT INTO request_details VALUES (?,?,?,?,?)',
+                                 (inserted.lastrowid,details['target'],details['method'],details['client'],details['signal']))
                 conn.execute('DELETE FROM recent WHERE id <= (SELECT MAX(id)-1000 FROM recent)')
+                conn.execute('DELETE FROM request_details WHERE id < (SELECT MIN(id) FROM recent)')
                 if visitor and kind == 'page' and 200 <= status < 300:
                     conn.executemany('INSERT OR IGNORE INTO visitors VALUES (?,?,?)', [(day,visitor,''),(day,visitor,page)])
             # Cleanup at most once per minute, shared by all web workers.
@@ -124,6 +181,11 @@ def snapshot(day=None):
     now = time.time()
     today = datetime.fromtimestamp(now,timezone.utc).strftime('%Y-%m-%d')
     day = day if re.fullmatch(r'\d{4}-\d{2}-\d{2}', day or '') else today
+    try:
+        selected_start = datetime.strptime(day,'%Y-%m-%d').replace(tzinfo=timezone.utc).timestamp()
+    except ValueError:
+        day = today
+        selected_start = datetime.strptime(day,'%Y-%m-%d').replace(tzinfo=timezone.utc).timestamp()
     with connection() as conn:
         days = [dict(r) for r in conn.execute('''SELECT r.day, SUM(r.count) requests,
             SUM(CASE WHEN kind='page' AND status BETWEEN 200 AND 299 THEN count ELSE 0 END) views,
@@ -142,11 +204,23 @@ def snapshot(day=None):
             SUM(r.elapsed)/SUM(r.count) average
             FROM requests r WHERE r.day=? AND r.kind='page' AND r.status BETWEEN 200 AND 299
             GROUP BY r.page ORDER BY views DESC LIMIT 100''',(day,day))]
-        recent = [dict(r) for r in conn.execute('SELECT at,page,kind,status,elapsed FROM recent ORDER BY id DESC LIMIT 100')]
+        recent = [dict(r) for r in conn.execute('''SELECT r.at,r.page,r.kind,r.status,r.elapsed,
+            d.target,d.method,d.client,d.signal FROM recent r LEFT JOIN request_details d ON d.id=r.id
+            ORDER BY r.id DESC LIMIT 100''')]
+        diagnostics = [dict(r) for r in conn.execute('''SELECT d.target,d.method,d.client,d.signal,
+            r.status,COUNT(*) requests,MIN(r.at) first_seen,MAX(r.at) last_seen
+            FROM recent r JOIN request_details d ON d.id=r.id
+            WHERE r.at>=? AND r.at<? AND (r.status>=400 OR r.page LIKE '/public/other%')
+            GROUP BY d.target,d.method,d.client,d.signal,r.status
+            ORDER BY requests DESC,last_seen DESC LIMIT 100''',
+            (selected_start,selected_start+86400))]
         started = conn.execute("SELECT value FROM metadata WHERE key='started'").fetchone()
     for r in recent:
         r['at'] = datetime.fromtimestamp(r['at'],timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
-    return dict(day=day,today=today,days=days,summary=summary,pages=pages,active=active,recent=recent,
+    for r in diagnostics:
+        for key in ('first_seen','last_seen'):
+            r[key] = datetime.fromtimestamp(r[key],timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
+    return dict(day=day,today=today,days=days,summary=summary,pages=pages,active=active,recent=recent,diagnostics=diagnostics,
                 started=datetime.fromtimestamp(float(started[0]),timezone.utc).isoformat() if started else None,
                 recording_error=_last_error)
 
@@ -166,5 +240,5 @@ async def traffic_middleware(request, call_next):
     source = request.query_params.get('source','') if path == '/public/read' else ''
     key = page_key(source) if source.startswith('/') else page_key(str(request.url))
     await run_in_threadpool(record,key,'page' if is_page else 'data',response.status_code,
-                            (time.monotonic()-start)*1000,cookie)
+                            (time.monotonic()-start)*1000,cookie,details=request_details(request))
     return response

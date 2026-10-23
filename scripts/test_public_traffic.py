@@ -124,6 +124,49 @@ class TrafficTests(unittest.TestCase):
             with self.subTest(url=url):
                 self.assertEqual(traffic.page_key(url),url)
 
+    def test_requested_paths_repetition_and_client_labels(self):
+        for _ in range(3):
+            r=self.client.get('/public/wp-login.php?password=not-for-logs',headers={'user-agent':'curl/8.0 credential-not-for-logs'})
+            self.assertEqual(r.status_code,404)
+        snapshot=traffic.snapshot()
+        row=snapshot['diagnostics'][0]
+        self.assertEqual(row['target'],'/public/wp-login.php')
+        self.assertEqual(row['requests'],3)
+        self.assertEqual(row['client'],'curl')
+        self.assertEqual(row['signal'],'Scanner-like path')
+        self.assertEqual(row['method'],'GET')
+        self.assertEqual(snapshot['recent'][0]['target'],'/public/wp-login.php')
+        self.assertEqual(snapshot['recent'][0]['status'],404)
+        self.assertNotIn('not-for-logs',str(snapshot))
+        self.assertEqual(traffic.client_type('Mozilla/5.0 Chrome/120 Googlebot/2.1'),'Googlebot (declared)')
+        self.assertEqual(traffic.client_type('Mozilla/5.0 Firefox/120'),'Firefox')
+        self.assertEqual(traffic.snapshot('2026-99-99')['day'],snapshot['today'])
+
+    def test_request_path_redaction_and_data_endpoint_context(self):
+        for url,secret in [('/public/token/private-value','private-value'),
+                           ('/public/groups/private-group-token?view=stats','private-group-token'),
+                           ('/public/path/'+('a'*64),'a'*64),
+                           ('/public/path/'+('abcd1234'*4),'abcd1234'*4),
+                           ('/public/path/aabbccdd-1122-3344-5566-aabbccddeeff','aabbccdd-1122-3344-5566-aabbccddeeff')]:
+            self.assertNotIn(secret,traffic.requested_path(url))
+        self.client.get('/public/read?source=/character/1&path=/api/example?token=not-for-logs')
+        row=traffic.snapshot()['recent'][0]
+        self.assertEqual(row['page'],'/public/character/1')
+        self.assertEqual(row['target'],'/public/read → /api/example')
+        self.assertNotIn('not-for-logs',str(row))
+
+    def test_existing_traffic_records_are_preserved_and_details_are_bounded(self):
+        traffic.record('/public/character/1','page',200,5,'a'*32)
+        self.assertIsNone(traffic.snapshot()['recent'][0]['target'])
+        details=dict(target='/public/wp-login.php',method='GET',client='curl',signal='Scanner-like path')
+        for _ in range(1005):
+            traffic.record('/public/other','data',404,1,details=details)
+        with traffic.connection() as c:
+            self.assertEqual(c.execute('SELECT COUNT(*) FROM request_details').fetchone()[0],1000)
+        self.assertEqual(traffic.snapshot()['summary']['requests'],1006)
+        self.assertEqual(traffic.snapshot()['summary']['unique_visitors'],1)
+        self.assertEqual(traffic.snapshot()['diagnostics'][0]['requests'],1000)
+
     def test_metrics_failure_never_breaks_public_page(self):
         with patch.object(traffic,'connection',side_effect=OSError('unavailable')):
             self.assertEqual(self.client.get('/public/character/1').status_code,200)

@@ -11,8 +11,9 @@
   <section class="col-lg-6"><div class="content-card p-3 h-100"><h2 class="h5">Daily history</h2><div class="table-responsive"><table class="table"><thead><tr><th>UTC day</th><th>Unique visitors</th><th>Page views</th><th>Requests</th></tr></thead><tbody id="trafficDays"></tbody></table></div></div></section>
 </div>
 <section class="content-card p-3 mt-3"><h2 class="h5">Most viewed pages · Selected day</h2><div class="table-responsive"><table class="table"><thead><tr><th>Page</th><th>Page views</th><th>Unique visitors</th><th>Average response</th></tr></thead><tbody id="trafficPages"></tbody></table></div></section>
-<section class="content-card p-3 mt-3"><h2 class="h5">Latest requests · All days</h2><div class="table-responsive" style="max-height:32rem"><table class="table"><thead><tr><th>Time · UTC</th><th>Page</th><th>Type</th><th>HTTP</th><th>Response</th></tr></thead><tbody id="trafficRecent"></tbody></table></div></section>
-<p class="muted-line small mt-3">30 days of daily metrics and unique visitor counts; the last 1,000 requests are retained. A unique visitor is a browser using an anonymous cookie, not an authenticated account. Clearing cookies or using another browser counts again. No IP addresses, account identities, search strings, cookies or public group links are stored. Browser-cached pages may not produce a server request. Response times measure server time until response headers; heartbeat requests are excluded. Collection starts after deployment; earlier traffic is unavailable.</p>
+<section class="content-card p-3 mt-3"><h2 class="h5">Unknown routes and errors · Selected day</h2><p class="muted-line small">Repeated requests in the latest 1,000 recorded requests, filtered to the selected UTC day. Requested paths are shown without queries; token-like segments and public group links are redacted. Client labels come from the declared User-Agent and can be spoofed. Scanner-like paths are clues, not proof of a bot.</p><div class="table-responsive"><table class="table"><thead><tr><th>Requested path</th><th>Method</th><th>Client</th><th>Signal</th><th>HTTP</th><th>Requests in sample</th><th>First seen · UTC</th><th>Last seen · UTC</th></tr></thead><tbody id="trafficDiagnostics"></tbody></table></div></section>
+<section class="content-card p-3 mt-3"><h2 class="h5">Latest requests · All days</h2><div class="table-responsive" style="max-height:32rem"><table class="table"><thead><tr><th>Time · UTC</th><th>Page</th><th>Requested path</th><th>Method</th><th>Client</th><th>Signal</th><th>Type</th><th>HTTP</th><th>Response</th></tr></thead><tbody id="trafficRecent"></tbody></table></div></section>
+<p class="muted-line small mt-3">30 days of daily metrics and unique visitor counts; the last 1,000 requests are retained. A unique visitor is a browser using an anonymous cookie, not an authenticated account. Clearing cookies or using another browser counts again. No IP addresses, account identities, search strings, cookies or public group links are stored. Requested paths and fixed client-family labels are retained with these recent records; raw User-Agent strings are not stored. Browser-cached pages may not produce a server request. Response times measure server time until response headers; heartbeat requests are excluded. Collection starts after deployment; earlier traffic is unavailable.</p>
 <script>
 (() => {
   const day = document.getElementById('trafficDay'), status = document.getElementById('trafficStatus');
@@ -22,7 +23,7 @@
   let running = false;
   function pageLink(row) {
     const label = row.page || '';
-    if (label.split('?')[0] === '/public/other') return 'Unrecognized public route (original address not stored)';
+    if (label.split('?')[0] === '/public/other') return row.target ? 'Unrecognized public route' : 'Unrecognized public route (original address not stored)';
     // Group tokens are deliberately absent from metrics; their hashed labels aren't URLs.
     if (!label.startsWith('/public/') || label.startsWith('/public/groups/') || label.split('?')[0] === '/public/other') return label;
     const url = new URL(label, location.origin);
@@ -53,7 +54,8 @@
       rows('trafficActive',data.active,[pageLink,r=>number(r.visitors)]);
       rows('trafficDays',data.days,[r=>r.day,r=>number(r.unique_visitors),r=>number(r.views),r=>number(r.requests)]);
       rows('trafficPages',data.pages,[pageLink,r=>number(r.views),r=>number(r.unique_visitors),r=>ms(r.average)]);
-      rows('trafficRecent',data.recent,[r=>r.at,pageLink,r=>r.kind,r=>r.status,r=>ms(r.elapsed)]);
+      rows('trafficDiagnostics',data.diagnostics || [],[r=>r.target,r=>r.method,r=>r.client,r=>r.signal,r=>r.status,r=>number(r.requests),r=>r.first_seen,r=>r.last_seen]);
+      rows('trafficRecent',data.recent,[r=>r.at,pageLink,r=>r.target || 'Not recorded before this update',r=>r.method || '—',r=>r.client || '—',r=>r.signal || '—',r=>r.kind,r=>r.status,r=>ms(r.elapsed)]);
       status.textContent = data.recording_error ? 'Some traffic could not be recorded. Check application logs and data directory permissions.' : data.started ? 'Updated '+new Date().toLocaleTimeString()+' · Collection started '+data.started : 'Waiting for the first public request.';
     } catch(error) {status.textContent=error.message+' Retrying in 15 seconds.';}
     finally {running=false;}
