@@ -183,7 +183,7 @@ def public_home(request: Request):
     # Static shared Home/changelog: no report query, cache or preparation needed.
     from .public_page_renderer import content
     context = _public_layout(request, policy)
-    context.update(title='EVEOSINT - Home', public_links=links, public_tabs=[], missing=False,
+    context.update(title='Welcome to EVE OSINT', public_links=links, public_tabs=[], missing=False,
                    snapshot_html=public.sanitize(content('home.html', {'public_home':True}), policy, '/public'),
                    snapshot_date=None)
     return _page_response(request,context)

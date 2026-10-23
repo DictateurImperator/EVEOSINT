@@ -1,6 +1,6 @@
 # Published pages: on-demand reads with bounded caching
 
-Anonymous visitors land on `/public`, the shared Home/changelog with **Log in**
+Anonymous visitors land on `/public`, the welcome page ("Welcome to EVE OSINT", "OSINT website for EVE Online — in development.") with **Log in**
 at the top right. Logged-in visitors keep the standard app menu. Existing
 `/public/groups/{token}` links remain independent.
 
