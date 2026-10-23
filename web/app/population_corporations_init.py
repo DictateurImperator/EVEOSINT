@@ -252,10 +252,10 @@ def _corporation_population_refresh_needed(sync, today=None):
     return True
 
 
-def get_corporation_history_initialization_state(corporation_id):
+def get_corporation_history_initialization_state(corporation_id, *, initialize_schema=True):
     conn = db()
     try:
-        ensure_tables(conn)
+        if initialize_schema:ensure_tables(conn)
         with conn.cursor() as cur:
             cur.execute(
                 """

@@ -107,6 +107,17 @@ class PublicTests(unittest.TestCase):
         self.assertEqual(self.client.get('/public/character/42?tab=killboard').status_code,404)
         self.assertEqual(self.client.get('/public/kill/42').status_code,404)
 
+    def test_private_parent_menus_do_not_appear_without_an_enabled_child(self):
+        for family in ('system','constellation','region'):
+            with self.subTest(family=family):
+                self.enable(family,family+':overview')
+                self.assertNotIn('href="/public/entities"',self.client.get('/public').text)
+        self.enable('tools','tools:overview')
+        self.assertNotIn('href="/public/tools"',self.client.get('/public').text)
+        self.assertEqual(self.client.get('/public/tools').status_code,404)
+        self.enable('map','map:2d')
+        self.assertIn('href="/public/entities"',self.client.get('/public').text)
+
     def test_profile_uses_private_sidebar_and_no_public_tab_bar(self):
         from html.parser import HTMLParser
         class Sidebar(HTMLParser):
@@ -210,7 +221,7 @@ class PublicTests(unittest.TestCase):
         response=self.client.get('/public/read',params=params)
         self.assertEqual(response.status_code,200,response.text)
         self.assertIn('href="/public/ship/638"',response.text)
-        self.assertIn('href="/public/entities/ship?tier=T2"',response.text)
+        self.assertIn('href="/public/ship-category?tier=T2"',response.text)
         self.assertNotIn('href="/admin',response.text)
         data=self.client.get('/public/read',params={'source':'/entities/ship','path':'/api/entity-search?q=ra'}).json()
         self.assertEqual([item['url'] for item in data['results']],['/public/ship/638'])
@@ -253,6 +264,15 @@ class PublicTests(unittest.TestCase):
         self.assertEqual(self.renderer.call_count,1)
         self.enable()
         self.assertEqual(self.client.get('/public/leaderboard').status_code,404)
+
+    def test_previous_generic_public_page_cache_is_not_reused_after_renderer_change(self):
+        target=public.resolve('/ship/24692')
+        public.store(target,'Old generic ship page')
+        path=public.ROOT/('snapshot-'+target.digest+'.json')
+        data=json.loads(path.read_text());data.pop('cache_version');path.write_text(json.dumps(data))
+        self.assertIsNone(public.load(target))
+        public.store(target,'Shared private ship page')
+        self.assertEqual(public.load(target)['html'],'Shared private ship page')
 
     def test_cached_links_revoke_immediately_without_mutating_source(self):
         self.enable('character', 'character:overview', 'character:stats', 'leaderboard', 'leaderboard:character')
@@ -462,6 +482,54 @@ class RendererTests(unittest.TestCase):
         self.assertNotIn('Admin',result)
 
 
+class SharedPrivateShipTests(unittest.TestCase):
+    def test_public_ship_renders_the_private_handler_template_and_filters_only_access(self):
+        import sys
+        from types import ModuleType
+        from unittest.mock import Mock
+        renderer=f.load('public_page_renderer')
+        selection=dict(title='Abaddon',subtitle='Battleship',image_url='',ships_count=1,selection_type='ship',
+                       active_filter={'type_id':24692},ship_ids=[24692],ships=[],sde_details={})
+        request=f.Request({'type':'http','method':'GET','path':'/public/ship/24692','headers':[],
+                           'query_string':b'','scheme':'http','server':('testserver',80)})
+        private=ModuleType(f.PACKAGE+'.routes_entities')
+        private.ship_profile=Mock(return_value=f.templates.TemplateResponse(request=request,name='ship_selection_profile.html',context={'selection':selection,'request':request}))
+        stubs={f.PACKAGE+'.'+name:ModuleType(f.PACKAGE+'.'+name) for name in ('routes_admin_rankings','routes_superintel','routes_home')}
+        stubs[private.__name__]=private
+        target=public.resolve('/ship/24692')
+        with patch.dict(sys.modules,stubs):html=renderer.render(request,target)
+        self.assertEqual(private.ship_profile.call_count,1)
+        self.assertIn('ship-selection-header',html)
+        self.assertIn('>Abaddon</h1>',html)
+        self.assertNotIn('EVE Entity Profile',html)
+        policy={'ship':{'enabled':True,'tabs':['overview']},'killboard':{'enabled':True}}
+        visible=public.sanitize(html,policy,target.source,interactive=True)
+        for name in ('attributes','ranking','killboard'):self.assertIn('data-ship-tab="'+name+'"',visible)
+        self.assertNotIn('data-ship-tab="analysis"',visible)
+        policy={'killboard':{'enabled':True}}
+        visible=public.sanitize(html,policy,'/ship/24692?tab=killboard',interactive=True)
+        self.assertIn('data-ship-tab="killboard"',visible)
+        for name in ('attributes','ranking','analysis'):self.assertNotIn('data-ship-tab="'+name+'"',visible)
+
+    def test_private_root_macros_are_initialized_for_public_rendering(self):
+        renderer=f.load('public_page_renderer')
+        from jinja2 import DictLoader
+        env=f.templates.env.overlay(loader=DictLoader({'base.html':'{% block content %}{% endblock %}',
+            'macro.html':"{% extends 'base.html' %}{% macro entry(name) %}<a>{{ name }}</a>{% endmacro %}{% block content %}{{ entry('Coalition') }}{% endblock %}"}))
+        with patch.object(renderer,'content_environment',return_value=env):
+            self.assertEqual(renderer.content('macro.html',{}),'<a>Coalition</a>')
+
+    def test_ship_api_scope_matches_selection_and_publication(self):
+        source=public.resolve('/ship/24692')
+        self.assertEqual(public.read_target('/api/ship-selection-ranking?type_id=24692',source).tab,'overview')
+        self.assertEqual(public.read_target('/api/ship/24692/killmails',source).tab,'killboard')
+        for path in ('/api/ship-selection-ranking?type_id=638','/api/ship/638/killmails','/api/ship-selection/killmails'):
+            with self.subTest(path=path),self.assertRaises(ValueError):public.read_target(path,source)
+        source=public.resolve('/ship-category?group=Battleship')
+        self.assertEqual(public.read_target('/api/ship-selection-ranking?group=Battleship',source).tab,'overview')
+        with self.assertRaises(ValueError):public.read_target('/api/ship-selection-ranking?group=Frigate',source)
+
+
 class LandingTests(unittest.TestCase):
     def test_anonymous_root_and_home_land_on_public_home_and_login_remains_available(self):
         login = f.load('routes_login')
@@ -501,6 +569,19 @@ class PublicDataTests(unittest.TestCase):
     setUp=PublicTests.setUp
     tearDown=PublicTests.tearDown
     enable=PublicTests.enable
+    def test_parallel_private_data_requests_queue_instead_of_returning_busy_errors(self):
+        import asyncio
+        from concurrent.futures import ThreadPoolExecutor
+        @self.client.app.get('/api/character/42/history')
+        async def history():
+            await asyncio.sleep(.04)
+            return {'ready':True}
+        self.enable('character','character:history')
+        def fetch(index):
+            return self.client.get('/public/read',params={'source':'/character/42?tab=history','path':'/api/character/42/history?part='+str(index)}).status_code
+        with patch.object(public,'BUILD_SLOTS',1),ThreadPoolExecutor(max_workers=4) as workers:
+            self.assertEqual(list(workers.map(fetch,range(4))),[200]*4)
+
     def test_data_gate_uses_read_identity_caches_and_revokes_per_tab(self):
         from fastapi import Request
         calls=[]

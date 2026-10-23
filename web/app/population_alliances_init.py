@@ -462,11 +462,11 @@ def sync_is_terminal(conn, sync):
     )
 
 
-def get_alliance_history_initialization_state(alliance_id):
+def get_alliance_history_initialization_state(alliance_id, *, initialize_schema=True):
     """Return the persisted DOTLAN population-history initialization state."""
     conn = db()
     try:
-        ensure_tables(conn)
+        if initialize_schema:ensure_tables(conn)
         with conn.cursor() as cur:
             cur.execute(
                 """

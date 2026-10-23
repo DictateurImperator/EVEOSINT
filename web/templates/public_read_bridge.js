@@ -36,6 +36,7 @@
   let match=path.match(/^\/(character|corporation|alliance|coalition|system|constellation|region|ship|kill|weapon|skill|commodity)\/[1-9]\d*$/);
   let nested=path.match(/^\/(corporation|alliance|coalition)\/[1-9]\d*\/pilotable-ships\/[1-9]\d*$/);
   let extra={{ extra_public_pages|default({})|tojson }};
+  if(path==='/ship-category')extra[path]=['ship',url.searchParams.get('tab')||'overview'];
   let mapPath=path.match(/^\/map(?:\/(region|constellation|system)\/[1-9]\d*)?$/);
   let key=extra[path]?extra[path][0]:mapPath?'map':match?({weapon:'modules',skill:'skills',commodity:'commodities'}[match[1]]||match[1]):nested?nested[1]:path.startsWith('/kill/mer/')?'kill':path==='/leaderboard'?'leaderboard':path.startsWith('/superintel')?'superintel':path==='/killboard'?'killboard':null;
   let tab=extra[path]?extra[path][1]:mapPath?(mapPath[1]||'universe'):key==='leaderboard'?(url.searchParams.get('kind')||'character'):key==='superintel'?(path==='/superintel'?'dashboard':path.split('/').pop()):key==='kill'?'detail':key==='killboard'?'killboard':nested?'pilotable-ships':url.searchParams.get('stats_view')==='top-kills'?'top-kills':url.searchParams.get('tab')||(key==='coalition'?'killboard':'overview');
@@ -46,6 +47,12 @@
   else { const span=document.createElement('span');span.className=anchor.className;span.replaceChildren(...anchor.childNodes);anchor.replaceWith(span); }
  }
  function links(root) { if(root.nodeType!==1)return;if(root.matches('a[href]'))publicLink(root);root.querySelectorAll('a[href]').forEach(publicLink); }
- const start=()=>{const root=document.getElementById('publishedContent');if(!root)return;links(root);new MutationObserver(records=>records.forEach(r=>r.addedNodes.forEach(links))).observe(root,{childList:true,subtree:true});};
+ const start=()=>{const root=document.getElementById('publishedContent');if(!root)return;
+ {% if public_target.key == 'ship' %}
+ const requested={{ ('killboard' if public_target.tab=='killboard' else 'ranking')|tojson }};
+ const initial=root.querySelector('[data-ship-tab="'+requested+'"]') || root.querySelector('[data-ship-tab]');
+ if(initial)initial.click();
+ {% endif %}
+links(root);new MutationObserver(records=>records.forEach(r=>r.addedNodes.forEach(links))).observe(root,{childList:true,subtree:true});};
  if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',start);else start();
 })();

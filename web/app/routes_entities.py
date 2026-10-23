@@ -1572,9 +1572,9 @@ def alliance_population_history_check_start(
 
 @router.get("/api/alliance/{alliance_id}/population-history-check/status", response_class=JSONResponse)
 def alliance_population_history_check_status(request: Request, alliance_id: int):
-    require_login(request)
+    user=require_login(request)
     try:
-        return JSONResponse(content=get_alliance_history_initialization_state(alliance_id))
+        return JSONResponse(content=get_alliance_history_initialization_state(alliance_id, initialize_schema=not user.get("is_public")))
     except Exception:
         logger.exception("Alliance DOTLAN history check status failed alliance_id=%s", alliance_id)
         return JSONResponse(status_code=500, content={"error": "dotlan_history_check_status_failed"})
@@ -1861,9 +1861,9 @@ def corporation_population_history_check_start(
 
 @router.get("/api/corporation/{corporation_id}/population-history-check/status", response_class=JSONResponse)
 def corporation_population_history_check_status(request: Request, corporation_id: int):
-    require_login(request)
+    user=require_login(request)
     try:
-        return JSONResponse(content=get_corporation_history_initialization_state(corporation_id))
+        return JSONResponse(content=get_corporation_history_initialization_state(corporation_id, initialize_schema=not user.get("is_public")))
     except Exception:
         logger.exception("Corporation DOTLAN history check status failed corporation_id=%s", corporation_id)
         return JSONResponse(status_code=500, content={"error": "dotlan_history_check_status_failed"})
@@ -2027,13 +2027,12 @@ def alliance_coalition_history_data(request: Request, alliance_id: int):
 
 @router.get("/api/corporation/{corporation_id}/history", response_class=JSONResponse)
 def corporation_affiliation_history_data(request: Request, corporation_id: int):
-    require_login(request)
+    user=require_login(request)
     try:
         profile = get_entity_profile("corporation", corporation_id)
-        refresh_status = initialize_corporation_on_demand(
-            corporation_id,
-            profile.get("name") if profile else None,
-        )
+        refresh_status = (get_corporation_history_initialization_state(corporation_id, initialize_schema=False)
+                          if user.get("is_public") else initialize_corporation_on_demand(
+                              corporation_id, profile.get("name") if profile else None))
         history = _get_corporation_affiliation_history(corporation_id)
         history["population_refresh_status"] = refresh_status
         return JSONResponse(content=history)

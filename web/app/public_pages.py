@@ -3,7 +3,7 @@
 Public requests render allowed pages on demand and keep only recent results.
 The current publication policy applies to every response, including cache hits.
 """
-from contextlib import contextmanager
+from contextlib import contextmanager, asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from hashlib import sha256
@@ -19,6 +19,7 @@ import time
 from urllib.parse import parse_qsl, urlencode, urlsplit
 
 ROOT = Path(__file__).resolve().parents[2] / 'data' / 'public_pages'
+CACHE_VERSION = 2
 MAX_ENTRIES = 256
 MAX_BYTES = 64 * 1024 * 1024
 MAX_ENTRY_BYTES = 2 * 1024 * 1024
@@ -107,7 +108,7 @@ class Target:
             return '/leaderboard?' + urlencode({'kind':self.tab})
         if self.entity_id is not None and self.key != 'kill':
             return f"/{ {'modules':'weapon','skills':'skill','commodities':'commodity'}.get(self.key,self.key) }/{self.entity_id}" + ('?' + urlencode({'tab':self.tab}) if self.tab != 'overview' else '')
-        return self.path
+        return self.source if self.path=='/ship-category' else self.path
 
     @property
     def digest(self):
@@ -146,6 +147,10 @@ def resolve(value):
         key,selected='map',path.split('/')[2]
         allowed={name:r'.{0,200}' for name in params if re.fullmatch(r'[a-zA-Z][a-zA-Z0-9_-]{0,60}',name)}
         defaults={}
+    elif path=='/ship-category':
+        key,selected='ship',params.get('tab','overview')
+        allowed={'tab':('overview','killboard'),'tier':r'.{1,40}','group':r'.{1,80}','size':r'.{1,40}','faction':r'.{1,80}'}
+        defaults={'tab':'overview'}
     elif path == '/leaderboard':
         key = 'leaderboard'
         selected = params.get('kind', 'character')
@@ -299,6 +304,8 @@ def effective_policy(policy):
 def entity_navigation(policy):
     links=[]
     for kind,key in ENTITY_INDEX_KEYS.items():
+        # The private sidebar groups geography under MAP; do not invent entries.
+        if kind in ('system','constellation','region'):continue
         page=policy.get(key,{})
         if page.get('enabled') and any(tab!='killboard' for tab in page.get('tabs',[])):
             links.append(dict(label=FAMILIES[key]['label'],href='/public/entities/'+kind,key=key))
@@ -328,8 +335,9 @@ def published(target, policy):
         page=policy.get(target.key,{})
         return bool(page.get('enabled') and any(tab!='killboard' for tab in page.get('tabs',[])))
     if target.key=='tools' and target.tab=='overview':
-        page=effective_policy(policy).get('tools',{})
-        return bool(page.get('enabled') and page.get('tabs'))
+        page=policy.get('tools',{})
+        children={tab['key'] for tab in FAMILIES['tools']['tabs'] if tab['key']!='overview'}
+        return bool(page.get('enabled') and children.intersection(page.get('tabs',[])))
     if target.key=='killboard' or target.tab=='killboard' or (target.key=='kill' and target.tab=='detail'):
         return killboards_enabled(policy)
     page = policy.get(target.key, {})
@@ -357,7 +365,7 @@ def entries():
 
 
 def store(target, html):
-    data = dict(source=target.source, created=time.time(), html=html)
+    data = dict(source=target.source, created=time.time(), html=html, cache_version=CACHE_VERSION)
     if len(json.dumps(data, ensure_ascii=False).encode()) > MAX_ENTRY_BYTES:
         raise ValueError('Snapshot exceeds the 2 MiB page limit. Choose a smaller view.')
     with locked():
@@ -392,7 +400,7 @@ def load(target):
         if path.stat().st_size > MAX_ENTRY_BYTES:
             return None
         data = json.loads(path.read_text())
-        if data['source'] != target.source or time.time() - data['created'] >= MAX_AGE:
+        if data.get('cache_version')!=CACHE_VERSION or data['source'] != target.source or time.time() - data['created'] >= MAX_AGE:
             return None
         os.utime(path, None)  # LRU access; no index rewrite/fsync on cache hits.
         return data
@@ -449,6 +457,19 @@ class PublicHTML(HTMLParser):
         attrs = dict(attrs)
         drop = self.suppressed > 0 or tag in self.DROP or (tag == 'script' and not self.interactive)
         output_tag = tag
+        ship_tab=attrs.get('data-ship-tab') or attrs.get('data-ship-panel')
+        if ship_tab:
+            try:
+                current=resolve(self.current)
+                if current.key=='ship':
+                    if ship_tab in ('attributes','ranking'):
+                        from dataclasses import replace
+                        allowed=published(replace(current,tab='overview'),self.policy)
+                    elif ship_tab=='killboard':allowed=killboards_enabled(self.policy)
+                    elif ship_tab=='analysis':allowed=published(resolve('/ship-analysis'),self.policy)
+                    else:allowed=False
+                    drop=drop or not allowed
+            except ValueError:pass
         if tag == 'form':
             drop = drop or attrs.get('method','get').lower() != 'get'
             attrs['method'] = 'get'
@@ -561,6 +582,21 @@ def render_slot(target):
         key_lock.close()
 
 
+@asynccontextmanager
+async def queued_render_slot(target):
+    """Let a private page's parallel data loads wait instead of failing busy."""
+    import asyncio
+    while True:
+        slot=render_slot(target)
+        try:slot.__enter__()
+        except CacheBusy:
+            await asyncio.sleep(.05)
+            continue
+        break
+    try:yield
+    finally:slot.__exit__(None,None,None)
+
+
 def cached_result(target, builder):
     snapshot = load(target)
     if snapshot:
@@ -594,6 +630,22 @@ def read_target(private_url, source):
         kind=source.path.removeprefix('/entities/')
         if path not in ('/api/entity-search','/api/entities/'+kind+'/recent'):
             raise ValueError('Data endpoint unavailable.')
+    elif source.key=='ship':
+        values=dict(params)
+        if path=='/api/ship-analysis/search':
+            return read_target(private_url,resolve('/ship-analysis'))
+        ranking=path=='/api/ship-selection-ranking'
+        kills=path==f'/api/ship/{source.entity_id}/killmails' if source.entity_id else path=='/api/ship-selection/killmails'
+        metadata=path in ('/killboard/search','/api/entity-search','/api/killmail-filter/entity-search','/api/killmail-filter/module-search','/api/killmail-filter/ships')
+        if ranking or kills:
+            if ranking and source.entity_id and values.get('type_id')!=str(source.entity_id):raise ValueError('Wrong ship selection.')
+            if not source.entity_id:
+                expected=dict(parse_qsl(source.query))
+                for name in ('tier','group','size','faction'):
+                    if values.get(name,'')!=expected.get(name,''):raise ValueError('Wrong ship category.')
+                if values.get('type_id'):raise ValueError('Wrong ship selection.')
+            required='overview' if ranking else 'killboard'
+        elif not metadata:raise ValueError('Data endpoint unavailable.')
     elif source.key == 'map':
         if not re.fullmatch(r'/api/map(?:/[a-zA-Z0-9_-]+)*',path):
             raise ValueError('Data endpoint unavailable.')
@@ -651,6 +703,8 @@ COMPUTE_PATHS = {
 
 
 def compute_target(source, path, body_hash):
+    if source.key=='ship' and path=='/api/ship-analysis':
+        return compute_target(resolve('/ship-analysis'),path,body_hash)
     if source.key!='tools' or path not in COMPUTE_PATHS.get(source.tab,()) or not re.fullmatch(r'[a-f0-9]{64}',body_hash):
         raise ValueError('This computation is unavailable.')
     return Target(source.key,source.tab,'/_compute',urlencode({'source':source.read_scope_url,'path':path,'body':body_hash}))

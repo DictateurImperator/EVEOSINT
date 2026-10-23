@@ -4,9 +4,20 @@ from .main_objects import templates
 from .public_read import read_scope
 
 
+from functools import lru_cache
+from jinja2 import ChoiceLoader, DictLoader
+
+
+@lru_cache(maxsize=1)
+def content_environment():
+    # Render the actual private template normally, including its root macros.
+    # Only the outer base is supplied once by the shared page layout.
+    return templates.env.overlay(loader=ChoiceLoader([
+        DictLoader({'base.html':'{% block content %}{% endblock %}'}),templates.env.loader]))
+
+
 def content(name, context):
-    template = templates.env.get_template(name)
-    return ''.join(template.blocks['content'](template.new_context(context)))
+    return content_environment().get_template(name).render(context)
 
 
 def source_request(request, target):
@@ -51,12 +62,9 @@ def render(request, target):
             response=(routes_entities._coalition_pilotable_ship_detail_response(request,target.entity_id,ship_id)
                       if target.key=='coalition' else routes_entities._group_pilotable_ship_detail_response(request,target.key,target.entity_id,ship_id))
         elif target.key == 'ship':
-            from .entities import get_entity_profile
-            from markupsafe import Markup
-            profile=get_entity_profile('ship',target.entity_id)
-            fragment=templates.env.get_template('public_ship_killboard.html').render(profile=profile) if target.tab=='killboard' else ''
-            return content('entity_profile.html',dict(context,profile=profile,profile_tab=target.tab,
-                           public_snapshot=Markup(fragment),location_previews={}))
+            if target.path=='/ship-category':
+                response=routes_entities.ship_category_profile(request,**{key:request.query_params.get(key) for key in ('tier','group','size','faction')})
+            else:response=routes_entities.ship_profile(request,target.entity_id)
         elif target.key == 'coalition':
             response=routes_entities.coalition_profile(request,target.entity_id)
         elif target.key in ('modules','skills','commodities'):
@@ -85,7 +93,7 @@ def render(request, target):
             policy=public_pages.settings()
             context['tools']=[item for item in context.get('tools',[]) if public_pages.link_url(item.get('href'),policy)]
         # Public-only overview is the normal shared header without a data tab.
-        if target.tab == 'overview':
+        if target.tab == 'overview' and target.key!='ship':
             from markupsafe import Markup
             context['public_snapshot'] = Markup('')
         if target.key == 'superintel' and target.tab == 'dashboard' and context.get('dashboard'):

@@ -1,7 +1,8 @@
 # Published pages: on-demand reads with bounded caching
 
 Anonymous visitors land on `/public`, the welcome page ("Welcome to EVE OSINT", "OSINT website for EVE Online — in development.") with **Log in**
-at the top right. Logged-in visitors keep the standard app menu. Existing
+at the top right. Public URLs use the shared private layout with only published
+menu entries, including for logged-in visitors. Existing
 `/public/groups/{token}` links remain independent.
 
 ## Publication
@@ -63,7 +64,8 @@ same bounded cache and publication checks as other public reads.
   Results refresh after five minutes.
 - A small metadata index avoids reading all cached bodies for navigation.
 - Cross-worker locks bound demand rendering to two concurrent reads and prevent
-  duplicate work on the same result; busy requests can retry. Existing heavy
+  duplicate work on the same result. Parallel data requests from the shared
+  private pages wait for a slot instead of failing with a busy response. Existing heavy
   tab workers retain their own concurrency limits.
 - HTML pages use `no-store` so navigation is rebuilt from current publication
   settings on every visit. Data responses use `private, max-age=60, must-revalidate`
@@ -126,3 +128,17 @@ the second read makes no server request, and forced revalidation reads no DB aga
 The shared private ship-tree template trims loop-generated whitespace. Its full
 823-ship SDE list renders around 400 KiB rather than 63 MiB, preserving every
 ship, classification, image and link. Public and private use this same template.
+
+Ship pages and ship-category pages invoke the existing private `ship_profile`
+and `ship_category_profile` handlers and render `ship_selection_profile.html`.
+Attributes and Ranking follow Ships publication; Killboard follows the master
+KB switch; Analysis follows Ship Analysis publication. The same private tabs,
+ranking search/pagination and killboard scripts are used. No generic public
+ship page is maintained. Cached fragments are filtered against the current
+policy when served; previous generic-page cache entries are invalidated.
+
+Verification for this change covered 67 configured page/tab URLs against the
+real read-only data paths and a full Chromium pass including their initial data
+requests, ship tabs and disabled-menu state. Private-template root macros are
+initialized normally (including coalition pages). Public affiliation/history
+reads use existing records without invoking private initialization routines.

@@ -162,6 +162,7 @@ def _public_layout(request, policy=None, target=None):
     for key,label in (('superintel','SuperINTEL'),('killboard','Killboard'),('tools','Tools'),('leaderboard','Leaderboard')):
         page=policy.get(key,{})
         if not page.get('enabled') or not page.get('tabs'):continue
+        if key=='tools' and not public.published(public.resolve('/tools'),raw_policy):continue
         if key=='killboard':url='/killboard'
         elif key=='tools':url='/tools'
         elif key=='leaderboard':url='/leaderboard'+('' if page['tabs'][0]=='character' else '?kind='+page['tabs'][0])
@@ -169,7 +170,7 @@ def _public_layout(request, policy=None, target=None):
         navigation.append(dict(label=label,href='/public'+url))
     order={label:index for index,label in enumerate(('Home','SuperINTEL','EntitiesINTEL','Killboard','Tools','Leaderboard'))}
     navigation.sort(key=lambda item:order[item['label']])
-    is_entities=target and (target.tab=='index' or target.key=='map')
+    is_entities=target and (target.tab=='index' or target.key in ('map','ship'))
     is_profile=target and target.entity_id and target.key in public.ENTITY_INDEX_KEYS.values()
     module='entities' if is_entities else ('profile' if is_profile else (target.key if target and target.key in ('tools','superintel','leaderboard') else None))
     context_menu=[];context_title='Menu'
@@ -190,7 +191,7 @@ def _public_layout(request, policy=None, target=None):
                 destination=next((link['href'] for link in entities if link['href']=='/public'+path),None)
             else:destination=public.link_url(path,raw_policy)
             if not destination:continue
-            active=(module=='profile' and (item.get('active') or (item.get('menu_key')=='stats' and target.tab=='top-kills'))) or (target.key=='map' and path=='/map') or (target.tab=='index' and path==target.path) or (module=='tools' and destination=='/public'+target.path)
+            active=(target.key=='ship' and path=='/entities/ship') or (module=='profile' and (item.get('active') or (item.get('menu_key')=='stats' and target.tab=='top-kills'))) or (target.key=='map' and path=='/map') or (target.tab=='index' and path==target.path) or (module=='tools' and destination=='/public'+target.path)
             context_menu.append(dict(item,href=destination,active=active))
     for item in navigation:
         item['active']=(item['label']=='EntitiesINTEL' and bool(is_entities)) or (item['label']=='Tools' and module=='tools') or item.get('active',False)
@@ -272,12 +273,12 @@ async def compute(request: Request):
         target=public.compute_target(source,path,sha256(body).hexdigest())
     except (ValueError,KeyError,TypeError):
         return Response(status_code=404,headers={'Cache-Control':'no-store'})
-    if not public.published(target,public.settings()):
+    if not public.published(source,public.settings()) or not public.published(target,public.settings()):
         return Response(status_code=404,headers={'Cache-Control':'no-store'})
     cached=public.load(target)
     try:
         if not cached:
-            with public.render_slot(target):
+            async with public.queued_render_slot(target):
                 cached=public.load(target)
                 if not cached:
                     with read_scope():result=await read_get(request.app,path,method='POST',request_body=body)
@@ -316,7 +317,7 @@ async def read_data(request: Request):
     transient=False
     try:
         if not cached:
-            with public.render_slot(target):
+            async with public.queued_render_slot(target):
                 cached=public.load(target)
                 if not cached:
                     from urllib.parse import parse_qsl
@@ -363,7 +364,6 @@ async def read_data(request: Request):
         body=json.dumps(_rewrite_data(data,policy,source.source)).encode()
     else:
         html=payload['body']
-        if source.tab=='index' and source.key=='ship':html=html.replace('/ship-category?', '/entities/ship?')
         body=public.sanitize(html,policy,source.source,interactive=True).encode()
     headers=dict(payload['headers'], **{'Cache-Control':'no-store' if transient else f'private, max-age={public.BROWSER_MAX_AGE}, must-revalidate'})
     return _conditional(request,body,payload['media_type'].split(';')[0],headers)
