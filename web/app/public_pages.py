@@ -19,7 +19,7 @@ import time
 from urllib.parse import parse_qsl, urlencode, urlsplit
 
 ROOT = Path(__file__).resolve().parents[2] / 'data' / 'public_pages'
-CACHE_VERSION = 2
+CACHE_VERSION = 3
 MAX_ENTRIES = 256
 MAX_BYTES = 64 * 1024 * 1024
 MAX_ENTRY_BYTES = 2 * 1024 * 1024
@@ -507,7 +507,7 @@ class PublicHTML(HTMLParser):
                 if key.startswith('on') or (key.startswith('data-') and not self.interactive and key not in ('data-rank-kind','data-year','data-default-through')) or key in ('formaction', 'srcdoc', 'autofocus'):
                     continue
                 if key in ('href', 'src', 'xlink:href'):
-                    if key != 'href' and value and not (value.startswith(('https://images.evetech.net/', '/static/', '#', 'data:image/png;base64,'))):
+                    if key != 'href' and value and not (value.startswith(('https://images.evetech.net/', '/static/', '#', 'data:image/png;base64,')) or re.fullmatch(r'/coalition/[1-9]\d*/logo(?:\?v=\d+)?', value)):
                         continue
                     if value and value.lower().startswith(('javascript:', 'vbscript:')):
                         continue

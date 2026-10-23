@@ -355,6 +355,20 @@ class PublicTests(unittest.TestCase):
         self.assertIn('href="/public/character/1"', result)
         self.assertIn('Job</span>', result)
 
+    def test_coalition_logos_survive_public_filter_without_enabling_coalition_pages(self):
+        policy = self.enable('killboard')
+        for interactive in (False, True):
+            with self.subTest(interactive=interactive):
+                html = '<img src="/coalition/58/logo?v=123456789" alt="Coalition"><img src="/coalition/58/logo">'
+                result = public.sanitize(html, policy, '/killboard', interactive=interactive)
+                self.assertIn('src="/coalition/58/logo?v=123456789"', result)
+                self.assertIn('src="/coalition/58/logo"', result)
+                self.assertIsNone(public.link_url('/coalition/58?tab=history', policy))
+                for source in ('/coalition/58/manage', '/coalition/58/logo/../manage',
+                               '//foreign.example/coalition/58/logo', '/coalition/58/logo?v=1&other=2'):
+                    result = public.sanitize('<img src="'+source+'">', policy, '/killboard', interactive=interactive)
+                    self.assertNotIn('src=', result)
+
     def test_pagination_is_a_real_policy_checked_public_get_link(self):
         policy = self.enable('killboard')
         html = '<a href="#" data-killmail-page="2">Next</a>'
