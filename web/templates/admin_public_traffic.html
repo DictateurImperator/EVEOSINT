@@ -20,10 +20,24 @@
   const number = v => Number(v || 0).toLocaleString();
   const ms = v => number(Math.round(v || 0))+' ms';
   let running = false;
+  function pageLink(row) {
+    const label = row.page || '';
+    // Group tokens are deliberately absent from metrics; their hashed labels aren't URLs.
+    if (!label.startsWith('/public/') || label.startsWith('/public/groups/') || label.split('?')[0] === '/public/other') return label;
+    const url = new URL(label, location.origin);
+    if (url.origin !== location.origin) return label;
+    const link = document.createElement('a');
+    link.href = url.pathname + url.search;
+    link.textContent = label;
+    link.target = '_blank';
+    link.rel = 'noopener noreferrer';
+    link.title = 'Open page in a new tab';
+    return link;
+  }
   function rows(id, data, columns) {
     const target = document.getElementById(id); target.replaceChildren();
     if(!data.length) { const tr=document.createElement('tr'),td=document.createElement('td');td.colSpan=columns.length;td.textContent='No traffic recorded.';tr.append(td);target.append(tr);return; }
-    for(const item of data) {const tr=document.createElement('tr');for(const column of columns){const td=document.createElement('td');td.textContent=column(item);tr.append(td);}target.append(tr);}
+    for(const item of data) {const tr=document.createElement('tr');for(const column of columns){const td=document.createElement('td');const value=column(item);if(value instanceof Node)td.append(value);else td.textContent=value;tr.append(td);}target.append(tr);}
   }
   async function refresh() {
     if(running || document.visibilityState==='hidden') return;
@@ -35,10 +49,10 @@
       for(const [label,value] of [['Active visitors · Now',number(data.summary.active)],['Unique visitors · Day',number(data.summary.unique_visitors)],['Page views · Day',number(data.summary.views)],['All requests · Day',number(data.summary.requests)],['HTTP errors · Day',number(data.summary.errors)],['Average response · Day',ms(data.summary.average)]]) {
         const cell=document.createElement('div'),card=document.createElement('div'),title=document.createElement('div'),valueNode=document.createElement('div');cell.className='col-6 col-xl-2';card.className='content-card p-3';title.className='muted-line small';title.textContent=label;valueNode.className='h4 mt-2 mb-0';valueNode.textContent=value;card.append(title,valueNode);cell.append(card);summary.append(cell);
       }
-      rows('trafficActive',data.active,[r=>r.page,r=>number(r.visitors)]);
+      rows('trafficActive',data.active,[pageLink,r=>number(r.visitors)]);
       rows('trafficDays',data.days,[r=>r.day,r=>number(r.unique_visitors),r=>number(r.views),r=>number(r.requests)]);
-      rows('trafficPages',data.pages,[r=>r.page,r=>number(r.views),r=>number(r.unique_visitors),r=>ms(r.average)]);
-      rows('trafficRecent',data.recent,[r=>r.at,r=>r.page,r=>r.kind,r=>r.status,r=>ms(r.elapsed)]);
+      rows('trafficPages',data.pages,[pageLink,r=>number(r.views),r=>number(r.unique_visitors),r=>ms(r.average)]);
+      rows('trafficRecent',data.recent,[r=>r.at,pageLink,r=>r.kind,r=>r.status,r=>ms(r.elapsed)]);
       status.textContent = data.recording_error ? 'Some traffic could not be recorded. Check application logs and data directory permissions.' : data.started ? 'Updated '+new Date().toLocaleTimeString()+' · Collection started '+data.started : 'Waiting for the first public request.';
     } catch(error) {status.textContent=error.message+' Retrying in 15 seconds.';}
     finally {running=false;}
