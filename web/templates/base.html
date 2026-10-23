@@ -760,5 +760,20 @@
 
   </script>
 {% if not public_site or public_search %}<script>{% include "topbar_entity_search.js" %}</script>{% endif %}
+{% if request.url.path == '/public' or request.url.path.startswith('/public/') %}
+<script>
+(() => {
+  const ping = () => {
+    if (document.visibilityState === 'visible')
+      fetch('/public/traffic/presence', {method:'POST', credentials:'same-origin', cache:'no-store'}).catch(() => {});
+  };
+  ping();
+  let interval = setInterval(ping, 30000);
+  document.addEventListener('visibilitychange', ping);
+  window.addEventListener('pagehide', () => clearInterval(interval));
+  window.addEventListener('pageshow', event => { if(event.persisted) { ping(); interval = setInterval(ping, 30000); } });
+})();
+</script>
+{% endif %}
 </body>
 </html>

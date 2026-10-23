@@ -7,6 +7,8 @@ from fastapi.responses import JSONResponse, PlainTextResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from .audit_middleware import audit_page_view_middleware
+from .public_traffic import traffic_middleware
+from .routes_admin_traffic import router as admin_traffic_router
 from .main_objects import templates
 from .routes_account import router as account_router
 from .routes_killmail_generator import router as killmail_generator_router
@@ -289,4 +291,7 @@ app.include_router(admin_killmail_forensics_router)
 app.include_router(admin_audit_router)
 
 # Register the generic public gateway after the independent public group routes.
+app.include_router(admin_traffic_router)
 app.include_router(public_pages_router)
+
+app.middleware("http")(traffic_middleware)

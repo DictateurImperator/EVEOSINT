@@ -1,0 +1,173 @@
+"""Bounded local traffic metrics; no authentication data, IPs or raw queries."""
+from contextlib import contextmanager
+from datetime import datetime, timezone
+from hashlib import sha256
+from pathlib import Path
+import logging
+import re
+import secrets
+import sqlite3
+import time
+from urllib.parse import parse_qs, urlsplit
+
+from starlette.concurrency import run_in_threadpool
+
+ROOT = Path(__file__).resolve().parents[2] / 'data' / 'public_traffic'
+COOKIE = 'eveosint_public_visitor'
+RETENTION_DAYS = 30
+LOG = logging.getLogger(__name__)
+_last_error = False
+_last_warning = 0
+
+
+def page_key(url):
+    """Retain known page names/IDs, never free text, public tokens or searches."""
+    parts = urlsplit(url)
+    path = parts.path.removeprefix('/public') or '/'
+    if path.startswith('/groups/'):
+        segments = path.split('/')
+        # A public group link is a capability: never put it into traffic records.
+        path = '/groups/group-' + sha256(segments[2].encode()).hexdigest()[:12]
+    elif not re.fullmatch(r'/(?:[a-z][a-z-]{0,40}|\d{1,12})(?:/(?:[a-z][a-z-]{0,40}|\d{1,12})){0,5}', path) and path != '/':
+        path = '/other'
+    allowed_names = {'entities','character','corporation','alliance','coalition','ship','ship-category',
+                     'system','constellation','region','kill','mer','hidden','weapon','skill','commodity',
+                     'leaderboard','superintel','dashboard','detailed','monthly-analysis','pilots','activity','evolution','map','universe',
+                     'eve-2d','tools','ship-analysis','economics','population','read','compute','api',
+                     'search','entity-search','update-status','pilotable-ships','analysis'}
+    if not path.startswith('/groups/group-') and any(
+            segment not in allowed_names and not segment.isdigit()
+            for segment in path.split('/') if segment):
+        path = '/other'
+    # Keep only recognized page parameters; all search strings are discarded.
+    params = parse_qs(parts.query[:4096])
+    suffix = []
+    for key, allowed in [('tab', {'overview','attributes','ranking','killboard','stats','history','pilotable-ships','population','economics'}),
+                         ('view', {'stats','killboard','ranking','ships','members','rules'}),
+                         ('stats_view', {'history','top-kills'})]:
+        value = params.get(key, [''])[0]
+        if value in allowed:
+            suffix.append(key+'='+value)
+    return '/public'+path+('?'+'&'.join(suffix) if suffix else '')
+
+
+def visitor_id(value, day):
+    if not re.fullmatch(r'[a-f0-9]{32}', value or ''):
+        return None
+    return sha256((day+value).encode()).digest()[:16]
+
+
+@contextmanager
+def connection():
+    ROOT.mkdir(parents=True, exist_ok=True, mode=0o700)
+    conn = sqlite3.connect(ROOT / 'traffic.sqlite3', timeout=0.15)
+    try:
+        conn.row_factory = sqlite3.Row
+        conn.execute('PRAGMA journal_mode=WAL')
+        conn.execute('PRAGMA journal_size_limit=1048576')
+        conn.executescript('''
+        CREATE TABLE IF NOT EXISTS requests (
+            day TEXT, page TEXT, kind TEXT, status INTEGER, count INTEGER, elapsed REAL, maximum REAL,
+            PRIMARY KEY(day,page,kind,status)) WITHOUT ROWID;
+        CREATE TABLE IF NOT EXISTS visitors (
+            day TEXT, visitor BLOB, page TEXT, PRIMARY KEY(day,visitor,page)) WITHOUT ROWID;
+        CREATE TABLE IF NOT EXISTS presence (
+            visitor BLOB, page TEXT, seen REAL, PRIMARY KEY(visitor,page)) WITHOUT ROWID;
+        CREATE TABLE IF NOT EXISTS recent (
+            id INTEGER PRIMARY KEY, at REAL, page TEXT, kind TEXT, status INTEGER, elapsed REAL);
+        CREATE TABLE IF NOT EXISTS metadata (key TEXT PRIMARY KEY, value TEXT);
+        CREATE INDEX IF NOT EXISTS visitors_page ON visitors(day,page);
+        CREATE INDEX IF NOT EXISTS presence_seen ON presence(seen);
+        ''')
+        yield conn
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def record(page, kind, status, elapsed, cookie=None, now=None, presence=False):
+    global _last_error, _last_warning
+    now = time.time() if now is None else now
+    day = datetime.fromtimestamp(now, timezone.utc).strftime('%Y-%m-%d')
+    visitor = visitor_id(cookie, day)
+    try:
+        with connection() as conn:
+            if presence:
+                if visitor:
+                    conn.executemany('INSERT OR IGNORE INTO visitors VALUES (?,?,?)', [(day,visitor,''),(day,visitor,page)])
+                    conn.execute('INSERT INTO presence VALUES (?,?,?) ON CONFLICT(visitor,page) DO UPDATE SET seen=excluded.seen', (visitor,page,now))
+                conn.execute('DELETE FROM presence WHERE seen < ?', (now-90,))
+            else:
+                conn.execute('''INSERT INTO requests VALUES (?,?,?,?,1,?,?)
+                    ON CONFLICT(day,page,kind,status) DO UPDATE SET
+                    count=count+1, elapsed=elapsed+excluded.elapsed, maximum=MAX(maximum,excluded.maximum)''',
+                    (day,page,kind,status,elapsed,elapsed))
+                conn.execute('INSERT INTO recent(at,page,kind,status,elapsed) VALUES (?,?,?,?,?)', (now,page,kind,status,elapsed))
+                conn.execute('DELETE FROM recent WHERE id <= (SELECT MAX(id)-1000 FROM recent)')
+                if visitor and kind == 'page' and 200 <= status < 300:
+                    conn.executemany('INSERT OR IGNORE INTO visitors VALUES (?,?,?)', [(day,visitor,''),(day,visitor,page)])
+            # Cleanup at most once per minute, shared by all web workers.
+            cleaned = conn.execute("SELECT value FROM metadata WHERE key='cleaned'").fetchone()
+            if not cleaned or now-float(cleaned[0]) >= 60:
+                cutoff = datetime.fromtimestamp(now-RETENTION_DAYS*86400,timezone.utc).strftime('%Y-%m-%d')
+                conn.execute('DELETE FROM requests WHERE day <= ?', (cutoff,))
+                conn.execute('DELETE FROM visitors WHERE day <= ?', (cutoff,))
+                conn.execute('DELETE FROM presence WHERE seen < ?', (now-90,))
+                conn.execute("INSERT INTO metadata VALUES ('cleaned',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", (str(now),))
+            conn.execute("INSERT OR IGNORE INTO metadata VALUES ('started',?)", (str(now),))
+        _last_error = False
+    except (OSError, sqlite3.Error):
+        _last_error = True
+        if now-_last_warning >= 60:
+            LOG.warning('Public traffic metrics unavailable; requests continue normally.')
+            _last_warning = now
+
+
+def snapshot(day=None):
+    now = time.time()
+    today = datetime.fromtimestamp(now,timezone.utc).strftime('%Y-%m-%d')
+    day = day if re.fullmatch(r'\d{4}-\d{2}-\d{2}', day or '') else today
+    with connection() as conn:
+        days = [dict(r) for r in conn.execute('''SELECT r.day, SUM(r.count) requests,
+            SUM(CASE WHEN kind='page' AND status BETWEEN 200 AND 299 THEN count ELSE 0 END) views,
+            (SELECT COUNT(*) FROM visitors v WHERE v.day=r.day AND v.page='') unique_visitors
+            FROM requests r GROUP BY r.day ORDER BY r.day DESC LIMIT 30''')]
+        summary = dict(conn.execute('''SELECT COALESCE(SUM(count),0) requests,
+            COALESCE(SUM(CASE WHEN kind='page' AND status BETWEEN 200 AND 299 THEN count ELSE 0 END),0) views,
+            COALESCE(SUM(CASE WHEN status>=400 THEN count ELSE 0 END),0) errors,
+            COALESCE(SUM(elapsed)/NULLIF(SUM(count),0),0) average,
+            COALESCE(MAX(maximum),0) maximum FROM requests WHERE day=?''',(day,)).fetchone())
+        summary['unique_visitors'] = conn.execute("SELECT COUNT(*) FROM visitors WHERE day=? AND page=''",(day,)).fetchone()[0]
+        active = [dict(r) for r in conn.execute('SELECT page, COUNT(DISTINCT visitor) visitors FROM presence WHERE seen>=? GROUP BY page ORDER BY visitors DESC LIMIT 100',(now-90,))]
+        summary['active'] = conn.execute('SELECT COUNT(DISTINCT visitor) FROM presence WHERE seen>=?',(now-90,)).fetchone()[0]
+        pages = [dict(r) for r in conn.execute('''SELECT r.page, SUM(r.count) views,
+            (SELECT COUNT(*) FROM visitors v WHERE v.day=? AND v.page=r.page) unique_visitors,
+            SUM(r.elapsed)/SUM(r.count) average
+            FROM requests r WHERE r.day=? AND r.kind='page' AND r.status BETWEEN 200 AND 299
+            GROUP BY r.page ORDER BY views DESC LIMIT 100''',(day,day))]
+        recent = [dict(r) for r in conn.execute('SELECT at,page,kind,status,elapsed FROM recent ORDER BY id DESC LIMIT 100')]
+        started = conn.execute("SELECT value FROM metadata WHERE key='started'").fetchone()
+    for r in recent:
+        r['at'] = datetime.fromtimestamp(r['at'],timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
+    return dict(day=day,today=today,days=days,summary=summary,pages=pages,active=active,recent=recent,
+                started=datetime.fromtimestamp(float(started[0]),timezone.utc).isoformat() if started else None,
+                recording_error=_last_error)
+
+
+async def traffic_middleware(request, call_next):
+    path = request.url.path
+    if not (path == '/public' or path.startswith('/public/')) or path == '/public/traffic/presence':
+        return await call_next(request)
+    start = time.monotonic()
+    response = await call_next(request)
+    is_page = path not in ('/public/read','/public/compute') and request.method == 'GET' and 'text/html' in response.headers.get('content-type','')
+    cookie = request.cookies.get(COOKIE)
+    if is_page and 200 <= response.status_code < 300 and visitor_id(cookie,'check') is None:
+        cookie = secrets.token_hex(16)
+        response.set_cookie(COOKIE,cookie,max_age=30*86400,httponly=True,secure=request.url.scheme=='https',samesite='lax',path='/public')
+    # API URLs contain the page scope; retain its safe page identity only.
+    source = request.query_params.get('source','') if path == '/public/read' else ''
+    key = page_key(source) if source.startswith('/') else page_key(str(request.url))
+    await run_in_threadpool(record,key,'page' if is_page else 'data',response.status_code,
+                            (time.monotonic()-start)*1000,cookie)
+    return response
