@@ -1,6 +1,6 @@
 {% extends 'base.html' %}
 {% block content %}
-{% if not show_app_layout %}<header class="app-topbar px-3"><a class="top-brand text-decoration-none" href="/public">EVEOSINT</a><nav class="d-flex gap-2"><a class="top-link" href="/public">Home</a>{% for item in public_navigation or [] %}<a class="top-link" href="{{ item.href }}">{{ item.label }}</a>{% endfor %}</nav><a class="ms-auto top-link" href="/login">Log in</a></header>
+{% if not show_app_layout %}<header class="app-topbar px-3"><a class="top-brand text-decoration-none" href="/public">EVEOSINT</a><nav class="d-flex gap-2"><a class="top-link" href="/public">Home</a>{% for item in public_navigation or [] %}<a class="top-link" href="{{ item.href }}">{{ item.label }}</a>{% endfor %}</nav>{% if public_search %}{% include "topbar_entity_search.html" %}{% endif %}<a class="ms-auto top-link" href="/login">Log in</a></header>
 <main class="app-content mx-auto" style="max-width:1800px">{% endif %}
 {% if private_preview %}<div class="alert alert-info">Private preview — preparing this view has not published it. <a href="/admin/public-pages">Back to publication settings</a></div>{% endif %}
 {% if public_tabs %}<nav class="nav nav-tabs mb-3" aria-label="Public page tabs">{% for item in public_tabs %}<a class="nav-link {{ 'active' if item.active else '' }}" href="{{ item.url }}">{{ item.label }}</a>{% endfor %}</nav>{% endif %}

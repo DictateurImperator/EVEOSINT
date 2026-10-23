@@ -162,7 +162,8 @@ def _public_layout(request, policy=None):
             url = ('/leaderboard' + ('?kind=' + tab['key'] if tab['key'] != 'character' else '')) if key == 'leaderboard' else ('/superintel' + ('/' + tab['key'] if tab['key'] != 'dashboard' else ''))
             navigation.append(dict(label=label, href='/public' + url))
             break
-    return dict(show_app_layout=False, public_site=True, public_navigation=navigation)
+    return dict(show_app_layout=False, public_site=True, public_navigation=navigation,
+                public_search=public.killboards_enabled(policy or {}))
 
 
 def _public_headers(context):
@@ -312,7 +313,20 @@ async def read_data(request: Request):
         return Response(status_code=404,headers={'Cache-Control':'no-store'})
     payload=json.loads(cached['html'])
     if 'json' in payload['media_type']:
-        body=json.dumps(_rewrite_data(json.loads(payload['body']),policy,source.source)).encode()
+        data=json.loads(payload['body'])
+        from urllib.parse import urlsplit, parse_qs
+        data_path=parse_qs(target.query).get('path',[''])[0]
+        if source.key=='killboard' and urlsplit(data_path).path=='/api/entity-search':
+            results=[]
+            for item in data.get('results',[]):
+                try:entity=public.resolve(item.get('url',''))
+                except ValueError:continue
+                if entity.key not in public.KILLBOARD_ENTITIES:continue
+                from dataclasses import replace as replace_target
+                entity=replace_target(entity,tab='killboard',query='tab=killboard')
+                if public.published(entity,policy):results.append(dict(item,url=entity.public))
+            data=dict(data,results=results)
+        body=json.dumps(_rewrite_data(data,policy,source.source)).encode()
     else:
         body=public.sanitize(payload['body'],policy,source.source,interactive=True).encode()
     headers=dict(payload['headers'], **{'Cache-Control':'no-store' if transient else f'private, max-age={public.BROWSER_MAX_AGE}, must-revalidate'})
@@ -327,6 +341,8 @@ def public_page(request: Request, path: str):
     except ValueError:
         return HTMLResponse(status_code=404)
     policy = public.settings()
+    if not public.published(target,policy) and public.killboards_enabled(policy) and target.key in public.KILLBOARD_ENTITIES and target.tab=='overview':
+        return RedirectResponse(public.link_url(target.source,policy),status_code=302,headers={'Cache-Control':'no-store'})
     if not public.published(target, policy):
         return HTMLResponse(status_code=404, headers={'Cache-Control': 'no-store'})
     from .public_page_renderer import render
@@ -342,8 +358,9 @@ def public_page(request: Request, path: str):
     if not public.published(target,policy):
         return HTMLResponse(status_code=404,headers={'Cache-Control':'no-store'})
     tabs = []
+    effective=public.effective_policy(policy)
     for entry in public.FAMILIES[target.key]['tabs']:
-        if entry['key'] not in policy[target.key].get('tabs', []):
+        if entry['key'] not in effective.get(target.key,{}).get('tabs', []):
             continue
         if target.key == 'leaderboard':
             url = '/leaderboard' + ('?kind=' + entry['key'] if entry['key'] != 'character' else '')
@@ -362,5 +379,5 @@ def public_page(request: Request, path: str):
     context.update(title='EVEOSINT - ' + public.FAMILIES[target.key]['label'], public_links=variants,
         public_tabs=tabs, missing=snapshot is None,
         snapshot_html=public.sanitize(snapshot['html'], policy, target.source, interactive=True),
-        public_target=target, public_policy=policy, extra_public_pages=public.EXTRA_PAGES, snapshot_date=public.timestamp(snapshot['created']))
+        public_target=target, public_policy=public.effective_policy(policy), extra_public_pages=public.EXTRA_PAGES, snapshot_date=public.timestamp(snapshot['created']))
     return _page_response(request,context)

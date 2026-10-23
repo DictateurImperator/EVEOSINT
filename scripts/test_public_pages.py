@@ -49,6 +49,52 @@ class PublicTests(unittest.TestCase):
         self.enable('character:overview')  # tab alone cannot publish its parent
         self.assertEqual(self.client.get('/public/character/1').status_code, 404)
 
+    def test_global_killboard_opens_every_entity_kb_without_other_tabs(self):
+        policy=self.enable('killboard','killboard:killboard')
+        self.assertIn('data-entity-search-input',self.client.get('/public').text)
+        for kind in public.KILLBOARD_ENTITIES:
+            with self.subTest(kind=kind):
+                target=public.resolve('/'+kind+'/42?tab=killboard')
+                self.assertTrue(public.published(target,policy))
+                response=self.client.get(target.public)
+                self.assertEqual(response.status_code,200,response.text)
+                self.assertIn('>Killboard</a>',response.text)
+                self.assertEqual(public.link_url('/'+kind+'/42',policy),target.public)
+                if kind!='coalition':
+                    bare=self.client.get('/public/'+kind+'/42',follow_redirects=False)
+                    self.assertEqual(bare.status_code,302)
+                    self.assertEqual(bare.headers['location'],target.public)
+        self.assertEqual(self.client.get('/public/kill/42').status_code,200)
+        for tab in ('stats','history','pilotable-ships','top-kills'):
+            self.assertEqual(self.client.get('/public/character/42?tab='+tab).status_code,404)
+        # Derived inheritance must not turn unchecked settings on permanently.
+        self.assertFalse(public.settings()['character']['enabled'])
+        self.enable()
+        self.assertNotIn('data-entity-search-input',self.client.get('/public').text)
+        self.assertEqual(self.client.get('/public/character/42?tab=killboard').status_code,404)
+        self.assertEqual(self.client.get('/public/kill/42').status_code,404)
+
+    def test_public_menu_search_uses_shared_results_and_only_kb_links(self):
+        calls=[]
+        @self.client.app.get('/api/entity-search')
+        def search():
+            calls.append(True)
+            return {'results':[{'url':'/character/42','label':'Pilot','image_url':'https://images.evetech.net/characters/42/portrait'},
+                               {'url':'/ship/638','label':'Raven'},{'url':'/admin/jobs','label':'Private'}]}
+        params={'source':'/killboard','path':'/api/entity-search?q=pi&limit=6&scope=global'}
+        self.assertEqual(self.client.get('/public/read',params=params).status_code,404)
+        self.enable('killboard','killboard:killboard')
+        for _ in range(2):
+            response=self.client.get('/public/read',params=params)
+            self.assertEqual(response.status_code,200,response.text)
+            results=response.json()['results']
+            self.assertEqual([item['url'] for item in results],['/public/character/42?tab=killboard','/public/ship/638?tab=killboard'])
+            self.assertEqual(results[0]['label'],'Pilot')
+            self.assertIn('images.evetech.net',results[0]['image_url'])
+        self.assertEqual(len(calls),1)
+        self.enable()
+        self.assertEqual(self.client.get('/public/read',params=params).status_code,404)
+
     def test_cache_miss_calculates_then_hits_cache_and_browser_revalidates(self):
         self.enable('leaderboard','leaderboard:character')
         first=self.client.get('/public/leaderboard')

@@ -259,7 +259,29 @@ def save_settings(enabled, max_entries=None):
     return result
 
 
+KILLBOARD_ENTITIES = ('character','corporation','alliance','coalition','system','constellation','region','ship')
+
+
+def killboards_enabled(policy):
+    page=policy.get('killboard',{})
+    return bool(page.get('enabled') and 'killboard' in page.get('tabs',[]))
+
+
+def effective_policy(policy):
+    # Derived access only: never persist inherited switches into Admin settings.
+    result={key:dict(value,tabs=list(value.get('tabs',[]))) for key,value in policy.items() if key!='_cache'}
+    if killboards_enabled(policy):
+        for key,tab_key in [*( (key,'killboard') for key in KILLBOARD_ENTITIES),('kill','detail')]:
+            page=result.setdefault(key,{'enabled':False,'tabs':[]})
+            if not page.get('enabled'):page['tabs']=[]
+            page['enabled']=True
+            if tab_key not in page['tabs']:page['tabs'].append(tab_key)
+    return result
+
+
 def published(target, policy):
+    if killboards_enabled(policy) and ((target.key in KILLBOARD_ENTITIES and target.tab=='killboard') or (target.key=='kill' and target.tab=='detail')):
+        return True
     page = policy.get(target.key, {})
     return bool(page.get('enabled') and target.tab in page.get('tabs', []))
 
@@ -349,7 +371,12 @@ def link_url(value, policy, current='/'):
         target = resolve(value)
     except ValueError:
         return None
-    return target.public if published(target, policy) else None
+    if published(target,policy):return target.public
+    if killboards_enabled(policy) and target.key in KILLBOARD_ENTITIES and target.tab=='overview':
+        from dataclasses import replace
+        target=replace(target,tab='killboard',query='tab=killboard')
+        return target.public
+    return None
 
 
 class PublicHTML(HTMLParser):
@@ -537,7 +564,7 @@ def read_target(private_url, source):
             raise ValueError('Invalid ranking kind.')
         required = kind
     elif source.key == 'killboard':
-        if path not in ('/killboard/data','/killboard/scan','/killboard/search'):
+        if path not in ('/killboard/data','/killboard/scan','/killboard/search','/api/entity-search'):
             raise ValueError('Data endpoint unavailable.')
         required = 'killboard'
     else:

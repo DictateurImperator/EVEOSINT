@@ -68,10 +68,30 @@ def main():
             assert fixture.client.get('/public/character/42?tab=stats').status_code == 404
             page.goto('http://publication.test/admin/public-pages')
             page.screenshot(path='/tmp/eveosint-public-pages-admin.png',full_page=True)
+            # The normal grouped menu search also works without an account.
+            @fixture.client.app.get('/api/entity-search')
+            def public_search_results():
+                return {'results':[{'url':'/character/42','label':'Public Pilot','entity_type':'character',
+                                    'section':'CHARACTERS','image_url':'https://images.evetech.net/characters/42/portrait?size=64'}]}
+            fixture.enable('killboard','killboard:killboard')
+            page.goto('http://publication.test/public')
+            search=page.get_by_role('searchbox',name='Search entity',exact=True)
+            expect(search).to_be_visible()
+            search.fill('Public')
+            result=page.locator('[data-entity-search-results] a').filter(has_text='Public Pilot')
+            expect(result).to_have_attribute('href','/public/character/42?tab=killboard')
+            expect(result.locator('img')).to_have_count(1)
+            expect(page.locator('[data-entity-search-results]')).to_contain_text('CHARACTERS')
+            search.press('Enter')
+            expect(page).to_have_url('http://publication.test/public/character/42?tab=killboard')
+            expect(page.get_by_role('link',name='Killboard',exact=True)).to_have_count(2)
+            fixture.enable()
+            page.goto('http://publication.test/public')
+            expect(page.get_by_role('searchbox',name='Search entity',exact=True)).to_have_count(0)
             browser.close()
         assert not errors, errors
-        # Authenticated page chrome can poll update status; public pages have no
-        # scripts at all (also covered by the HTTP tests).
+        # Authenticated chrome polls update status; anonymous menu searches use
+        # only the public gateway, never a direct private API request.
         assert all(path == '/api/update-status' for path in api_calls), api_calls
         print('Chromium: prepare, publication, tab revocation and direct URL blocking passed.')
     finally:

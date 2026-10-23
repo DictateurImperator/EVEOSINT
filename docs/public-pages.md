@@ -10,6 +10,14 @@ at the top right. Logged-in visitors keep the standard app menu. Existing
 its desired tabs, then save. Both switches must be on. Home is public; all other
 families/tabs default off. Character/corporation/alliance Combat stats, Top kills,
 History, Pilotable ships and Population (where supported) are selectable.
+Enabling **Killboard** and its Killboard tab also enables the menu search,
+all character/corporation/alliance/coalition/location/ship killboards and kill
+details. Bare entity links open their killboard when no overview is published.
+This access is derived, not saved into the other switches: disabling Killboard
+removes inherited access, while independently published pages remain available.
+Search uses the same grouped suggestions and portraits/logos as the normal menu.
+Other entity tabs keep their own publication switches.
+
 Every catalog page and tab is selectable, including coalitions, maps, unfinished
 item pages and calculation tools. Notes about load and completion are informational;
 they never disable publication controls. Only the administrator decides which
