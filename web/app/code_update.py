@@ -638,9 +638,11 @@ def queue_code_action(action, target_ref):
 
 
 def _restart_web_service():
+    # systemd can spend 90 seconds stopping a worker with active requests.
+    # Allow its stop/start cycle to finish before declaring a deployment failed.
     result = _run(
         ["sudo", "-n", SYSTEMCTL, "restart", WEB_SERVICE],
-        timeout=30,
+        timeout=240,
         check=False,
     )
     if result.returncode != 0:

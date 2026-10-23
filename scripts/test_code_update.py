@@ -39,6 +39,21 @@ class BranchDiscoveryTests(unittest.TestCase):
         self.assertEqual(len({target["key"] for target in targets}), 2)
 
 
+class ServiceRestartTests(unittest.TestCase):
+    def test_restart_allows_systemd_to_finish_stop_and_start(self):
+        with patch.object(code_update, "_run", return_value=SimpleNamespace(returncode=0)) as run:
+            code_update._restart_web_service()
+        command = run.call_args.args[0]
+        self.assertEqual(command, ["sudo", "-n", code_update.SYSTEMCTL, "restart", code_update.WEB_SERVICE])
+        self.assertGreaterEqual(run.call_args.kwargs["timeout"], 90 + 90 + 30)
+        self.assertFalse(run.call_args.kwargs["check"])
+
+    def test_real_restart_failure_still_fails_the_deployment(self):
+        with patch.object(code_update, "_run", return_value=SimpleNamespace(returncode=1)):
+            with self.assertRaisesRegex(code_update.CodeUpdateError, "web_restart_failed"):
+                code_update._restart_web_service()
+
+
 class BranchFetchTests(unittest.TestCase):
     def test_branch_selection_deployment_and_failure_recovery(self):
         with tempfile.TemporaryDirectory() as directory:
