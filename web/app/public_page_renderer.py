@@ -80,6 +80,10 @@ def render(request, target):
         if response.status_code != 200 or not hasattr(response,'context') or response.context.get('error'):
             raise ValueError('Page could not be loaded. Please retry.')
         context = dict(response.context, public_mode=True)
+        if target.key=='tools' and target.tab=='overview':
+            from . import public_pages
+            policy=public_pages.settings()
+            context['tools']=[item for item in context.get('tools',[]) if public_pages.link_url(item.get('href'),policy)]
         # Public-only overview is the normal shared header without a data tab.
         if target.tab == 'overview':
             from markupsafe import Markup

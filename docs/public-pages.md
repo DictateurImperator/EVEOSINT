@@ -40,9 +40,14 @@ results are not frozen in the response cache.
 
 ## Parent menus
 
-Public navigation follows the enabled children. Publishing Ships or another entity
-family automatically exposes EntitiesINTEL and that family's existing browse list.
-Only published categories appear. Map entries lead to an enabled map view.
+Public pages reuse the private base layout and its sidebar. The configured private
+menu labels, icons and order are reused; public access only filters items.
+This filtering applies to logged-in visitors of public URLs as well.
+There is no additional public category tab bar.
+Public navigation follows explicitly enabled children. Publishing Ships or another entity
+family explicitly exposes EntitiesINTEL and that family's existing browse list.
+Only explicitly published categories appear. The Killboard master switch opens
+all KB pages and their menu search, but does not publish entity browse categories. Map entries lead to an enabled map view.
 Publishing a tool exposes the Tools menu even if its menu-only Overview checkbox
 is off; unavailable tools remain unlinked. These parent menus do not grant access
 to other entity tabs, tools, management pages or jobs. Entity list data uses the

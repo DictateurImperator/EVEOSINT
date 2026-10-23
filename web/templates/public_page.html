@@ -4,10 +4,10 @@
 <main class="app-content mx-auto" style="max-width:1800px">{% endif %}
 {% if private_preview %}<div class="alert alert-info">Private preview — preparing this view has not published it. <a href="/admin/public-pages">Back to publication settings</a></div>{% endif %}
 {% if public_tabs %}<nav class="nav nav-tabs mb-3" aria-label="Public page tabs">{% for item in public_tabs %}<a class="nav-link {{ 'active' if item.active else '' }}" href="{{ item.url }}">{{ item.label }}</a>{% endfor %}</nav>{% endif %}
-{% if snapshot_date %}<p class="muted-line small">Updated {{ snapshot_date }}</p>{% endif %}
+{% if snapshot_date and not public_shared_layout %}<p class="muted-line small">Updated {{ snapshot_date }}</p>{% endif %}
 {% if public_target %}<script>{% include 'public_read_bridge.js' %}</script>{% endif %}
 {% if missing %}<section class="content-card p-4"><h1 class="h5">This view is not cached yet</h1><p class="muted-line mb-0">No calculation has been started. Choose an available view below, or check again after the administrator refreshes this page.</p></section>{% endif %}
 <div id="publishedContent">{{ snapshot_html|safe }}</div>
-{% if public_links %}<details class="content-card p-3 mt-3" {% if not snapshot_html %}open{% endif %}><summary>Recently viewed pages</summary><div class="d-flex flex-column gap-2 mt-3">{% for item in public_links %}<a href="{{ item.public }}">{{ item.source }}</a>{% endfor %}</div></details>{% elif not missing and not snapshot_html %}<p class="muted-line">No pages have been published yet.</p>{% endif %}
+{% if public_links and not public_shared_layout %}<details class="content-card p-3 mt-3" {% if not snapshot_html %}open{% endif %}><summary>Recently viewed pages</summary><div class="d-flex flex-column gap-2 mt-3">{% for item in public_links %}<a href="{{ item.public }}">{{ item.source }}</a>{% endfor %}</div></details>{% elif not missing and not snapshot_html %}<p class="muted-line">No pages have been published yet.</p>{% endif %}
 {% if not show_app_layout %}</main>{% endif %}
 {% endblock %}

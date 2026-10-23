@@ -297,13 +297,12 @@ def effective_policy(policy):
 
 
 def entity_navigation(policy):
-    effective=effective_policy(policy)
     links=[]
     for kind,key in ENTITY_INDEX_KEYS.items():
-        page=effective.get(key,{})
-        if page.get('enabled') and page.get('tabs'):
+        page=policy.get(key,{})
+        if page.get('enabled') and any(tab!='killboard' for tab in page.get('tabs',[])):
             links.append(dict(label=FAMILIES[key]['label'],href='/public/entities/'+kind,key=key))
-    page=effective.get('map',{})
+    page=policy.get('map',{})
     if page.get('enabled') and page.get('tabs'):
         links.append(dict(label='Map',href='/public'+tab_path('map',page['tabs'][0],'/map'),key='map'))
     return links
@@ -326,8 +325,8 @@ def admin_catalog():
 
 def published(target, policy):
     if target.tab=='index':
-        page=effective_policy(policy).get(target.key,{})
-        return bool(page.get('enabled') and page.get('tabs'))
+        page=policy.get(target.key,{})
+        return bool(page.get('enabled') and any(tab!='killboard' for tab in page.get('tabs',[])))
     if target.key=='tools' and target.tab=='overview':
         page=effective_policy(policy).get('tools',{})
         return bool(page.get('enabled') and page.get('tabs'))

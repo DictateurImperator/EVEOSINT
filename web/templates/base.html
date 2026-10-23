@@ -546,7 +546,7 @@
     {% set account_label = username if username else (user.username if user and user.username else "Compte") %}
 
     <header class="app-topbar px-3">
-      <div class="top-brand">EVEOSINT</div>
+      <a class="top-brand text-decoration-none" href="{{ '/public' if public_site else '/home' }}">EVEOSINT</a>
 
       <nav class="d-flex gap-1">
         {% for item in top_menu or [] %}
@@ -556,9 +556,10 @@
         {% endfor %}
       </nav>
 
-      {% include "topbar_entity_search.html" %}
+      {% if not public_site or public_search %}{% include "topbar_entity_search.html" %}{% endif %}
 
       <div class="top-actions">
+        {% if public_site and not user %}<a class="top-link" href="/login">Log in</a>{% else %}
         <details class="account-menu" style="position:relative">
           <summary class="account-link" style="cursor:pointer;list-style:none">{{ account_label }} ▾</summary>
           <nav aria-label="Account" style="position:absolute;right:0;top:100%;min-width:170px;background:#0f172a;border:1px solid #334155;border-radius:8px;padding:.5rem;z-index:1200">
@@ -572,10 +573,11 @@
             ⏻
           </button>
         </form>
+        {% endif %}
       </div>
     </header>
 
-    <div id="globalUpdateBanner" class="update-banner d-none" role="status" aria-live="polite">
+    {% if not public_site %}<div id="globalUpdateBanner" class="update-banner d-none" role="status" aria-live="polite">
       <div class="update-banner-inner">
         <span class="update-banner-spinner" aria-hidden="true"></span>
         <span id="globalUpdateLabel" class="update-banner-label">EVEOSINT update running</span>
@@ -588,6 +590,7 @@
       </div>
     </div>
 
+    {% endif %}
     <div class="app-layout">
       <aside id="contextSidebar" class="context-sidebar">
         <div class="context-header">
@@ -732,6 +735,8 @@
     })();
   </script>
 
+
+  {% endif %}
   <script>
     const sidebar = document.getElementById("contextSidebar");
     const toggle = document.getElementById("contextToggle");
@@ -754,7 +759,6 @@
 
 
   </script>
-  {% endif %}
 {% if not public_site or public_search %}<script>{% include "topbar_entity_search.js" %}</script>{% endif %}
 </body>
 </html>

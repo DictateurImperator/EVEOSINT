@@ -2,6 +2,7 @@
 import fcntl
 import logging
 import time
+from functools import lru_cache
 from fastapi import APIRouter, BackgroundTasks, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from .auth import require_login, require_permission_or_redirect
@@ -143,38 +144,60 @@ def clear_cache(request: Request):
     return RedirectResponse('/admin/public-pages', status_code=303)
 
 
-def _public_layout(request, policy=None):
+@lru_cache(maxsize=16)
+def shared_context_menu(module, bucket):
+    """Use the same configured menu labels, icons and order as private pages."""
+    from .menus import build_context_menu
+    from .public_read import PUBLIC_READER
+    return build_context_menu(PUBLIC_READER,module,'')
+
+
+def _public_layout(request, policy=None, target=None):
     user = require_login(request)
-    if user:
-        return dict(app_context(request=request, user=user, title='EVEOSINT', active_module='home',
-                                active_menu_key='home'), public_site=False)
-    navigation = []
-    policy=public.effective_policy(policy or {})
-    for key, label in (('killboard', 'Killboard'), ('leaderboard', 'Leaderboard'), ('superintel', 'SuperINTEL')):
-        page = (policy or {}).get(key, {})
-        if not page.get('enabled'):
-            continue
-        for tab in public.FAMILIES[key]['tabs']:
-            if tab['key'] not in page.get('tabs', []):
-                continue
-            if key == 'killboard':
-                navigation.append(dict(label=label,href='/public/killboard'))
-                break
-            url = ('/leaderboard' + ('?kind=' + tab['key'] if tab['key'] != 'character' else '')) if key == 'leaderboard' else ('/superintel' + ('/' + tab['key'] if tab['key'] != 'dashboard' else ''))
-            navigation.append(dict(label=label, href='/public' + url))
-            break
-    entities=public.entity_navigation(policy)
-    if entities:navigation.insert(0,dict(label='EntitiesINTEL',href='/public/entities'))
-    tools=policy.get('tools',{})
-    if tools.get('enabled') and tools.get('tabs'):navigation.append(dict(label='Tools',href='/public/tools'))
+    raw_policy=policy or {}
+    policy=public.effective_policy(raw_policy)
+    navigation=[dict(label='Home',href='/public',active=target is None)]
+    entities=public.entity_navigation(raw_policy)
+    if entities:navigation.append(dict(label='EntitiesINTEL',href='/public/entities'))
+    for key,label in (('superintel','SuperINTEL'),('killboard','Killboard'),('tools','Tools'),('leaderboard','Leaderboard')):
+        page=policy.get(key,{})
+        if not page.get('enabled') or not page.get('tabs'):continue
+        if key=='killboard':url='/killboard'
+        elif key=='tools':url='/tools'
+        elif key=='leaderboard':url='/leaderboard'+('' if page['tabs'][0]=='character' else '?kind='+page['tabs'][0])
+        else:url='/superintel'+('' if page['tabs'][0]=='dashboard' else '/'+page['tabs'][0])
+        navigation.append(dict(label=label,href='/public'+url))
+    order={label:index for index,label in enumerate(('Home','SuperINTEL','EntitiesINTEL','Killboard','Tools','Leaderboard'))}
+    navigation.sort(key=lambda item:order[item['label']])
+    is_entities=target and (target.tab=='index' or target.key=='map')
+    module='entities' if is_entities else ('tools' if target and target.key=='tools' else None)
+    context_menu=[];context_title='Menu'
+    if module:
+        configured=shared_context_menu(module,int(time.time()//60))
+        context_title=configured['title']
+        for item in configured['items']:
+            path=item.get('href','')
+            if path=='/map':
+                destination=next((link['href'] for link in entities if link['key']=='map'),None)
+            elif path.startswith('/entities/'):
+                destination=next((link['href'] for link in entities if link['href']=='/public'+path),None)
+            else:destination=public.link_url(path,raw_policy)
+            if not destination:continue
+            active=(target.key=='map' and path=='/map') or (target.tab=='index' and path==target.path) or (module=='tools' and destination=='/public'+target.path)
+            context_menu.append(dict(item,href=destination,active=active))
+    for item in navigation:
+        item['active']=(item['label']=='EntitiesINTEL' and bool(is_entities)) or (item['label']=='Tools' and module=='tools') or item.get('active',False)
     search_source=next((item['href'].removeprefix('/public') for item in entities if item['key']!='map'),None)
-    return dict(show_app_layout=False, public_site=True, public_navigation=navigation,
-                public_search=bool(search_source),public_search_source=search_source or '/killboard')
+    return dict(request=request,user=user,username=user.get('username','') if user else '',
+                show_app_layout=True,public_site=True,public_navigation=navigation,top_menu=navigation,
+                context_title=context_title,context_menu=context_menu,public_shared_layout=True,
+                public_search=bool(search_source or public.killboards_enabled(raw_policy)),
+                public_search_source=search_source or '/killboard')
 
 
 def _public_headers(context):
     headers = {'Cache-Control': 'no-store', 'Vary':'Cookie'}
-    if context.get('public_site'):
+    if context.get('public_site') and not context.get('user'):
         headers['Cache-Control'] = f'private, max-age={public.BROWSER_MAX_AGE}, must-revalidate'
         headers['Content-Security-Policy'] = "connect-src 'self'; form-action 'self'; frame-src 'none'; object-src 'none'; base-uri 'none'"
     return headers
@@ -383,12 +406,11 @@ def public_page(request: Request, path: str):
             base_path=f'/{target.key}/{target.entity_id}' if target.key in ('coalition','character','corporation','alliance') else target.path
             url = base_path + ('?tab=' + entry['key'] if entry['key'] not in ('overview', 'detail') else '')
         tabs.append(dict(label=entry['label'], url='/public' + url, active=entry['key'] == target.tab))
-    if target.tab=='index':
-        tabs=[dict(label=item['label'],url=item['href'],active=item['key']==target.key) for item in public.entity_navigation(policy)]
+    if target.tab=='index':tabs=[]
     # Small bounded list of snapshots, no database access and no public job queue.
     variants = [row for row in public.entries() if not row.get('internal') and row['fresh'] and
                 public.published(public.resolve(row['source']), policy)]
-    context = _public_layout(request, policy)
+    context = _public_layout(request, policy, target)
     context.update(title='EVEOSINT - ' + public.FAMILIES[target.key]['label'], public_links=variants,
         public_tabs=tabs, missing=snapshot is None,
         snapshot_html=public.sanitize(snapshot['html'], policy, target.source, interactive=True),

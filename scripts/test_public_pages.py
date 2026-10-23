@@ -15,11 +15,23 @@ routes = f.load('routes_public_pages')
 ADMIN = dict(id=1, username='Admin', permissions={'admin.system.view'})
 
 
+def private_menu_fixture(module,bucket):
+    if module=='tools':
+        return {'title':'Tools','items':[dict(label=label,href=path,icon='') for label,path in
+            [('All tools','/tools'),('Ship Analysis','/ship-analysis'),('Economics comparison','/tools/economics')]]}
+    return {'title':'EntitiesINTEL','items':[
+        dict(label=public.FAMILIES[key]['label'],href='/entities/'+kind,icon='◉')
+        for kind,key in public.ENTITY_INDEX_KEYS.items() if kind not in ('system','constellation','region')]+[
+        dict(label='MAP',href='/map',icon='▧')]}
+
+
 class PublicTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.root = patch.object(public, 'ROOT', Path(self.temp.name))
         self.root.start()
+        self.menu_patch=patch.object(routes,'shared_context_menu',side_effect=private_menu_fixture)
+        self.menu_patch.start()
         renderer=f.load('public_page_renderer')
         self.render_patch=patch.object(renderer,'render',return_value='<h1>On demand</h1>')
         self.renderer=self.render_patch.start()
@@ -32,6 +44,7 @@ class PublicTests(unittest.TestCase):
         self.client = TestClient(app)
 
     def tearDown(self):
+        self.menu_patch.stop()
         self.render_patch.stop()
         self.root.stop()
         self.temp.cleanup()
@@ -94,18 +107,46 @@ class PublicTests(unittest.TestCase):
         self.assertEqual(self.client.get('/public/character/42?tab=killboard').status_code,404)
         self.assertEqual(self.client.get('/public/kill/42').status_code,404)
 
+    def test_public_menus_use_private_shell_and_hide_disabled_items_even_when_logged_in(self):
+        for user in (None,ADMIN):
+            with self.subTest(user=user),patch.object(routes,'require_login',return_value=user):
+                self.enable()
+                html=self.client.get('/public').text
+                self.assertNotIn('href="/public/entities"',html)
+                self.assertNotIn('href="/public/tools"',html)
+                self.assertNotIn('>Ships</span>',html)
+                self.assertNotIn('href="/public/killboard"',html)
+                self.assertEqual(self.client.get('/public/entities').status_code,404)
+                self.enable('killboard')
+                self.assertNotIn('href="/public/entities"',self.client.get('/public').text)
+                self.assertEqual(self.client.get('/public/entities/ship').status_code,404)
+                self.enable('ship','ship:overview')
+                html=self.client.get('/public/entities/ship').text
+                self.assertIn('class="app-layout"',html)
+                self.assertIn('id="contextSidebar" class="context-sidebar"',html)
+                self.assertIn('class="context-nav"',html)
+                self.assertIn('>Ships</span>',html)
+                self.assertNotIn('>Characters</span>',html)
+                self.assertNotIn('>MAP</span>',html)
+                self.assertNotIn('aria-label="Public page tabs"',html)
+                self.assertNotIn('Recently viewed pages',html)
+                self.assertNotIn('<p class="muted-line small">Updated',html)
+        self.enable()
+        with patch.object(routes,'require_login',return_value=ADMIN):
+            self.assertEqual(self.client.get('/public/entities/ship').status_code,404)
+
     def test_enabled_children_open_parent_menus_and_only_their_categories(self):
         self.enable('ship','ship:overview')
         home=self.client.get('/public').text
-        self.assertIn('href="/public/entities">EntitiesINTEL</a>',home)
-        self.assertNotIn('href="/public/tools">Tools</a>',home)
+        self.assertIn('href="/public/entities"',home)
+        self.assertNotIn('href="/public/tools"',home)
         redirect=self.client.get('/public/entities',follow_redirects=False)
         self.assertEqual(redirect.headers['location'],'/public/entities/ship')
         self.assertEqual(self.client.get('/public/entities/ship').status_code,200)
         self.assertEqual(self.client.get('/public/entities/character').status_code,404)
         self.assertEqual(self.client.get('/public/entities/ship/manage').status_code,404)
         self.enable('tools','tools:ship-analysis')
-        self.assertIn('href="/public/tools">Tools</a>',self.client.get('/public').text)
+        self.assertIn('href="/public/tools"',self.client.get('/public').text)
         self.assertEqual(self.client.get('/public/tools').status_code,200)
         self.assertEqual(self.client.get('/public/ship-analysis').status_code,200)
         self.assertEqual(self.client.get('/public/tools/economics').status_code,404)
@@ -404,7 +445,7 @@ class LandingTests(unittest.TestCase):
             self.assertNotIn('Changelog',response.text)
             self.assertIn('href="/login">Log in</a>',response.text)
             self.assertNotIn('Active session',response.text)
-            self.assertNotIn('<script',response.text)
+            self.assertNotIn('/api/update-status',response.text)
             self.assertEqual(client.get('/login').status_code,200)
 
     def test_logged_in_public_home_keeps_normal_account_menu(self):
