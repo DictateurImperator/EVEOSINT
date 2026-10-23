@@ -22,6 +22,7 @@
   let running = false;
   function pageLink(row) {
     const label = row.page || '';
+    if (label.split('?')[0] === '/public/other') return 'Unrecognized public route (original address not stored)';
     // Group tokens are deliberately absent from metrics; their hashed labels aren't URLs.
     if (!label.startsWith('/public/') || label.startsWith('/public/groups/') || label.split('?')[0] === '/public/other') return label;
     const url = new URL(label, location.origin);

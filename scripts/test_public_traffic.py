@@ -110,6 +110,20 @@ class TrafficTests(unittest.TestCase):
         self.assertNotIn(self.client.cookies.get(traffic.COOKIE),dump)
         self.assertNotIn('password',dump)
 
+    def test_all_real_public_route_paths_keep_their_identity(self):
+        public = f.load('public_pages')
+        paths = ['/public/killboard', '/public/map/eve-2d',
+                 '/public/kill/mer/2026-09-01/649525/hidden',
+                 '/public/character/90037483?tab=top-kills']
+        for family in public.CATALOG:
+            paths.append('/public'+family['example'])
+            for tab in family['tabs']:
+                paths.append('/public'+public.tab_path(family['key'],tab['key'],family['example']))
+        paths += ['/public/entities/'+kind for kind in public.ENTITY_INDEX_KEYS]
+        for url in paths:
+            with self.subTest(url=url):
+                self.assertEqual(traffic.page_key(url),url)
+
     def test_metrics_failure_never_breaks_public_page(self):
         with patch.object(traffic,'connection',side_effect=OSError('unavailable')):
             self.assertEqual(self.client.get('/public/character/1').status_code,200)

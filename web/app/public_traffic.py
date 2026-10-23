@@ -28,21 +28,18 @@ def page_key(url):
         segments = path.split('/')
         # A public group link is a capability: never put it into traffic records.
         path = '/groups/group-' + sha256(segments[2].encode()).hexdigest()[:12]
-    elif not re.fullmatch(r'/(?:[a-z][a-z-]{0,40}|\d{1,12})(?:/(?:[a-z][a-z-]{0,40}|\d{1,12})){0,5}', path) and path != '/':
-        path = '/other'
-    allowed_names = {'entities','character','corporation','alliance','coalition','ship','ship-category',
-                     'system','constellation','region','kill','mer','hidden','weapon','skill','commodity',
-                     'leaderboard','superintel','dashboard','detailed','monthly-analysis','pilots','activity','evolution','map','universe',
-                     'eve-2d','tools','ship-analysis','economics','population','read','compute','api',
-                     'search','entity-search','update-status','pilotable-ships','analysis'}
-    if not path.startswith('/groups/group-') and any(
-            segment not in allowed_names and not segment.isdigit()
-            for segment in path.split('/') if segment):
-        path = '/other'
+    elif path not in ('/', '/read', '/compute', '/search'):
+        # Use the real public route resolver instead of a second, incomplete
+        # route vocabulary. Resolving a path performs no DB query or rendering.
+        from .public_pages import resolve
+        try:
+            resolve(path)
+        except ValueError:
+            path = '/other'
     # Keep only recognized page parameters; all search strings are discarded.
     params = parse_qs(parts.query[:4096])
     suffix = []
-    for key, allowed in [('tab', {'overview','attributes','ranking','killboard','stats','history','pilotable-ships','population','economics'}),
+    for key, allowed in [('tab', {'overview','attributes','ranking','killboard','stats','top-kills','history','pilotable-ships','population','economics'}),
                          ('view', {'stats','killboard','ranking','ships','members','rules'}),
                          ('stats_view', {'history','top-kills'})]:
         value = params.get(key, [''])[0]
