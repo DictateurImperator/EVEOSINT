@@ -79,7 +79,7 @@
 
         const queryId = ++lastQueryId;
         const path = `/api/entity-search?q=${encodeURIComponent(q)}&limit=${encodeURIComponent(limit)}&scope=global`;
-        const url = {{ public_search|default(false)|tojson }} ? '/public/read?'+new URLSearchParams({source:'/killboard',path}) : path;
+        const url = {{ public_search|default(false)|tojson }} ? '/public/read?'+new URLSearchParams({source:{{ public_search_source|default('/killboard')|tojson }},path}) : path;
 
         try {
           const response = await fetch(url, {

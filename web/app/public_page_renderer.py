@@ -26,7 +26,13 @@ def render(request, target):
     request = source_request(request, target)
     context = dict(request=request, user=None, username='', show_app_layout=False, public_mode=True)
     with read_scope():
-        if target.key == 'leaderboard':
+        if target.tab=='index':
+            kind=target.path.removeprefix('/entities/')
+            if kind in ('system','constellation','region','weapon'):
+                index=dict(entity_type=kind,**routes_entities.ENTITY_INDEX_PAGES.get(kind,{'title':target.key.title(),'description':''}))
+                return content('entity_index.html',dict(context,entity_index=index))
+            response=routes_entities.entities_index(request,kind)
+        elif target.key == 'leaderboard':
             response = routes_admin_rankings.ranking_response(request, context)
         elif target.key == 'superintel':
             handler = {'dashboard': routes_superintel.dashboard_response,

@@ -163,8 +163,13 @@ def _public_layout(request, policy=None):
             url = ('/leaderboard' + ('?kind=' + tab['key'] if tab['key'] != 'character' else '')) if key == 'leaderboard' else ('/superintel' + ('/' + tab['key'] if tab['key'] != 'dashboard' else ''))
             navigation.append(dict(label=label, href='/public' + url))
             break
+    entities=public.entity_navigation(policy)
+    if entities:navigation.insert(0,dict(label='EntitiesINTEL',href='/public/entities'))
+    tools=policy.get('tools',{})
+    if tools.get('enabled') and tools.get('tabs'):navigation.append(dict(label='Tools',href='/public/tools'))
+    search_source=next((item['href'].removeprefix('/public') for item in entities if item['key']!='map'),None)
     return dict(show_app_layout=False, public_site=True, public_navigation=navigation,
-                public_search=public.killboards_enabled(policy or {}))
+                public_search=bool(search_source),public_search_source=search_source or '/killboard')
 
 
 def _public_headers(context):
@@ -317,19 +322,20 @@ async def read_data(request: Request):
         data=json.loads(payload['body'])
         from urllib.parse import urlsplit, parse_qs
         data_path=parse_qs(target.query).get('path',[''])[0]
-        if source.key=='killboard' and urlsplit(data_path).path=='/api/entity-search':
+        if urlsplit(data_path).path=='/api/entity-search' and (source.key=='killboard' or source.tab=='index'):
             results=[]
             for item in data.get('results',[]):
                 try:entity=public.resolve(item.get('url',''))
                 except ValueError:continue
-                if entity.key not in public.KILLBOARD_ENTITIES:continue
-                from dataclasses import replace as replace_target
-                entity=replace_target(entity,tab='killboard',query='tab=killboard')
-                if public.published(entity,policy):results.append(dict(item,url=entity.public))
+                if entity.key not in public.ENTITY_INDEX_KEYS.values():continue
+                destination=public.entity_destination(entity,policy)
+                if destination:results.append(dict(item,url=destination))
             data=dict(data,results=results)
         body=json.dumps(_rewrite_data(data,policy,source.source)).encode()
     else:
-        body=public.sanitize(payload['body'],policy,source.source,interactive=True).encode()
+        html=payload['body']
+        if source.tab=='index' and source.key=='ship':html=html.replace('/ship-category?', '/entities/ship?')
+        body=public.sanitize(html,policy,source.source,interactive=True).encode()
     headers=dict(payload['headers'], **{'Cache-Control':'no-store' if transient else f'private, max-age={public.BROWSER_MAX_AGE}, must-revalidate'})
     return _conditional(request,body,payload['media_type'].split(';')[0],headers)
 
@@ -337,13 +343,17 @@ async def read_data(request: Request):
 # Include AFTER personal_groups_router so /public/groups/{token} remains independent.
 @router.get('/public/{path:path}', response_class=HTMLResponse)
 def public_page(request: Request, path: str):
+    if path=='entities':
+        links=public.entity_navigation(public.settings())
+        return RedirectResponse(links[0]['href'],status_code=302,headers={'Cache-Control':'no-store'}) if links else HTMLResponse(status_code=404,headers={'Cache-Control':'no-store'})
     try:
         target = public.resolve('/' + path + ('?' + request.url.query if request.url.query else ''))
     except ValueError:
         return HTMLResponse(status_code=404)
     policy = public.settings()
-    if not public.published(target,policy) and public.killboards_enabled(policy) and target.key in public.KILLBOARD_ENTITIES and target.tab=='overview':
-        return RedirectResponse(public.link_url(target.source,policy),status_code=302,headers={'Cache-Control':'no-store'})
+    if not public.published(target,policy) and target.key in public.ENTITY_INDEX_KEYS.values() and (target.tab=='overview' or (target.key=='coalition' and target.tab=='killboard' and not target.query)):
+        destination=public.entity_destination(target,policy)
+        if destination:return RedirectResponse(destination,status_code=302,headers={'Cache-Control':'no-store'})
     if not public.published(target, policy):
         return HTMLResponse(status_code=404, headers={'Cache-Control': 'no-store'})
     from .public_page_renderer import render
@@ -360,7 +370,7 @@ def public_page(request: Request, path: str):
         return HTMLResponse(status_code=404,headers={'Cache-Control':'no-store'})
     tabs = []
     effective=public.effective_policy(policy)
-    for entry in public.FAMILIES[target.key]['tabs']:
+    for entry in ([] if target.tab=='index' else public.FAMILIES[target.key]['tabs']):
         if entry['key'] not in effective.get(target.key,{}).get('tabs', []):
             continue
         if target.key == 'leaderboard':
@@ -373,6 +383,8 @@ def public_page(request: Request, path: str):
             base_path=f'/{target.key}/{target.entity_id}' if target.key in ('coalition','character','corporation','alliance') else target.path
             url = base_path + ('?tab=' + entry['key'] if entry['key'] not in ('overview', 'detail') else '')
         tabs.append(dict(label=entry['label'], url='/public' + url, active=entry['key'] == target.tab))
+    if target.tab=='index':
+        tabs=[dict(label=item['label'],url=item['href'],active=item['key']==target.key) for item in public.entity_navigation(policy)]
     # Small bounded list of snapshots, no database access and no public job queue.
     variants = [row for row in public.entries() if not row.get('internal') and row['fresh'] and
                 public.published(public.resolve(row['source']), policy)]
@@ -380,5 +392,5 @@ def public_page(request: Request, path: str):
     context.update(title='EVEOSINT - ' + public.FAMILIES[target.key]['label'], public_links=variants,
         public_tabs=tabs, missing=snapshot is None,
         snapshot_html=public.sanitize(snapshot['html'], policy, target.source, interactive=True),
-        public_target=target, public_policy=public.effective_policy(policy), extra_public_pages=public.EXTRA_PAGES, snapshot_date=public.timestamp(snapshot['created']))
+        public_target=target, public_policy=public.effective_policy(policy), extra_public_pages=dict(public.EXTRA_PAGES,**{'/entities/'+kind:(key,'index') for kind,key in public.ENTITY_INDEX_KEYS.items()}), snapshot_date=public.timestamp(snapshot['created']))
     return _page_response(request,context)

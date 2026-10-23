@@ -40,7 +40,9 @@
   let key=extra[path]?extra[path][0]:mapPath?'map':match?({weapon:'modules',skill:'skills',commodity:'commodities'}[match[1]]||match[1]):nested?nested[1]:path.startsWith('/kill/mer/')?'kill':path==='/leaderboard'?'leaderboard':path.startsWith('/superintel')?'superintel':path==='/killboard'?'killboard':null;
   let tab=extra[path]?extra[path][1]:mapPath?(mapPath[1]||'universe'):key==='leaderboard'?(url.searchParams.get('kind')||'character'):key==='superintel'?(path==='/superintel'?'dashboard':path.split('/').pop()):key==='kill'?'detail':key==='killboard'?'killboard':nested?'pilotable-ships':url.searchParams.get('stats_view')==='top-kills'?'top-kills':url.searchParams.get('tab')||(key==='coalition'?'killboard':'overview');
   if(key && tab==='overview' && !policy[key]?.tabs.includes(tab) && policy[key]?.enabled && policy[key].tabs.includes('killboard')){url.searchParams.set('tab','killboard');tab='killboard';}
-  if(key && policy[key]?.enabled && policy[key].tabs.includes(tab)) anchor.href='/public'+path+url.search+url.hash;
+  if(key && tab==='overview' && policy[key]?.enabled && !policy[key].tabs.includes(tab) && policy[key].tabs.length){tab=policy[key].tabs[0];url.searchParams.set('tab',tab);}
+  if(key==='coalition' && tab==='killboard' && !url.searchParams.has('tab') && policy[key]?.enabled && !policy[key].tabs.includes(tab) && policy[key].tabs.length){tab=policy[key].tabs[0];url.searchParams.set('tab',tab);}
+  if(key && policy[key]?.enabled && (policy[key].tabs.includes(tab) || (tab==='index' && policy[key].tabs.length))) anchor.href='/public'+path+url.search+url.hash;
   else { const span=document.createElement('span');span.className=anchor.className;span.replaceChildren(...anchor.childNodes);anchor.replaceWith(span); }
  }
  function links(root) { if(root.nodeType!==1)return;if(root.matches('a[href]'))publicLink(root);root.querySelectorAll('a[href]').forEach(publicLink); }

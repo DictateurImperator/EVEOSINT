@@ -62,6 +62,10 @@ CATALOG = [
 FAMILIES = {row['key']: row for row in CATALOG}
 
 
+ENTITY_INDEX_KEYS = {key:key for key in ('character','corporation','alliance','coalition','ship','system','constellation','region')}
+ENTITY_INDEX_KEYS.update(weapon='modules',skill='skills',commodity='commodities')
+
+
 EXTRA_PAGES = {
     '/tools':('tools','overview'), '/ship-analysis':('tools','ship-analysis'),
     '/superintel/evolution':('tools','super-evolution'),
@@ -130,7 +134,11 @@ def resolve(value):
     key = selected = None
     entity_id = None
     allowed = {}
-    if path in EXTRA_PAGES:
+    if path.startswith('/entities/') and path.removeprefix('/entities/') in ENTITY_INDEX_KEYS:
+        key,selected=ENTITY_INDEX_KEYS[path.removeprefix('/entities/')],'index'
+        allowed={'q':r'.{0,100}','tier':r'.{1,40}','group':r'.{1,80}','size':r'.{1,40}','faction':r'.{1,80}'}
+        defaults={}
+    elif path in EXTRA_PAGES:
         key,selected=EXTRA_PAGES[path]
         allowed={name:r'.{0,200}' for name in params if re.fullmatch(r'[a-zA-Z][a-zA-Z0-9_-]{0,60}',name)}
         defaults={}
@@ -207,7 +215,7 @@ def resolve(value):
             continue
         if rule is None or (value not in rule if isinstance(rule, tuple) else not re.fullmatch(rule, value)):
             raise ValueError('Unsupported public filter: ' + name)
-    if not any(t['key'] == selected for t in FAMILIES[key]['tabs']):
+    if selected!='index' and not any(t['key'] == selected for t in FAMILIES[key]['tabs']):
         raise ValueError('This tab is not ready for public access.')
     if key not in ('character', 'corporation', 'alliance') and selected == 'stats':
         raise ValueError('Combat stats are unavailable for this entity.')
@@ -283,7 +291,30 @@ def effective_policy(policy):
             if not page.get('enabled'):page['tabs']=[]
             page['enabled']=True
             if tab_key not in page['tabs']:page['tabs'].append(tab_key)
+    tools=result.get('tools',{})
+    if tools.get('enabled') and tools.get('tabs') and 'overview' not in tools['tabs']:tools['tabs'].append('overview')
     return result
+
+
+def entity_navigation(policy):
+    effective=effective_policy(policy)
+    links=[]
+    for kind,key in ENTITY_INDEX_KEYS.items():
+        page=effective.get(key,{})
+        if page.get('enabled') and page.get('tabs'):
+            links.append(dict(label=FAMILIES[key]['label'],href='/public/entities/'+kind,key=key))
+    page=effective.get('map',{})
+    if page.get('enabled') and page.get('tabs'):
+        links.append(dict(label='Map',href='/public'+tab_path('map',page['tabs'][0],'/map'),key='map'))
+    return links
+
+
+def entity_destination(target,policy):
+    page=effective_policy(policy).get(target.key,{})
+    if not page.get('enabled') or not page.get('tabs'):return None
+    from dataclasses import replace
+    selected=next((tab for tab in ('killboard','overview') if tab in page['tabs']),page['tabs'][0])
+    return replace(target,tab=selected,query='' if selected=='overview' else urlencode({'tab':selected})).public
 
 
 def admin_catalog():
@@ -294,6 +325,12 @@ def admin_catalog():
 
 
 def published(target, policy):
+    if target.tab=='index':
+        page=effective_policy(policy).get(target.key,{})
+        return bool(page.get('enabled') and page.get('tabs'))
+    if target.key=='tools' and target.tab=='overview':
+        page=effective_policy(policy).get('tools',{})
+        return bool(page.get('enabled') and page.get('tabs'))
     if target.key=='killboard' or target.tab=='killboard' or (target.key=='kill' and target.tab=='detail'):
         return killboards_enabled(policy)
     page = policy.get(target.key, {})
@@ -386,10 +423,8 @@ def link_url(value, policy, current='/'):
     except ValueError:
         return None
     if published(target,policy):return target.public
-    if killboards_enabled(policy) and target.key in KILLBOARD_ENTITIES and target.tab=='overview':
-        from dataclasses import replace
-        target=replace(target,tab='killboard',query='tab=killboard')
-        return target.public
+    if target.key in ENTITY_INDEX_KEYS.values() and (target.tab=='overview' or (target.key=='coalition' and target.tab=='killboard' and not parsed.query)):
+        return entity_destination(target,policy)
     return None
 
 
@@ -556,7 +591,11 @@ def read_target(private_url, source):
     params = [(k,v) for k,v in params if k != 'retry']
     path = url.path
     required = source.tab
-    if source.key == 'map':
+    if source.tab=='index':
+        kind=source.path.removeprefix('/entities/')
+        if path not in ('/api/entity-search','/api/entities/'+kind+'/recent'):
+            raise ValueError('Data endpoint unavailable.')
+    elif source.key == 'map':
         if not re.fullmatch(r'/api/map(?:/[a-zA-Z0-9_-]+)*',path):
             raise ValueError('Data endpoint unavailable.')
     elif source.key == 'tools':

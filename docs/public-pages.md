@@ -38,6 +38,16 @@ a group is managed. Opening a tab triggers that tab's normal reads/scans; top-ki
 and pilotable-ship progress continues using the existing interfaces. Running
 results are not frozen in the response cache.
 
+## Parent menus
+
+Public navigation follows the enabled children. Publishing Ships or another entity
+family automatically exposes EntitiesINTEL and that family's existing browse list.
+Only published categories appear. Map entries lead to an enabled map view.
+Publishing a tool exposes the Tools menu even if its menu-only Overview checkbox
+is off; unavailable tools remain unlinked. These parent menus do not grant access
+to other entity tabs, tools, management pages or jobs. Entity list data uses the
+same bounded cache and publication checks as other public reads.
+
 ## Server and browser cache
 
 - Admin chooses **X recent results**, default 256, range 8–4096. HTML views and

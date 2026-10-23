@@ -91,6 +91,28 @@ def main():
             fixture.enable()
             page.goto('http://publication.test/public')
             expect(page.get_by_role('searchbox',name='Search entity',exact=True)).to_have_count(0)
+            # A published child must be reachable through its parent menu.
+            from fastapi.responses import HTMLResponse
+            @fixture.client.app.get('/api/entities/ship/recent')
+            def ships():
+                return HTMLResponse('<a href="/ship/638">Raven</a><a href="/character/42">Unavailable pilot</a>')
+            fixture.enable('ship','ship:overview')
+            def entity_page(request,target):
+                if target.tab=='index':
+                    return renderer.content('entity_index.html',dict(entity_index=dict(entity_type='ship',title='Ships',description='Ships')))
+                return '<h1>Raven</h1>'
+            with patch.object(renderer,'render',side_effect=entity_page):
+                page.goto('http://publication.test/public')
+                page.get_by_role('link',name='EntitiesINTEL',exact=True).click()
+                expect(page.get_by_role('heading',name='EntitiesINTEL — Ships',exact=True)).to_be_visible()
+                page.get_by_role('link',name='Ships',exact=True).click()
+                expect(page).to_have_url('http://publication.test/public/entities/ship')
+                raven=page.locator('#entityRecentList').get_by_role('link',name='Raven',exact=True)
+                expect(raven).to_have_attribute('href','/public/ship/638')
+                expect(page.locator('#entityRecentList').get_by_role('link',name='Unavailable pilot')).to_have_count(0)
+                raven.click()
+                expect(page).to_have_url('http://publication.test/public/ship/638')
+                expect(page.get_by_role('heading',name='Raven',exact=True)).to_be_visible()
             browser.close()
         assert not errors, errors
         # Authenticated chrome polls update status; anonymous menu searches use

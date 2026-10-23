@@ -7,6 +7,7 @@ import unittest
 from unittest.mock import patch
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from fastapi.responses import HTMLResponse
 from scripts import test_killmail_forensics as f
 
 public = f.load('public_pages')
@@ -92,6 +93,50 @@ class PublicTests(unittest.TestCase):
         self.enable('character','character:killboard','kill','kill:detail')
         self.assertEqual(self.client.get('/public/character/42?tab=killboard').status_code,404)
         self.assertEqual(self.client.get('/public/kill/42').status_code,404)
+
+    def test_enabled_children_open_parent_menus_and_only_their_categories(self):
+        self.enable('ship','ship:overview')
+        home=self.client.get('/public').text
+        self.assertIn('href="/public/entities">EntitiesINTEL</a>',home)
+        self.assertNotIn('href="/public/tools">Tools</a>',home)
+        redirect=self.client.get('/public/entities',follow_redirects=False)
+        self.assertEqual(redirect.headers['location'],'/public/entities/ship')
+        self.assertEqual(self.client.get('/public/entities/ship').status_code,200)
+        self.assertEqual(self.client.get('/public/entities/character').status_code,404)
+        self.assertEqual(self.client.get('/public/entities/ship/manage').status_code,404)
+        self.enable('tools','tools:ship-analysis')
+        self.assertIn('href="/public/tools">Tools</a>',self.client.get('/public').text)
+        self.assertEqual(self.client.get('/public/tools').status_code,200)
+        self.assertEqual(self.client.get('/public/ship-analysis').status_code,200)
+        self.assertEqual(self.client.get('/public/tools/economics').status_code,404)
+        self.enable('coalition','coalition:history')
+        self.assertEqual(public.link_url('/coalition/42',public.settings()),'/public/coalition/42?tab=history')
+        self.assertEqual(self.client.get('/public/coalition/42',follow_redirects=False).headers['location'],'/public/coalition/42?tab=history')
+        self.enable('map','map:2d')
+        self.assertEqual(self.client.get('/public/entities',follow_redirects=False).headers['location'],'/public/map/eve-2d')
+        self.enable()
+        self.assertEqual(self.client.get('/public/entities').status_code,404)
+        self.assertEqual(self.client.get('/public/entities/ship').status_code,404)
+        self.assertEqual(self.client.get('/public/tools').status_code,404)
+
+    def test_entity_list_data_uses_cache_and_current_publication_links(self):
+        @self.client.app.get('/api/entities/ship/recent')
+        def recent():
+            return HTMLResponse('<a href="/ship/638">Raven</a><a href="/ship-category?tier=T2">T2</a><a href="/admin/jobs">Admin</a>')
+        @self.client.app.get('/api/entity-search')
+        def search():return {'results':[{'url':'/ship/638','label':'Raven'},{'url':'/character/42','label':'Hidden'}]}
+        self.enable('ship','ship:overview')
+        params={'source':'/entities/ship','path':'/api/entities/ship/recent'}
+        response=self.client.get('/public/read',params=params)
+        self.assertEqual(response.status_code,200,response.text)
+        self.assertIn('href="/public/ship/638"',response.text)
+        self.assertIn('href="/public/entities/ship?tier=T2"',response.text)
+        self.assertNotIn('href="/admin',response.text)
+        data=self.client.get('/public/read',params={'source':'/entities/ship','path':'/api/entity-search?q=ra'}).json()
+        self.assertEqual([item['url'] for item in data['results']],['/public/ship/638'])
+        self.assertEqual(self.client.get('/public/read',params={'source':'/entities/ship','path':'/api/entities/character/recent'}).status_code,404)
+        self.enable()
+        self.assertEqual(self.client.get('/public/read',params=params).status_code,404)
 
     def test_public_menu_search_uses_shared_results_and_only_kb_links(self):
         calls=[]
@@ -446,6 +491,9 @@ class PublicDataTests(unittest.TestCase):
         with patch.object(public,'MAX_ENTRIES',2):
             public.store(one,'one');public.store(two,'two')
             public.load(one)
+            # Make the access order deterministic on coarse filesystem clocks.
+            import os
+            os.utime(public.ROOT/('snapshot-'+one.digest+'.json'),(time.time()+1,time.time()+1))
             public.store(three,'three')
         self.assertIsNotNone(public.load(one))
         self.assertIsNone(public.load(two))
