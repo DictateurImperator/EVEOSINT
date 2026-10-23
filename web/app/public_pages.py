@@ -245,6 +245,10 @@ def settings():
 
 
 def save_settings(enabled, max_entries=None):
+    enabled=set(enabled)
+    # One master switch owns all KB access; discard obsolete per-entity switches.
+    enabled={value for value in enabled if not value.endswith(':killboard') and value not in ('kill','kill:detail')}
+    if 'killboard' in enabled:enabled.add('killboard:killboard')
     result = {}
     if max_entries is not None:
         result['_cache'] = {'max_entries':max(8,min(4096,int(max_entries)))}
@@ -264,14 +268,17 @@ KILLBOARD_ENTITIES = ('character','corporation','alliance','coalition','system',
 
 def killboards_enabled(policy):
     page=policy.get('killboard',{})
-    return bool(page.get('enabled') and 'killboard' in page.get('tabs',[]))
+    return bool(page.get('enabled'))
 
 
 def effective_policy(policy):
-    # Derived access only: never persist inherited switches into Admin settings.
-    result={key:dict(value,tabs=list(value.get('tabs',[]))) for key,value in policy.items() if key!='_cache'}
+    # Legacy individual KB switches never bypass the single master control.
+    result={key:dict(value,tabs=[tab for tab in value.get('tabs',[]) if tab!='killboard'])
+            for key,value in policy.items() if key!='_cache'}
+    result['kill']={'enabled':False,'tabs':[]}
+    result['killboard']={'enabled':killboards_enabled(policy),'tabs':[]}
     if killboards_enabled(policy):
-        for key,tab_key in [*( (key,'killboard') for key in KILLBOARD_ENTITIES),('kill','detail')]:
+        for key,tab_key in [('killboard','killboard'),*((key,'killboard') for key in KILLBOARD_ENTITIES),('kill','detail')]:
             page=result.setdefault(key,{'enabled':False,'tabs':[]})
             if not page.get('enabled'):page['tabs']=[]
             page['enabled']=True
@@ -279,9 +286,16 @@ def effective_policy(policy):
     return result
 
 
+def admin_catalog():
+    """One Killboard checkbox; other families expose only their non-KB pages."""
+    master=dict(FAMILIES['killboard'],tabs=[],reason='Opens every killboard, kill details and menu search. Filtered historical scans can be expensive.')
+    return [master,*[dict(page,tabs=[tab for tab in page['tabs'] if tab['key']!='killboard'])
+                    for page in CATALOG if page['key'] not in ('killboard','kill')]]
+
+
 def published(target, policy):
-    if killboards_enabled(policy) and ((target.key in KILLBOARD_ENTITIES and target.tab=='killboard') or (target.key=='kill' and target.tab=='detail')):
-        return True
+    if target.key=='killboard' or target.tab=='killboard' or (target.key=='kill' and target.tab=='detail'):
+        return killboards_enabled(policy)
     page = policy.get(target.key, {})
     return bool(page.get('enabled') and target.tab in page.get('tabs', []))
 

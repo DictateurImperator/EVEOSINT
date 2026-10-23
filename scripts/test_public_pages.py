@@ -50,7 +50,7 @@ class PublicTests(unittest.TestCase):
         self.assertEqual(self.client.get('/public/character/1').status_code, 404)
 
     def test_global_killboard_opens_every_entity_kb_without_other_tabs(self):
-        policy=self.enable('killboard','killboard:killboard')
+        policy=self.enable('killboard')
         self.assertIn('data-entity-search-input',self.client.get('/public').text)
         for kind in public.KILLBOARD_ENTITIES:
             with self.subTest(kind=kind):
@@ -74,6 +74,25 @@ class PublicTests(unittest.TestCase):
         self.assertEqual(self.client.get('/public/character/42?tab=killboard').status_code,404)
         self.assertEqual(self.client.get('/public/kill/42').status_code,404)
 
+    def test_one_admin_checkbox_saves_all_kb_access_and_legacy_switches_cannot_bypass_it(self):
+        with patch.object(routes,'require_login',return_value=ADMIN):
+            page=self.client.get('/admin/public-pages').text
+            import re
+            values=re.findall(r'type="checkbox" name="enabled" value="([^"]+)"',page)
+            self.assertEqual([value for value in values if value=='killboard' or value.endswith(':killboard') or value in ('kill','kill:detail')],['killboard'])
+            response=self.client.post('/admin/public-pages/settings',data={'enabled':['killboard']},follow_redirects=False)
+            self.assertEqual(response.status_code,303)
+        for kind in public.KILLBOARD_ENTITIES:
+            self.assertEqual(self.client.get('/public/'+kind+'/42?tab=killboard').status_code,200)
+        self.assertEqual(self.client.get('/public/kill/42').status_code,200)
+        self.assertTrue(public.killboards_enabled({'killboard':{'enabled':True,'tabs':[]}}))
+        legacy={'character':{'enabled':True,'tabs':['killboard']},'kill':{'enabled':True,'tabs':['detail']}}
+        self.assertFalse(public.published(public.resolve('/character/42?tab=killboard'),legacy))
+        self.assertFalse(public.published(public.resolve('/kill/42'),legacy))
+        self.enable('character','character:killboard','kill','kill:detail')
+        self.assertEqual(self.client.get('/public/character/42?tab=killboard').status_code,404)
+        self.assertEqual(self.client.get('/public/kill/42').status_code,404)
+
     def test_public_menu_search_uses_shared_results_and_only_kb_links(self):
         calls=[]
         @self.client.app.get('/api/entity-search')
@@ -83,7 +102,7 @@ class PublicTests(unittest.TestCase):
                                {'url':'/ship/638','label':'Raven'},{'url':'/admin/jobs','label':'Private'}]}
         params={'source':'/killboard','path':'/api/entity-search?q=pi&limit=6&scope=global'}
         self.assertEqual(self.client.get('/public/read',params=params).status_code,404)
-        self.enable('killboard','killboard:killboard')
+        self.enable('killboard')
         for _ in range(2):
             response=self.client.get('/public/read',params=params)
             self.assertEqual(response.status_code,200,response.text)
@@ -192,7 +211,7 @@ class PublicTests(unittest.TestCase):
         self.assertIn('Job</span>', result)
 
     def test_pagination_is_a_real_policy_checked_public_get_link(self):
-        policy = self.enable('character', 'character:killboard')
+        policy = self.enable('killboard')
         html = '<a href="#" data-killmail-page="2">Next</a>'
         self.assertIn('href="/public/character/42?page=2&amp;tab=killboard"',
                       public.sanitize(html, policy, '/character/42?tab=killboard'))
@@ -234,7 +253,9 @@ class PublicTests(unittest.TestCase):
             response = self.client.get('/admin/public-pages')
             self.assertEqual(response.status_code, 200)
             self.assertIn('character:stats', response.text)
-            self.assertIn('character:killboard', response.text)
+            self.assertNotIn('value="character:killboard"', response.text)
+            self.assertNotIn('value="killboard:killboard"',response.text)
+            self.assertNotIn('value="kill"',response.text)
             response = self.client.post('/admin/public-pages/settings',
                 data={'enabled':['character','character:stats']}, follow_redirects=False)
             self.assertEqual(response.status_code, 303)
@@ -435,7 +456,7 @@ class PublicDataTests(unittest.TestCase):
         self.assertEqual(target.source,'/leaderboard?page=21')
         target=public.resolve('/character/42?tab=killboard&page=51&builder_entity_include=both:alliance:1&builder_entity_include=victim:corporation:2')
         self.assertEqual(target.tab,'killboard')
-        policy=self.enable('character','character:killboard')
+        policy=self.enable('killboard')
         html='<form><select name="participation"><option value="kills">Kills</option></select><button type="submit">Show</button></form><button data-killmail-mode="hidden">Hidden</button>'
         result=public.sanitize(html,policy,target.source,interactive=True)
         self.assertIn('action="/public/character/42"',result)

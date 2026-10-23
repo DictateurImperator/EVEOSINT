@@ -41,7 +41,7 @@ def admin_page(request: Request):
     if redirect:
         return redirect
     context = app_context(request=request, user=user, title='EVEOSINT - Public pages', active_module='admin', active_menu_key='admin.public_pages')
-    context.update(public_catalog=public.CATALOG, policy=public.settings(), snapshots=public.entries(),
+    context.update(public_catalog=public.admin_catalog(), policy=public.settings(), snapshot_policy=public.effective_policy(public.settings()), snapshots=public.entries(),
                    prepared=_status(), timestamp=public.timestamp,
                    saved=request.query_params.get('saved') == '1', cache_limit=public.settings().get('_cache',{}).get('max_entries',public.MAX_ENTRIES))
     return templates.TemplateResponse(request=request, name='admin_public_pages.html', context=context,headers={'Cache-Control':'no-store'})
@@ -149,6 +149,7 @@ def _public_layout(request, policy=None):
         return dict(app_context(request=request, user=user, title='EVEOSINT', active_module='home',
                                 active_menu_key='home'), public_site=False)
     navigation = []
+    policy=public.effective_policy(policy or {})
     for key, label in (('killboard', 'Killboard'), ('leaderboard', 'Leaderboard'), ('superintel', 'SuperINTEL')):
         page = (policy or {}).get(key, {})
         if not page.get('enabled'):

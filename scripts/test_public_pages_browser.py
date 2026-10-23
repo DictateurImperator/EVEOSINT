@@ -73,7 +73,10 @@ def main():
             def public_search_results():
                 return {'results':[{'url':'/character/42','label':'Public Pilot','entity_type':'character',
                                     'section':'CHARACTERS','image_url':'https://images.evetech.net/characters/42/portrait?size=64'}]}
-            fixture.enable('killboard','killboard:killboard')
+            page.goto('http://publication.test/admin/public-pages')
+            expect(page.get_by_role('checkbox',name='Killboard',exact=True)).to_have_count(1)
+            page.get_by_role('checkbox',name='Killboard',exact=True).check()
+            page.get_by_role('button',name='Save publication settings').click()
             page.goto('http://publication.test/public')
             search=page.get_by_role('searchbox',name='Search entity',exact=True)
             expect(search).to_be_visible()
@@ -120,7 +123,7 @@ def navigation():
         result=dict(rows,killmail_pagination=dict(page=number,per_page=1,has_prev=number>1,
             has_next=number<2,prev_page=max(1,number-1),next_page=min(2,number+1)),killmail_participation='both')
         return HTMLResponse(f.templates.env.get_template('entity_killmails_fragment.html').render(killmail_page=result,character_id=42))
-    public.save_settings({'character','character:killboard','character:overview'})
+    public.save_settings({'killboard','character','character:overview'})
     try:
       with patch.object(renderer,'render',return_value=html),sync_playwright() as pw:
         browser=pw.chromium.launch(args=['--no-sandbox']);page=browser.new_page()

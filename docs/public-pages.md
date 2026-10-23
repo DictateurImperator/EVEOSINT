@@ -7,14 +7,16 @@ at the top right. Logged-in visitors keep the standard app menu. Existing
 ## Publication
 
 **Admin → Public pages** requires `admin.system.view`. Enable a page family and
-its desired tabs, then save. Both switches must be on. Home is public; all other
+its desired tabs, then save. Except for the single Killboard control described
+below, both page and tab switches must be on. Home is public; all other
 families/tabs default off. Character/corporation/alliance Combat stats, Top kills,
 History, Pilotable ships and Population (where supported) are selectable.
-Enabling **Killboard** and its Killboard tab also enables the menu search,
+A single **Killboard** checkbox enables the menu search,
 all character/corporation/alliance/coalition/location/ship killboards and kill
 details. Bare entity links open their killboard when no overview is published.
 This access is derived, not saved into the other switches: disabling Killboard
-removes inherited access, while independently published pages remain available.
+closes every killboard and kill detail, including any legacy individual settings.
+Other independently published tabs remain available.
 Search uses the same grouped suggestions and portraits/logos as the normal menu.
 Other entity tabs keep their own publication switches.
 
