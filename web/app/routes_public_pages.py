@@ -170,20 +170,27 @@ def _public_layout(request, policy=None, target=None):
     order={label:index for index,label in enumerate(('Home','SuperINTEL','EntitiesINTEL','Killboard','Tools','Leaderboard'))}
     navigation.sort(key=lambda item:order[item['label']])
     is_entities=target and (target.tab=='index' or target.key=='map')
-    module='entities' if is_entities else ('tools' if target and target.key=='tools' else None)
+    is_profile=target and target.entity_id and target.key in public.ENTITY_INDEX_KEYS.values()
+    module='entities' if is_entities else ('profile' if is_profile else (target.key if target and target.key in ('tools','superintel','leaderboard') else None))
     context_menu=[];context_title='Menu'
     if module:
-        configured=shared_context_menu(module,int(time.time()//60))
+        if module=='profile':
+            from .profile_menus import entity_profile_menu,coalition_profile_menu
+            items=coalition_profile_menu(target.entity_id,target.tab) if target.key=='coalition' else entity_profile_menu(dict(entity_type=target.key,entity_id=target.entity_id),target.tab)
+            configured=dict(title='Profile',items=items)
+        else:configured=shared_context_menu(module,int(time.time()//60))
         context_title=configured['title']
         for item in configured['items']:
             path=item.get('href','')
+            if module=='profile' and item.get('menu_key')=='killboard':path=path.split('?',1)[0]+'?tab=killboard'
+            if module=='profile' and item.get('menu_key')=='stats' and not public.published(public.resolve(path),raw_policy):path+='&stats_view=top-kills'
             if path=='/map':
                 destination=next((link['href'] for link in entities if link['key']=='map'),None)
             elif path.startswith('/entities/'):
                 destination=next((link['href'] for link in entities if link['href']=='/public'+path),None)
             else:destination=public.link_url(path,raw_policy)
             if not destination:continue
-            active=(target.key=='map' and path=='/map') or (target.tab=='index' and path==target.path) or (module=='tools' and destination=='/public'+target.path)
+            active=(module=='profile' and (item.get('active') or (item.get('menu_key')=='stats' and target.tab=='top-kills'))) or (target.key=='map' and path=='/map') or (target.tab=='index' and path==target.path) or (module=='tools' and destination=='/public'+target.path)
             context_menu.append(dict(item,href=destination,active=active))
     for item in navigation:
         item['active']=(item['label']=='EntitiesINTEL' and bool(is_entities)) or (item['label']=='Tools' and module=='tools') or item.get('active',False)
@@ -198,7 +205,6 @@ def _public_layout(request, policy=None, target=None):
 def _public_headers(context):
     headers = {'Cache-Control': 'no-store', 'Vary':'Cookie'}
     if context.get('public_site') and not context.get('user'):
-        headers['Cache-Control'] = f'private, max-age={public.BROWSER_MAX_AGE}, must-revalidate'
         headers['Content-Security-Policy'] = "connect-src 'self'; form-action 'self'; frame-src 'none'; object-src 'none'; base-uri 'none'"
     return headers
 

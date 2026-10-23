@@ -43,7 +43,8 @@ results are not frozen in the response cache.
 Public pages reuse the private base layout and its sidebar. The configured private
 menu labels, icons and order are reused; public access only filters items.
 This filtering applies to logged-in visitors of public URLs as well.
-There is no additional public category tab bar.
+There is no additional public tab bar. Entity profiles use the same shared
+Profile menu builder as the private routes; publication only filters its links.
 Public navigation follows explicitly enabled children. Publishing Ships or another entity
 family explicitly exposes EntitiesINTEL and that family's existing browse list.
 Only explicitly published categories appear. The Killboard master switch opens
@@ -58,20 +59,23 @@ same bounded cache and publication checks as other public reads.
 - Admin chooses **X recent results**, default 256, range 8–4096. HTML views and
   data responses share this limit. Recently accessed entries survive eviction.
 - Disk cache (including its index) is capped at 64 MiB total and 2 MiB per entry. An oversized result
-  can display without being retained. Results refresh after five minutes.
+  can display without being retained. There is no transport response-size ceiling.
+  Results refresh after five minutes.
 - A small metadata index avoids reading all cached bodies for navigation.
 - Cross-worker locks bound demand rendering to two concurrent reads and prevent
   duplicate work on the same result; busy requests can retry. Existing heavy
   tab workers retain their own concurrency limits.
-- Anonymous HTML/data responses use `private, max-age=60, must-revalidate` and an
-  ETag. Browsers can answer repeated requests locally for one minute, then use
+- HTML pages use `no-store` so navigation is rebuilt from current publication
+  settings on every visit. Data responses use `private, max-age=60, must-revalidate`
+  and an ETag. Browsers can answer repeated requests locally for one minute, then use
   conditional requests; unchanged responses return 304 without retransmitting
   the body. Logged-in page chrome uses `no-store`; public data is independent of
   the viewer's identity. Running progress responses use `no-store`.
 - Publication is checked before cache reads and again after calculations.
   Disabled pages/tabs reject direct access and their links are removed from
-  responses. A browser may retain its already-fresh page for the remaining
-  **60-second browser freshness window**; origin revocation is immediate.
+  responses. Menus are never retained in the browser HTML cache. Already-fresh data responses
+  may remain for their **60-second browser freshness window**; origin access
+  checks always use the current policy.
 
 Cache files live under `data/public_pages/`. There are no new fact/analytics
 result tables and no daily/full-universe precomputation. Cache eviction removes
@@ -118,3 +122,7 @@ page 2/back navigation, standard zone filters and cached result reuse.
 
 The native Chromium cache test uses a real local HTTP fixture (no interception):
 the second read makes no server request, and forced revalidation reads no DB again.
+
+The shared private ship-tree template trims loop-generated whitespace. Its full
+823-ship SDE list renders around 400 KiB rather than 63 MiB, preserving every
+ship, classification, image and link. Public and private use this same template.

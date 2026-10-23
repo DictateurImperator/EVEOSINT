@@ -476,7 +476,7 @@ class PublicHTML(HTMLParser):
                 attrs['href'] = href
             else:
                 # Suppress disabled navigation tabs entirely; preserve names/logos elsewhere.
-                if 'nav-link' in attrs.get('class', '').split() or 'context-link' in attrs.get('class', '').split():
+                if {'nav-link','context-link','btn'} & set(attrs.get('class','').split()):
                     drop = True
                 output_tag = 'span'
                 attrs.pop('href', None)

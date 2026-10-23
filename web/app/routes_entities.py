@@ -1,3 +1,4 @@
+from .profile_menus import entity_profile_menu, coalition_profile_menu
 import json
 import logging
 from datetime import date, datetime, timedelta, timezone
@@ -3701,45 +3702,7 @@ def coalition_profile(request: Request, coalition_id: int):
         "image_url": coalition.get("logo_url"),
     }
 
-    base_url = f"/coalition/{int(coalition_id)}"
-    profile_menu = [
-        {
-            "id": None,
-            "menu_key": "killboard",
-            "label": "Killboard",
-            "href": base_url,
-            "icon": "☠",
-            "permission_key": "entities.view",
-            "active": requested_tab == "killboard",
-        },
-        {
-            "id": None,
-            "menu_key": "population",
-            "label": "Population",
-            "href": f"{base_url}?tab=population",
-            "icon": "📈",
-            "permission_key": "entities.view",
-            "active": requested_tab == "population",
-        },
-        {
-            "id": None,
-            "menu_key": "history",
-            "label": "History",
-            "href": f"{base_url}?tab=history",
-            "icon": "🕘",
-            "permission_key": "entities.view",
-            "active": requested_tab == "history",
-        },
-        {
-            "id": None,
-            "menu_key": "pilotable-ships",
-            "label": "Pilotable Ships",
-            "href": f"{base_url}?tab=pilotable-ships",
-            "icon": "🚀",
-            "permission_key": "entities.view",
-            "active": requested_tab == "pilotable-ships",
-        },
-    ]
+    profile_menu = coalition_profile_menu(coalition_id, requested_tab)
 
     context = app_context(
         request=request,
@@ -5423,80 +5386,7 @@ def entity_profile(request: Request, entity_type: str, entity_id: int):
         except EntityError as exc:
             return _entity_route_error_response(request, exc)
 
-    profile_menu = []
-    if profile and profile.get("entity_type") == "system":
-        base_url = f"/system/{profile['entity_id']}"
-        profile_menu = [
-            {
-                "id": None,
-                "menu_key": "killboard",
-                "label": "Killboard",
-                "href": base_url,
-                "icon": "☠",
-                "permission_key": "entities.view",
-                "active": requested_tab == "killboard",
-            },
-            {
-                "id": None,
-                "menu_key": "history",
-                "label": "History",
-                "href": f"{base_url}?tab=history",
-                "icon": "🕘",
-                "permission_key": "entities.view",
-                "active": requested_tab == "history",
-            },
-        ]
-    elif profile and profile.get("entity_type") in {"character", "corporation", "alliance"}:
-        base_url = f"/{profile['entity_type']}/{profile['entity_id']}"
-        profile_menu = [
-            {
-                "id": None,
-                "menu_key": "killboard",
-                "label": "Killboard",
-                "href": base_url,
-                "icon": "☠",
-                "permission_key": "entities.view",
-                "active": requested_tab == "killboard",
-            },
-        ]
-        if profile.get("entity_type") in {"alliance", "corporation"}:
-            profile_menu.append({
-                "id": None,
-                "menu_key": "population",
-                "label": "Population",
-                "href": f"{base_url}?tab=population",
-                "icon": "📈",
-                "permission_key": "entities.view",
-                "active": requested_tab == "population",
-            })
-        profile_menu.insert(1, {
-            "id": None,
-            "menu_key": "stats",
-            "label": "Combat stats",
-            "href": f"{base_url}?tab=stats",
-            "icon": "▥",
-            "permission_key": "entities.view",
-            "active": requested_tab == "stats",
-        })
-        if profile.get("entity_type") in {"character", "corporation", "alliance"}:
-            profile_menu.append({
-                "id": None,
-                "menu_key": "history",
-                "label": "History",
-                "href": f"{base_url}?tab=history",
-                "icon": "🕘",
-                "permission_key": "entities.view",
-                "active": requested_tab == "history",
-            })
-        profile_menu.append({
-            "id": None,
-            "menu_key": "pilotable-ships",
-            "label": "Pilotable Ships",
-            "href": f"{base_url}?tab=pilotable-ships",
-            "icon": "🚀",
-            "permission_key": "entities.view",
-            "active": requested_tab == "pilotable-ships",
-        })
+    profile_menu = entity_profile_menu(profile, requested_tab)
 
     location_previews = {}
     if profile and profile.get("entity_type") in {"system", "constellation", "region"}:

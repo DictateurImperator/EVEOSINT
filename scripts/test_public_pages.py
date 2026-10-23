@@ -72,7 +72,7 @@ class PublicTests(unittest.TestCase):
                 self.assertTrue(public.published(target,policy))
                 response=self.client.get(target.public)
                 self.assertEqual(response.status_code,200,response.text)
-                self.assertIn('>Killboard</a>',response.text)
+                self.assertIn('href="/public/killboard"',response.text)
                 self.assertEqual(public.link_url('/'+kind+'/42',policy),target.public)
                 if kind!='coalition':
                     bare=self.client.get('/public/'+kind+'/42',follow_redirects=False)
@@ -106,6 +106,45 @@ class PublicTests(unittest.TestCase):
         self.enable('character','character:killboard','kill','kill:detail')
         self.assertEqual(self.client.get('/public/character/42?tab=killboard').status_code,404)
         self.assertEqual(self.client.get('/public/kill/42').status_code,404)
+
+    def test_profile_uses_private_sidebar_and_no_public_tab_bar(self):
+        from html.parser import HTMLParser
+        class Sidebar(HTMLParser):
+            def __init__(self):super().__init__();self.links=[]
+            def handle_starttag(self,tag,attrs):
+                attrs=dict(attrs)
+                if tag=='a' and 'context-link' in attrs.get('class',''):self.links.append(attrs['href'])
+        self.enable('character','character:stats','character:history','killboard')
+        response=self.client.get('/public/character/42?tab=stats')
+        parser=Sidebar();parser.feed(response.text)
+        self.assertEqual(parser.links,['/public/character/42?tab=killboard','/public/character/42?tab=stats','/public/character/42?tab=history'])
+        self.assertIn('<div class="context-title">Profile</div>',response.text)
+        self.assertNotIn('aria-label="Public page tabs"',response.text)
+        self.assertNotIn('Combat stats · monthly history</a>',response.text)
+        self.assertEqual(response.headers['cache-control'],'no-store')
+        self.enable('character','character:top-kills')
+        response=self.client.get('/public/character/42?tab=stats&stats_view=top-kills')
+        parser=Sidebar();parser.feed(response.text)
+        self.assertEqual(parser.links,['/public/character/42?stats_view=top-kills&tab=stats'])
+
+    def test_shared_ship_template_renders_each_ship_once_without_megabytes_of_whitespace(self):
+        ships=[dict(entity_type='ship',entity_id=i+1,name='Ship '+str(i),url='/ship/'+str(i+1),image_url='',
+                    faction_name='Faction '+str(i%4),faction_logo_url='',ship_size='Frigate',ship_display_size='S',
+                    ship_tree_row='combat',ship_tier='T1',group_name='Frigate') for i in range(823)]
+        html=f.templates.env.get_template('entity_recent_fragment.html').render(entity_index=dict(entity_type='ship'),recent_entities=ships)
+        self.assertEqual(html.count('class="ship-tree-link"'),823)
+        self.assertLess(len(html.encode()),2*1024*1024)
+        for ship in ships:self.assertEqual(html.count('href="'+ship['url']+'"'),1)
+
+    def test_large_public_response_is_displayed_without_a_size_ceiling(self):
+        size=9*1024*1024
+        @self.client.app.get('/api/entities/ship/recent')
+        def large():return HTMLResponse('x'*size)
+        self.enable('ship','ship:overview')
+        response=self.client.get('/public/read',params={'source':'/entities/ship','path':'/api/entities/ship/recent'})
+        self.assertEqual(response.status_code,200)
+        self.assertEqual(len(response.content),size)
+        self.assertFalse(public.entries()) # Oversized responses display without filling the result cache.
 
     def test_public_menus_use_private_shell_and_hide_disabled_items_even_when_logged_in(self):
         for user in (None,ADMIN):
@@ -208,12 +247,12 @@ class PublicTests(unittest.TestCase):
         self.assertEqual(self.renderer.call_count,1)
         second=self.client.get('/public/leaderboard')
         self.assertEqual(self.renderer.call_count,1)
-        self.assertIn('private, max-age=60',second.headers['cache-control'])
-        third=self.client.get('/public/leaderboard',headers={'If-None-Match':second.headers['etag']})
-        self.assertEqual(third.status_code,304)
-        self.assertEqual(third.content,b'')
+        self.assertEqual(second.headers['cache-control'],'no-store')
+        third=self.client.get('/public/leaderboard',headers={'If-None-Match':'"old-page"'})
+        self.assertEqual(third.status_code,200)
+        self.assertEqual(self.renderer.call_count,1)
         self.enable()
-        self.assertEqual(self.client.get('/public/leaderboard',headers={'If-None-Match':second.headers['etag']}).status_code,404)
+        self.assertEqual(self.client.get('/public/leaderboard').status_code,404)
 
     def test_cached_links_revoke_immediately_without_mutating_source(self):
         self.enable('character', 'character:overview', 'character:stats', 'leaderboard', 'leaderboard:character')

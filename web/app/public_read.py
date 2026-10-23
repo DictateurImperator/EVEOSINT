@@ -57,8 +57,6 @@ async def read_get(app, url, accept='*/*', *, method='GET', request_body=b''):
             headers={k.decode().lower():v.decode() for k,v in message.get('headers',[])}
         elif message['type']=='http.response.body':
             body.extend(message.get('body',b''))
-            if len(body)>8*1024*1024:
-                raise ValueError('Public data response exceeds 8 MiB.')
             if not message.get('more_body',False):complete.set()
 
     await app(scope,receive,send)
