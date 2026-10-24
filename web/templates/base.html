@@ -629,6 +629,7 @@
 
   <footer class="legal-notice">
     All EVE related materials are property of <a href="https://fenriscreations.com/" target="_blank" rel="noopener noreferrer">Fenris Creation</a>.
+    <span class="ms-2"><a href="/public/legal">Legal &amp; Privacy</a></span>
   </footer>
 
   {% if not public_site %}
@@ -760,7 +761,8 @@
 
   </script>
 {% if not public_site or public_search %}<script>{% include "topbar_entity_search.js" %}</script>{% endif %}
-{% if request.url.path == '/public' or request.url.path.startswith('/public/') %}
+{% if (request.url.path == '/public' or request.url.path.startswith('/public/')) and not public_notice %}
+<div class="small text-center p-2"><a href="/public/access-required">Privacy and security</a></div>
 <script>
 (() => {
   const ping = () => {

@@ -20,6 +20,9 @@ class TrafficTests(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.root = patch.object(traffic,'ROOT',Path(self.tmp.name));self.root.start()
         traffic.set_googlebot_blocked(True)
+        from importlib import import_module
+        self.security=import_module(f.PACKAGE+'.public_security')
+        self.security._clients.clear()
         self.geo = patch.object(traffic.traffic_countries,'ensure_database');self.geo.start()
         app = FastAPI()
         app.middleware('http')(traffic.traffic_middleware)
@@ -36,7 +39,8 @@ class TrafficTests(unittest.TestCase):
         @app.get('/private')
         def private():
             return HTMLResponse('Private')
-        self.client = TestClient(app)
+        self.client = TestClient(app,client=('8.8.8.8',5000))
+        self.client.cookies.set(traffic.ACCESS_COOKIE,traffic.access_choice('accepted'))
 
     def tearDown(self):
         self.geo.stop();self.root.stop();self.tmp.cleanup()
@@ -55,21 +59,21 @@ class TrafficTests(unittest.TestCase):
         self.assertEqual(s['summary']['errors'],1)
         self.assertEqual([(p['views'],p['unique_visitors']) for p in s['pages']],[(2,1),(1,1)])
         self.client.cookies.clear();self.client.get('/public/character/1')
-        self.assertEqual(traffic.snapshot()['summary']['unique_visitors'],2)
+        self.assertEqual(traffic.snapshot()['summary']['unique_visitors'],1)
         self.assertEqual(sum(row['kind']=='data' for row in s['recent']),1)
 
     def test_separate_utc_days_and_retention(self):
         now=time.time();yesterday=now-86400
-        traffic.record('/public/character/1','page',200,5,'a'*32,now=yesterday)
-        traffic.record('/public/character/1','page',200,8,'a'*32,now=now)
+        traffic.record('/public/character/1','page',200,5,'a'*32,now=yesterday,client_ip='8.8.8.8')
+        traffic.record('/public/character/1','page',200,8,'a'*32,now=now,client_ip='8.8.8.8')
         self.assertEqual(traffic.snapshot()['summary']['unique_visitors'],1)
         day=datetime.fromtimestamp(yesterday,timezone.utc).strftime('%Y-%m-%d')
         self.assertEqual(traffic.snapshot(day)['summary']['unique_visitors'],1)
         self.assertEqual(len(traffic.snapshot()['days']),2)
-        traffic.record('/public/old','page',200,5,'a'*32,now=now-40*86400)
+        traffic.record('/public/old','page',200,5,'a'*32,now=now-40*86400,client_ip='8.8.8.8')
         # Force periodic cleanup on the next current request.
         with traffic.connection() as c:c.execute("DELETE FROM metadata WHERE key='cleaned'")
-        traffic.record('/public/character/1','page',200,5,'a'*32,now=now)
+        traffic.record('/public/character/1','page',200,5,'a'*32,now=now,client_ip='8.8.8.8')
         self.assertEqual(len(traffic.snapshot()['days']),2)
 
     def test_presence_same_browser_deduplicates_and_expires(self):
@@ -83,7 +87,7 @@ class TrafficTests(unittest.TestCase):
         self.client.post('/public/traffic/presence',headers=headers)
         self.assertEqual(traffic.snapshot()['summary']['active'],1)
         self.assertEqual(len(traffic.snapshot()['active']),2)
-        with traffic.connection() as c:c.execute('UPDATE presence SET seen=?',(time.time()-91,))
+        with traffic.connection() as c:c.execute('UPDATE ip_presence SET seen=?',(time.time()-91,))
         self.assertEqual(traffic.snapshot()['summary']['active'],0)
         headers['origin']='https://foreign.example'
         self.assertEqual(self.client.post('/public/traffic/presence',headers=headers).status_code,403)
@@ -109,7 +113,7 @@ class TrafficTests(unittest.TestCase):
         self.client.get('/public/character/1?q=password')
         with traffic.connection() as c:
             dump='\n'.join(c.iterdump())
-        self.assertNotIn(self.client.cookies.get(traffic.COOKIE),dump)
+        self.assertNotIn(self.client.cookies.get(traffic.ACCESS_COOKIE),dump)
         self.assertNotIn('password',dump)
 
     def test_all_real_public_route_paths_keep_their_identity(self):
@@ -158,11 +162,11 @@ class TrafficTests(unittest.TestCase):
         self.assertNotIn('not-for-logs',str(row))
 
     def test_existing_traffic_records_are_preserved_and_details_are_bounded(self):
-        traffic.record('/public/character/1','page',200,5,'a'*32)
+        traffic.record('/public/character/1','page',200,5,'a'*32,client_ip='8.8.8.8')
         self.assertIsNone(traffic.snapshot()['recent'][0]['target'])
         details=dict(target='/public/wp-login.php',method='GET',client='curl',signal='Scanner-like path')
         for _ in range(1005):
-            traffic.record('/public/other','data',404,1,details=details)
+            traffic.record('/public/other','data',404,1,details=details,client_ip='8.8.8.8')
         with traffic.connection() as c:
             self.assertEqual(c.execute('SELECT COUNT(*) FROM request_details').fetchone()[0],1000)
         self.assertEqual(traffic.snapshot()['summary']['requests'],1006)
@@ -178,7 +182,7 @@ class TrafficTests(unittest.TestCase):
             c.executemany('INSERT INTO recent(at,page,kind,status,elapsed) VALUES (?,?,?,?,?)',
                           [(time.time(),'/public','page',200,1)]*1010)
             c.execute("INSERT INTO recent_countries SELECT id,'FR' FROM recent")
-        traffic.record('/public','page',200,1)
+        traffic.record('/public','page',200,1,client_ip='8.8.8.8')
         with traffic.connection() as c:
             self.assertEqual(c.execute('SELECT COUNT(*) FROM recent').fetchone()[0],1000)
             self.assertLessEqual(c.execute('SELECT COUNT(*) FROM recent_countries').fetchone()[0],1000)
@@ -203,7 +207,7 @@ class TrafficTests(unittest.TestCase):
         handler = AsyncMock()
         self.assertEqual(asyncio.run(traffic.traffic_middleware(request,handler)).status_code,403)
         handler.assert_not_called()
-        self.assertEqual(self.client.get('/private',headers={'user-agent':'Googlebot'}).status_code,200)
+        self.assertEqual(self.client.get('/private',headers={'user-agent':'Googlebot'}).status_code,403)
         for agent in ('Safari','bingbot','Mozilla/5.0'):
             self.assertEqual(self.client.get('/public/character/1',headers={'user-agent':agent}).status_code,200)
 
@@ -218,11 +222,7 @@ class TrafficTests(unittest.TestCase):
             self.assertEqual(self.client.post(url,json={'blocked':False},headers={'origin':'https://other.example'}).status_code,403)
             for value in ({'blocked':'false'},[],{}):
                 self.assertEqual(self.client.post(url,json=value,headers=headers).status_code,400)
-            self.assertEqual(self.client.post(url,json={'blocked':False},headers=headers).status_code,200)
-            self.assertFalse(traffic.googlebot_blocked())
-            self.assertFalse(self.client.get('/admin/public-traffic/data').json()['block_googlebot'])
-            # Indexing permission never permits an uncached/unpublished page.
-            self.assertEqual(self.client.get('/public/character/1',headers={'user-agent':'Googlebot'}).status_code,404)
+            self.assertEqual(self.client.post(url,json={'blocked':False},headers=headers).status_code,409)
             self.assertEqual(self.client.post(url,json={'blocked':True},headers=headers).status_code,200)
             self.assertEqual(self.client.get('/public/character/1',headers={'user-agent':'Googlebot'}).status_code,403)
         self.assertTrue((traffic.ROOT/'crawler_policy.json').exists())
@@ -239,10 +239,10 @@ class TrafficTests(unittest.TestCase):
             self.assertEqual(response.headers['cache-control'],'public, max-age=300')
             parser=RobotFileParser();parser.parse(response.text.splitlines())
             for path in ('/public','/public/','/public/character/1'):
-                self.assertEqual(parser.can_fetch('Googlebot',path),not blocked)
+                self.assertEqual(parser.can_fetch('Googlebot',path),False)
                 self.assertTrue(parser.can_fetch('bingbot',path))
             self.assertFalse(parser.can_fetch('Googlebot','/public/read'))
-            self.assertTrue(parser.can_fetch('Googlebot','/robots.txt'))
+            self.assertFalse(parser.can_fetch('Googlebot','/robots.txt'))
         self.assertEqual(traffic.snapshot()['summary']['requests'],0)
 
     def test_cache_indexing_default_preserves_explicit_block_and_fail_closed(self):
@@ -266,13 +266,13 @@ class TrafficTests(unittest.TestCase):
         self.assertEqual(countries['FR']['views'],2)
         self.assertEqual(countries['DE']['unique_visitors'],1)
         self.assertEqual(countries['DE']['views'],1)
-        self.assertEqual(countries['DE']['requests'],3)
-        self.assertEqual(countries['DE']['blocked'],1)
+        self.assertEqual(countries['DE']['requests'],2)
+        self.assertEqual(countries['DE']['blocked'],0)
         self.assertEqual(s['summary']['unique_visitors'],1)
         self.assertEqual(s['recent'][0]['country'],'DE')
         self.assertEqual(self.client.get('/admin/public-traffic/data').status_code,403)
         with traffic.connection() as c:
-            self.assertEqual(c.execute('SELECT COUNT(*) FROM country_visitors').fetchone()[0],2)
+            self.assertEqual(c.execute('SELECT COUNT(*) FROM ip_country_visitors').fetchone()[0],2)
             # Only country codes are stored, never client addresses.
             columns={r[1] for r in c.execute('PRAGMA table_info(recent_countries)')}
             self.assertEqual(columns,{'id','country'})
@@ -297,12 +297,116 @@ class TrafficTests(unittest.TestCase):
 
     def test_country_metrics_follow_thirty_day_retention(self):
         details=dict(target='/public',method='GET',client='Safari',signal='Unclassified',country='FR')
-        traffic.record('/public','page',200,1,'a'*32,now=time.time()-40*86400,details=details)
+        traffic.record('/public','page',200,1,'a'*32,now=time.time()-40*86400,details=details,client_ip='8.8.8.8')
         with traffic.connection() as c:c.execute("DELETE FROM metadata WHERE key='cleaned'")
-        traffic.record('/public','page',200,1,'a'*32,details=dict(details,country='DE'))
+        traffic.record('/public','page',200,1,'a'*32,details=dict(details,country='DE'),client_ip='8.8.8.8')
         with traffic.connection() as c:
             self.assertEqual([r[0] for r in c.execute('SELECT country FROM country_requests')],['DE'])
-            self.assertEqual([r[0] for r in c.execute('SELECT country FROM country_visitors')],['DE'])
+            self.assertEqual([r[0] for r in c.execute('SELECT country FROM ip_country_visitors')],['DE'])
+
+    def test_ip_uniques_independent_of_cookie_and_daily_keys(self):
+        self.client.get('/public/character/1')
+        self.client.cookies.clear()
+        self.client.cookies.set(traffic.ACCESS_COOKIE,traffic.access_choice('accepted'))
+        self.client.get('/public/character/1')
+        self.assertEqual(traffic.snapshot()['summary']['unique_visitors'],1)
+        second=TestClient(self.client.app,client=('1.1.1.1',5010))
+        second.cookies.set(traffic.ACCESS_COOKIE,traffic.access_choice('accepted'))
+        second.get('/public/character/1')
+        self.assertEqual(traffic.snapshot()['summary']['unique_visitors'],2)
+        today=datetime.now(timezone.utc).strftime('%Y-%m-%d')
+        a=traffic.ip_visitor_id('8.8.8.8',today)
+        self.assertEqual(a,traffic.ip_visitor_id('::ffff:8.8.8.8',today))
+        with traffic.connection() as c:
+            pseudonyms=[r[0] for r in c.execute('SELECT visitor FROM ip_visitors')]
+            self.assertTrue(all(isinstance(v,bytes) and len(v)==32 for v in pseudonyms))
+            self.assertEqual(c.execute('SELECT COUNT(*) FROM security_ips').fetchone()[0],0)
+
+    def test_country_page_rankings_are_daily_indexed_and_not_recent_sample(self):
+        with patch.object(traffic.traffic_countries,'country',return_value='FR'):
+            self.client.get('/public/character/1');self.client.get('/public/character/1')
+        with patch.object(traffic.traffic_countries,'country',return_value='DE'):
+            self.client.get('/public/character/2')
+        self.assertEqual([(r['page'],r['views'],r['unique_visitors']) for r in traffic.snapshot(country='fr')['pages']],
+                         [('/public/character/1',2,1)])
+        self.assertEqual(traffic.snapshot(country='DE')['pages'][0]['page'],'/public/character/2')
+        self.assertEqual(traffic.snapshot(country='US')['pages'],[])
+        with traffic.connection() as c:c.execute('DELETE FROM recent')
+        self.assertEqual(traffic.snapshot(country='FR')['pages'][0]['views'],2)
+        with patch.object(routes,'require_login',return_value=ADMIN):
+            self.assertEqual(self.client.get('/admin/public-traffic/data?country=fr').json()['country'],'FR')
+            self.assertEqual(self.client.get('/admin/public-traffic/data?country=invalid').status_code,400)
+
+    def test_notice_accept_decline_tamper_and_expiry(self):
+        self.client.cookies.clear()
+        response=self.client.get('/public/character/1')
+        self.assertIn('Privacy, cookies and security',response.text)
+        self.assertEqual(traffic.snapshot()['summary']['views'],0)
+        self.assertEqual(self.client.get('/public/read').status_code,403)
+        url='/public/access/choice';headers={'origin':'http://testserver'}
+        self.assertEqual(self.client.post(url,json={'choice':'accepted'}).status_code,403)
+        self.assertEqual(self.client.post(url,json={'choice':'invalid'},headers=headers).status_code,400)
+        response=self.client.post(url,json={'choice':'declined'},headers=headers)
+        self.assertEqual(response.status_code,204)
+        self.assertIn('Privacy, cookies and security',self.client.get('/public/access-required').text)
+        self.assertEqual(self.client.get('/public/character/1').text,'<h1>Public</h1>')
+        self.assertEqual(traffic.snapshot()['summary']['views'],0)
+        with traffic.connection() as c:self.assertEqual(c.execute('SELECT COUNT(*) FROM security_ips').fetchone()[0],0)
+        response=self.client.post(url,json={'choice':'accepted'},headers=headers)
+        self.assertIn('HttpOnly',response.headers['set-cookie'])
+        self.assertEqual(self.client.get('/public/character/1').text,'<h1>Public</h1>')
+        for value in ('accepted.1.1.invalid',traffic.access_choice('accepted',time.time()-181*86400)):
+            self.client.cookies.set(traffic.ACCESS_COOKIE,value)
+            self.assertIn('siteNotice',self.client.get('/public/character/1').text)
+
+    def test_security_ip_block_enforced_and_purge_preserves_only_active_blocks(self):
+        self.client.get('/public/character/1')
+        traffic.record('/public/character/1','blocked',429,0,client_ip='8.8.8.8',security_incident=True)
+        url='/admin/public-traffic/ip-block';headers={'origin':'http://testserver'}
+        self.assertEqual(self.client.post(url,json={'ip':'8.8.8.8','blocked':True,'reason':'abuse'},headers=headers).status_code,403)
+        with patch.object(routes,'require_login',return_value=ADMIN):
+            self.assertEqual(self.client.post(url,json={'ip':'8.8.8.8','blocked':True,'reason':''},headers=headers).status_code,400)
+            self.assertEqual(self.client.post(url,json={'ip':'8.8.8.8','blocked':True,'reason':'abuse'},headers=headers).status_code,200)
+        self.assertEqual(self.client.get('/public/character/1').status_code,403)
+        with traffic.connection() as c:
+            c.execute('UPDATE security_ips SET last_seen=?',(time.time()-40*86400,))
+            c.execute('INSERT INTO security_ips(ip,first_seen,last_seen) VALUES (?,?,?)',('1.1.1.1',0,time.time()-40*86400))
+        traffic.purge()
+        with traffic.connection() as c:self.assertEqual([r[0] for r in c.execute('SELECT ip FROM security_ips')],['8.8.8.8'])
+        with patch.object(routes,'require_login',return_value=ADMIN):
+            self.assertEqual(self.client.post(url,json={'ip':'8.8.8.8','blocked':False},headers=headers).status_code,200)
+        traffic.purge()
+        with traffic.connection() as c:self.assertEqual(c.execute('SELECT COUNT(*) FROM security_ips').fetchone()[0],0)
+
+    def test_abuse_detection_stores_and_blocks_only_after_threshold(self):
+        self.client.cookies.set(traffic.ACCESS_COOKIE,traffic.access_choice('declined'))
+        with patch.object(self.security,'RATE_LIMIT',2):
+            self.assertEqual(self.client.get('/public/character/1').status_code,200)
+            self.assertEqual(self.client.get('/public/character/1').status_code,200)
+            with traffic.connection() as c:self.assertEqual(c.execute('SELECT COUNT(*) FROM security_ips').fetchone()[0],0)
+            self.assertEqual(self.client.get('/public/character/1').status_code,429)
+            with traffic.connection() as c:
+                row=c.execute('SELECT ip,blocked,reason FROM security_ips').fetchone()
+                self.assertEqual(row['ip'],'8.8.8.8');self.assertEqual(row['blocked'],1)
+        self.assertEqual(self.client.get('/public/character/1').status_code,403)
+
+    def test_legal_page_public_before_choice_after_refusal_and_when_blocked(self):
+        self.client.cookies.clear()
+        for path in ('/legal','/public/legal'):
+            response=self.client.get(path)
+            self.assertEqual(response.status_code,200)
+            self.assertIn('Legal &amp; Privacy',response.text)
+            self.assertIn('If we detect abusive activity',response.text)
+            self.assertIn('Change analytics preferences',response.text)
+            self.assertNotIn('<dialog',response.text)
+            self.assertNotIn('set-cookie',response.headers)
+        self.assertEqual(traffic.snapshot()['summary']['requests'],0)
+        self.client.cookies.set(traffic.ACCESS_COOKIE,traffic.access_choice('declined'))
+        self.assertEqual(self.client.get('/public/legal').status_code,200)
+        traffic.record('/public','blocked',429,0,client_ip='8.8.8.8',security_incident=True)
+        with traffic.connection() as conn:conn.execute('UPDATE security_ips SET blocked=1')
+        self.assertEqual(self.client.get('/public/character/1').status_code,403)
+        self.assertEqual(self.client.get('/public/legal').status_code,200)
 
 
 if __name__ == '__main__':unittest.main()

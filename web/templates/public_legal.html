@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="content-card p-4">
+  <h1 class="h3">Legal &amp; Privacy</h1>
+  <p class="muted-line">EVEOSINT · Independently operated EVE Online community website.</p>
+  <h2 class="h5 mt-4">Privacy, cookies and security</h2>
+  {% include "_public_privacy_text.html" %}
+  <a class="btn btn-outline-info" href="/public/access-required">Change analytics preferences</a>
+  <h2 class="h5 mt-4">What is collected and why</h2>
+  <p>Optional audience measurement relies on your consent. It covers the pages requested, request times, approximate country, response status and timing, a fixed browser or crawler family label, and a daily IP pseudonym. A unique IP is not necessarily a unique person: people can share an address or use multiple addresses. Raw User-Agent headers, search strings and public group access tokens are excluded from these statistics.</p>
+  <p>Country lookups use a local database. Visitor IP addresses are not sent to an external geolocation API. <a href="https://db-ip.com" target="_blank" rel="noopener noreferrer">IP Geolocation by DB-IP</a>, licensed under CC BY 4.0.</p>
+  <p>To detect excessive requests, bounded request counters are maintained in server memory. Routine requests do not create IP security records. Detected abuse can create a security record containing the IP address, incident timestamps and blocking reason. Security processing is separate from optional analytics.</p>
+  <h2 class="h5 mt-4">Retention and access</h2>
+  <p>Daily audience statistics and pseudonymous unique-IP records are retained for up to 30 days. Recent request details are limited to the latest 1,000 entries and expire within 30 days. Analytics identifiers change daily and previous daily keys are removed. The cookie that remembers your analytics choice expires after 180 days, whether you accept or decline.</p>
+  <p>Security records expire after 30 days without further incidents. Addresses with an active security block are retained while the block is active. After unblocking, the ordinary retention rule applies. Automated cleanup runs regularly, including when no visitors are using the site.</p>
+  <p>Traffic and security records are accessible only to authorized site administrators. Routine site access logging is disabled at the web server and application access logger; incident records are maintained separately. Historical technical logs created before this policy took effect follow their existing rotation.</p>
+  <h2 class="h5 mt-4">Your choices and rights</h2>
+  <p>You can accept or decline analytics and withdraw consent at any time using the preferences link above. Declining does not restrict access to the website. Withdrawal stops future audience measurement; it does not invalidate processing already carried out on the basis of consent.</p>
+  <p>Depending on the applicable conditions, you have rights of access, rectification, erasure and restriction of processing, data portability, and the right to object to processing based on legitimate interests. You may lodge a complaint with a data protection authority, including the <a href="https://www.cnil.fr/en" target="_blank" rel="noopener noreferrer">CNIL</a>.</p>
+  <h2 class="h5 mt-4">EVE Online information</h2>
+  <p>EVEOSINT presents observable game information and derived analyses. Coverage, delays and inference rules may affect results. This privacy notice describes website audience measurement and security; accounts and game-data features may involve additional processing.</p>
+</section>
+{% endblock %}

@@ -36,6 +36,8 @@ def main():
     # This hook is reached only through its existing, checked-out setup step.
     from app.deployment_guard import prepare_if_updater
     prepare_if_updater(Path.home() / "eveosint")
+    from app.public_security import install_logging_if_updater
+    install_logging_if_updater()
     with db() as conn:
         with conn.cursor() as cur:
             cur.execute(f"CREATE SCHEMA IF NOT EXISTS {SCHEMA};")

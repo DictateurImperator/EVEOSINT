@@ -148,12 +148,14 @@ class GuardTests(unittest.TestCase):
             def execute(self,*args):pass
             def commit(self):pass
         app=types.ModuleType('app');app.__path__=[]
-        with patch.dict(sys.modules,{'app':app,'app.deployment_guard':guard}), \
+        privacy=types.ModuleType('app.public_security')
+        privacy.install_logging_if_updater=lambda:steps.append('privacy')
+        with patch.dict(sys.modules,{'app':app,'app.deployment_guard':guard,'app.public_security':privacy}), \
              patch.object(Path,'read_text',return_value='0::/system.slice/eveosint-code-update.service'), \
              patch.object(guard,'prepare',side_effect=lambda root:steps.append('maintenance')), \
              patch.object(module,'db',side_effect=lambda:steps.append('schema') or Connection()),patch('builtins.print'):
             module.main()
-        self.assertEqual(steps,['maintenance','schema'])
+        self.assertEqual(steps,['maintenance','privacy','schema'])
 
     def test_existing_setup_hook_bootstraps_old_updater_and_timeout_stays_thirty(self):
         setup=(Path(__file__).resolve().parents[1]/'web/setup_acl.py').read_text()

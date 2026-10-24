@@ -257,7 +257,10 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
 
 @app.on_event("startup")
 def startup():
+    logging.getLogger('uvicorn.access').disabled=True
     ensure_tables()
+    from .public_traffic import start_cleanup
+    start_cleanup()
 
 
 app.include_router(login_router)

@@ -52,49 +52,24 @@ class PublicTests(unittest.TestCase):
     def enable(self, *values):
         return public.save_settings(set(values))
 
-    def test_googlebot_shared_pages_cache_only_and_revocation(self):
+    def test_emergency_block_includes_cached_pages_and_googleother(self):
         traffic=f.load('public_traffic')
-        with patch.object(traffic,'ROOT',Path(self.temp.name)/'traffic'), patch.object(f.package,'public_pages',public,create=True):
-            traffic.set_googlebot_blocked(False)
+        with patch.object(traffic,'ROOT',Path(self.temp.name)/'traffic'):
+            self.client.cookies.set(traffic.ACCESS_COOKIE,traffic.access_choice('accepted'))
             self.client.app.middleware('http')(traffic.traffic_middleware)
-            self.enable('character','character:overview','leaderboard','leaderboard:character')
-            headers={'user-agent':'Googlebot/2.1'}
-            self.assertEqual(self.client.get('/public',headers=headers).status_code,200)
-            self.assertEqual(self.client.get('/public/character/1',headers=headers).status_code,503)
-            self.renderer.assert_not_called()
-            # A human warms the same bounded cache using the existing renderer.
-            self.assertEqual(self.client.get('/public/character/1').status_code,200)
-            self.assertEqual(self.renderer.call_count,1)
+            self.enable('character','character:overview')
             target=public.resolve('/character/1')
-            cache_path=public.ROOT/('snapshot-'+target.digest+'.json')
-            value=json.loads(cache_path.read_text());value['created']=time.time()-86400
-            cache_path.write_text(json.dumps(value))
-            original_mtime=cache_path.stat().st_mtime_ns
-            self.assertIsNone(public.load(target))
-            response=self.client.get('/public/character/1',headers=headers)
-            self.assertEqual(response.status_code,200)
-            self.assertIn('On demand',response.text)
-            self.assertNotIn('set-cookie',response.headers)
-            self.assertEqual(self.renderer.call_count,1)
-            self.assertEqual(cache_path.stat().st_mtime_ns,original_mtime)
-            # Even if the cache disappears after the middleware read, never render.
-            original=public.load
-            def evict(*args,**kwargs):
-                value=original(*args,**kwargs)
-                if kwargs.get('allow_stale'):cache_path.unlink(missing_ok=True)
-                return value
-            with patch.object(public,'load',side_effect=evict):
-                self.assertEqual(self.client.get('/public/character/1',headers=headers).status_code,200)
-            self.assertEqual(self.renderer.call_count,1)
             public.store(target,'<h1>Cached</h1>')
-            self.enable('leaderboard','leaderboard:character')
-            self.assertEqual(self.client.get('/public/character/1',headers=headers).status_code,404)
-            self.assertEqual(self.renderer.call_count,1)
+            for agent in ('Googlebot/2.1','Mozilla/5.0 Chrome/130 GoogleOther'):
+                for path in ('/public','/public/character/1'):
+                    self.assertEqual(self.client.get(path,headers={'user-agent':agent}).status_code,403)
+            self.renderer.assert_not_called()
 
     def test_googlebot_never_runs_dynamic_queries_or_group_scans(self):
         traffic=f.load('public_traffic')
         with patch.object(traffic,'ROOT',Path(self.temp.name)/'traffic'), patch.object(f.package,'public_pages',public,create=True):
             traffic.set_googlebot_blocked(False)
+            self.client.cookies.set(traffic.ACCESS_COOKIE,traffic.access_choice('accepted'))
             self.client.app.middleware('http')(traffic.traffic_middleware)
             self.enable(*[row['key'] for row in public.CATALOG])
             headers={'user-agent':'Mozilla/5.0 Googlebot/2.1'}
