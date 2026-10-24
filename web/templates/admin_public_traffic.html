@@ -5,6 +5,12 @@
   <div class="d-flex gap-2 align-items-center"><label for="trafficDay">Day</label><input id="trafficDay" type="date" class="form-control"><button id="trafficRefresh" class="btn btn-outline-info">Refresh</button></div>
 </div>
 <div id="trafficStatus" class="muted-line mb-3" role="status">Loading traffic…</div>
+<section class="content-card p-3 mb-3">
+  <h2 class="h5">Googlebot access</h2>
+  <p class="muted-line small">Requests declaring Googlebot are blocked before public pages or calculations load. The User-Agent is a declaration, not a verified identity. Blocked attempts remain visible below.</p>
+  <span id="googlebotStatus" role="status">Loading policy…</span>
+  <button id="googlebotToggle" type="button" class="btn btn-outline-info ms-2" disabled>Allow Googlebot</button>
+</section>
 <div id="trafficSummary" class="row g-3 mb-4"></div>
 <div class="row g-3">
   <section class="col-lg-6"><div class="content-card p-3 h-100"><h2 class="h5">Active visitors by page · Now</h2><p class="muted-line small">Visible browser tabs with a heartbeat in the last 90 seconds. One browser is counted once per page.</p><div class="table-responsive"><table class="table"><thead><tr><th>Page</th><th>Active</th></tr></thead><tbody id="trafficActive"></tbody></table></div></div></section>
@@ -21,6 +27,26 @@
   const number = v => Number(v || 0).toLocaleString();
   const ms = v => number(Math.round(v || 0))+' ms';
   let running = false;
+  const crawlerToggle = document.getElementById('googlebotToggle');
+  let crawlerBlocked = true, savingCrawler = false;
+  function crawlerPolicy(blocked) {
+    crawlerBlocked = blocked;
+    document.getElementById('googlebotStatus').textContent = blocked ? 'Blocked on public pages' : 'Allowed on public pages';
+    crawlerToggle.textContent = blocked ? 'Allow Googlebot' : 'Block Googlebot';
+    crawlerToggle.disabled = savingCrawler;
+  }
+  crawlerToggle.addEventListener('click', async () => {
+    savingCrawler = true; crawlerToggle.disabled = true;
+    try {
+      const response = await fetch('/admin/public-traffic/googlebot', {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({blocked:!crawlerBlocked}), cache:'no-store'
+      });
+      if(!response.ok) throw new Error('Cannot save crawler policy (HTTP '+response.status+').');
+      const data = await response.json(); crawlerPolicy(data.block_googlebot);
+    } catch(error) { document.getElementById('googlebotStatus').textContent = error.message; }
+    finally { savingCrawler = false; crawlerToggle.disabled = false; }
+  });
   function pageLink(row) {
     const label = row.page || '';
     if (label.split('?')[0] === '/public/other') return row.target ? 'Unrecognized public route' : 'Unrecognized public route (original address not stored)';
@@ -48,6 +74,7 @@
       const response = await fetch('/admin/public-traffic/data?day='+encodeURIComponent(day.value), {cache:'no-store'});
       if(!response.ok) throw new Error(response.status===403 ? 'Admin access required.' : 'Traffic storage is unavailable.');
       const data = await response.json(), summary = document.getElementById('trafficSummary'); summary.replaceChildren();
+      if(!savingCrawler) crawlerPolicy(data.block_googlebot);
       for(const [label,value] of [['Active visitors · Now',number(data.summary.active)],['Unique visitors · Day',number(data.summary.unique_visitors)],['Page views · Day',number(data.summary.views)],['All requests · Day',number(data.summary.requests)],['HTTP errors · Day',number(data.summary.errors)],['Average response · Day',ms(data.summary.average)]]) {
         const cell=document.createElement('div'),card=document.createElement('div'),title=document.createElement('div'),valueNode=document.createElement('div');cell.className='col-6 col-xl-2';card.className='content-card p-3';title.className='muted-line small';title.textContent=label;valueNode.className='h4 mt-2 mb-0';valueNode.textContent=value;card.append(title,valueNode);cell.append(card);summary.append(cell);
       }

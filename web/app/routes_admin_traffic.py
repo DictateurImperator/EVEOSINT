@@ -55,3 +55,24 @@ async def presence(request: Request):
     await run_in_threadpool(traffic.record,traffic.page_key(source.path+'?'+source.query),
                             'presence',204,0,cookie,presence=True)
     return Response(status_code=204,headers={'Cache-Control':'no-store'})
+
+
+@router.post('/admin/public-traffic/googlebot')
+async def googlebot_policy(request: Request):
+    _, redirect = authorized(request)
+    headers = {'Cache-Control': 'no-store'}
+    if redirect:
+        return JSONResponse({'error': 'Forbidden'}, status_code=403, headers=headers)
+    if (request.headers.get('origin') or '').rstrip('/') != str(request.base_url).rstrip('/'):
+        return JSONResponse({'error': 'Invalid origin'}, status_code=403, headers=headers)
+    try:
+        payload = await request.json()
+    except ValueError:
+        return JSONResponse({'error': 'Invalid policy'}, status_code=400, headers=headers)
+    if not isinstance(payload, dict) or type(payload.get('blocked')) is not bool:
+        return JSONResponse({'error': 'Invalid policy'}, status_code=400, headers=headers)
+    try:
+        await run_in_threadpool(traffic.set_googlebot_blocked, payload['blocked'])
+    except OSError:
+        return JSONResponse({'error': 'Cannot save crawler policy.'}, status_code=503, headers=headers)
+    return JSONResponse({'block_googlebot': payload['blocked']}, headers=headers)

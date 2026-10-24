@@ -178,5 +178,50 @@ class TrafficTests(unittest.TestCase):
         traffic.record('/public','page',200,1)
         with traffic.connection() as c:self.assertEqual(c.execute('SELECT COUNT(*) FROM recent').fetchone()[0],1000)
 
+    def test_googlebot_blocked_before_handler_and_without_visitor_cookie(self):
+        for path in ('/public/character/1', '/public/read', '/public/traffic/presence', '/public'):
+            response = self.client.get(path, headers={'user-agent':'Mozilla/5.0 (compatible; GoogleBot/2.1)'})
+            self.assertEqual(response.status_code,403)
+            self.assertNotIn('set-cookie',response.headers)
+            self.assertEqual(response.headers['cache-control'],'no-store')
+        snapshot = traffic.snapshot()
+        self.assertEqual(snapshot['summary']['views'],0)
+        self.assertEqual(snapshot['summary']['unique_visitors'],0)
+        self.assertTrue(all(row['kind']=='blocked' for row in snapshot['recent']))
+        self.assertTrue(all(row['client']=='Googlebot (declared)' for row in snapshot['recent']))
+        # A direct middleware invocation proves no page handler is entered.
+        import asyncio
+        from starlette.requests import Request
+        from unittest.mock import AsyncMock
+        request = Request({'type':'http','method':'GET','path':'/public/read','query_string':b'',
+                           'headers':[(b'user-agent',b'Googlebot')],'scheme':'http','server':('testserver',80)})
+        handler = AsyncMock()
+        self.assertEqual(asyncio.run(traffic.traffic_middleware(request,handler)).status_code,403)
+        handler.assert_not_called()
+        self.assertEqual(self.client.get('/private',headers={'user-agent':'Googlebot'}).status_code,200)
+        for agent in ('Safari','bingbot','Mozilla/5.0'):
+            self.assertEqual(self.client.get('/public/character/1',headers={'user-agent':agent}).status_code,200)
+
+    def test_crawler_policy_admin_only_validated_and_persistent(self):
+        url='/admin/public-traffic/googlebot'
+        headers={'origin':'http://testserver'}
+        for user in (None,dict(id=2,username='User',permissions=set())):
+            with patch.object(routes,'require_login',return_value=user):
+                self.assertEqual(self.client.post(url,json={'blocked':False},headers=headers).status_code,403)
+        with patch.object(routes,'require_login',return_value=ADMIN):
+            self.assertEqual(self.client.post(url,json={'blocked':False}).status_code,403)
+            self.assertEqual(self.client.post(url,json={'blocked':False},headers={'origin':'https://other.example'}).status_code,403)
+            for value in ({'blocked':'false'},[],{}):
+                self.assertEqual(self.client.post(url,json=value,headers=headers).status_code,400)
+            self.assertEqual(self.client.post(url,json={'blocked':False},headers=headers).status_code,200)
+            self.assertFalse(traffic.googlebot_blocked())
+            self.assertFalse(self.client.get('/admin/public-traffic/data').json()['block_googlebot'])
+            self.assertEqual(self.client.get('/public/character/1',headers={'user-agent':'Googlebot'}).status_code,200)
+            self.assertEqual(self.client.post(url,json={'blocked':True},headers=headers).status_code,200)
+            self.assertEqual(self.client.get('/public/character/1',headers={'user-agent':'Googlebot'}).status_code,403)
+        self.assertTrue((traffic.ROOT/'crawler_policy.json').exists())
+        (traffic.ROOT/'crawler_policy.json').write_text('invalid')
+        self.assertTrue(traffic.googlebot_blocked())
+
 
 if __name__ == '__main__':unittest.main()

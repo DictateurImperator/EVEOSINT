@@ -4,13 +4,17 @@ from datetime import datetime, timezone
 from hashlib import sha256
 from pathlib import Path
 import logging
+import json
+import os
 import re
 import secrets
 import sqlite3
 import time
+import tempfile
 from urllib.parse import parse_qs, urlsplit
 
 from starlette.concurrency import run_in_threadpool
+from starlette.responses import PlainTextResponse
 
 ROOT = Path(__file__).resolve().parents[2] / 'data' / 'public_traffic'
 COOKIE = 'eveosint_public_visitor'
@@ -18,6 +22,26 @@ RETENTION_DAYS = 30
 LOG = logging.getLogger(__name__)
 _last_error = False
 _last_warning = 0
+
+
+def googlebot_blocked():
+    """Small local setting; default to the administrator's requested block."""
+    try:
+        return json.loads((ROOT / 'crawler_policy.json').read_text()).get('block_googlebot') is not False
+    except (OSError, ValueError, AttributeError):
+        return True
+
+
+def set_googlebot_blocked(blocked):
+    ROOT.mkdir(parents=True, exist_ok=True)
+    fd, name = tempfile.mkstemp(prefix='.crawler-policy-', dir=ROOT)
+    try:
+        with os.fdopen(fd, 'w') as stream:
+            json.dump({'block_googlebot': bool(blocked)}, stream)
+        os.replace(name, ROOT / 'crawler_policy.json')
+    finally:
+        if os.path.exists(name):
+            os.unlink(name)
 
 
 def page_key(url):
@@ -222,14 +246,21 @@ def snapshot(day=None):
             r[key] = datetime.fromtimestamp(r[key],timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
     return dict(day=day,today=today,days=days,summary=summary,pages=pages,active=active,recent=recent,diagnostics=diagnostics,
                 started=datetime.fromtimestamp(float(started[0]),timezone.utc).isoformat() if started else None,
-                recording_error=_last_error)
+                recording_error=_last_error, block_googlebot=googlebot_blocked())
 
 
 async def traffic_middleware(request, call_next):
     path = request.url.path
-    if not (path == '/public' or path.startswith('/public/')) or path == '/public/traffic/presence':
+    if not (path == '/public' or path.startswith('/public/')):
         return await call_next(request)
     start = time.monotonic()
+    if 'googlebot' in request.headers.get('user-agent', '').lower() and googlebot_blocked():
+        await run_in_threadpool(record, page_key(str(request.url)), 'blocked', 403,
+                                (time.monotonic()-start)*1000, details=request_details(request))
+        return PlainTextResponse('Crawler access blocked.', status_code=403,
+                                 headers={'Cache-Control': 'no-store'})
+    if path == '/public/traffic/presence':
+        return await call_next(request)
     response = await call_next(request)
     is_page = path not in ('/public/read','/public/compute') and request.method == 'GET' and 'text/html' in response.headers.get('content-type','')
     cookie = request.cookies.get(COOKIE)
