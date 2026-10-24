@@ -22,6 +22,7 @@ import argparse
 import hashlib
 import json
 import logging
+import os
 import re
 import sys
 import threading
@@ -396,7 +397,8 @@ def ensure_tables(conn) -> None:
             started_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
             finished_at TIMESTAMPTZ,
             status TEXT NOT NULL DEFAULT 'running',
-            error TEXT
+            error TEXT,
+            worker_pid integer
         );
         """).format(sql.Identifier(ENTITIES_SCHEMA)))
 
@@ -793,6 +795,9 @@ def esi_request(
 
     for attempt in range(1, MAX_ATTEMPTS + 1):
         ESI_RATE_LIMITER.wait()
+        from importlib import import_module
+        wait_for_slot = import_module((__package__ + '.' if __package__ else '') + 'esi_global_quota').wait_for_slot
+        wait_for_slot(ESI_RATE_LIMITER.max_calls_per_minute)
         called_at = utc_now()
         started_monotonic = time.monotonic()
         headers = build_headers(etag=etag, if_modified_since=if_modified_since)
@@ -1876,12 +1881,16 @@ def fetch_public_alliance(run_id: str, alliance_id: int) -> str:
 
 def create_run_row(conn, run_id: str, source_table: str, source_column: str) -> None:
     with conn.cursor() as cur:
+        cur.execute("ALTER TABLE entities.esi_affiliation_run ADD COLUMN IF NOT EXISTS worker_pid integer")
+    conn.commit()
+    with conn.cursor() as cur:
         cur.execute(
             sql.SQL("""
-            INSERT INTO {}.esi_affiliation_run (run_id, source_table, source_column, started_at, status)
-            VALUES (%s, %s, %s, NOW(), 'running')
+            INSERT INTO {}.esi_affiliation_run (run_id, source_table, source_column, started_at, status, worker_pid)
+            VALUES (%s, %s, %s, NOW(), 'running', %s)
             ON CONFLICT (run_id)
             DO UPDATE SET
+                worker_pid = EXCLUDED.worker_pid,
                 source_table = EXCLUDED.source_table,
                 source_column = EXCLUDED.source_column,
                 started_at = NOW(),
@@ -1889,7 +1898,7 @@ def create_run_row(conn, run_id: str, source_table: str, source_column: str) -> 
                 status = 'running',
                 error = NULL
             """).format(sql.Identifier(ENTITIES_SCHEMA)),
-            (run_id, source_table, source_column),
+            (run_id, source_table, source_column, os.getpid()),
         )
     conn.commit()
 

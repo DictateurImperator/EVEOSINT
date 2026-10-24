@@ -35,6 +35,12 @@
   {% endif %}
 </div>
 
+<section class="content-card p-3 mb-4">
+  <div class="d-flex justify-content-between gap-3"><h2 class="h5">Live killmails</h2>{% if can_run %}<button id="liveToggle" type="button" class="btn btn-outline-info">Pause live</button>{% endif %}</div>
+  <p class="muted-line small">One killmail at a time: import, targeted histories, local ISK and damage-weighted True ISK. Pending JSON is deleted after completion. Live pauses during archive imports and deployment; daily affiliation and valuation work lists have priority. Pausing finishes the current killmail first.</p>
+  <div id="liveState" class="muted-line" role="status">Loading live service status…</div>
+  <div id="liveMetrics" class="step-metrics"></div>
+</section>
 {% if error %}
 <div class="alert alert-danger py-2">
   {% if error == 'already_running' %}Pipeline already running.{% else %}Pipeline could not be started.{% endif %}
@@ -322,6 +328,15 @@ function renderRunSummary(summary) {
 }
 function renderState(state) {
   currentState = state;
+  const live=state.live_killmails || {}, liveStatus=document.getElementById('liveState'), liveMetrics=document.getElementById('liveMetrics');
+  liveStatus.textContent=(live.running ? (live.phase || 'running') : 'Service not running')+(live.reason ? ' · '+live.reason : '')+(!live.enabled && live.phase!=='paused' ? ' · Pause requested; finishing the current KM' : '')+(live.error ? ' · Retrying: '+live.error : '');
+  liveMetrics.replaceChildren();
+  for(const [label,key] of [['Next sequence','next_sequence'],['Last killmail','killmail_id'],['Feed delay · seconds','feed_lag_seconds'],['Participants checked','participants_done'],['Participants total','participants_total'],['Histories updated','histories_refreshed'],['Entities loaded','entities_loaded'],['Affiliations left to daily','affiliations_deferred'],['Values left to daily','valuation_deferred']]){
+    if(live[key]!==undefined && live[key]!==null){const item=document.createElement('span');item.className='metric-pill';item.textContent=label+' '+live[key];liveMetrics.append(item);}
+  }
+  const liveButton=document.getElementById('liveToggle');
+  if(liveButton){liveButton.textContent=live.enabled ? 'Pause live' : 'Resume live';liveButton.onclick=async()=>{liveButton.disabled=true;try{const response=await fetch('/admin/update-pipeline/api/live',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({enabled:!live.enabled}),cache:'no-store'});if(!response.ok)throw new Error('Cannot change live state');liveStatus.textContent=live.enabled ? 'Pause requested; finishing the current KM.' : 'Resume requested.';}catch(error){liveStatus.textContent=error.message;}finally{liveButton.disabled=false;}};}
+
   document.getElementById('statStatus').textContent = state.pipeline_status || 'idle';
   document.getElementById('statCurrent').textContent = state.current_step || '-';
   document.getElementById('statNext').textContent = state.timer?.next_run || 'not installed';

@@ -582,6 +582,8 @@ def fetch_ccp(kill_id, hash_value):
         },
     )
     try:
+        from .esi_quota import wait_for_slot
+        wait_for_slot()
         with urlopen(request, timeout=12) as response:
             headers = dict(response.headers)
             try:

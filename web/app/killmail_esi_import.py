@@ -46,6 +46,8 @@ def fetch_killmail(ident, kmhash):
     try:
         with requests.Session() as session:
             session.headers.update({'User-Agent': USER_AGENT, 'Accept': 'application/json'})
+            from .esi_quota import wait_for_slot
+            wait_for_slot()
             with session.get(url, params={'datasource': 'tranquility'}, timeout=(3, 8),
                              stream=True, allow_redirects=False) as response:
                 if response.status_code == 404:

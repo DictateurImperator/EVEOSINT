@@ -728,6 +728,9 @@ def esi_get(
     params = {"datasource": DATASOURCE}
 
     for attempt in range(1, MAX_ATTEMPTS + 1):
+        from importlib import import_module
+        wait_for_slot = import_module((__package__ + '.' if __package__ else '') + 'esi_global_quota').wait_for_slot
+        wait_for_slot()
         called_at = utc_now()
         try:
             response = session.get(

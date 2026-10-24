@@ -563,6 +563,9 @@ def esi_request(session, etag):
         headers["If-None-Match"] = etag
 
     for attempt in range(1, ATTEMPTS + 1):
+        from importlib import import_module
+        wait_for_slot = import_module((__package__ + '.' if __package__ else '') + 'esi_global_quota').wait_for_slot
+        wait_for_slot()
         try:
             response = session.get(
                 ESI_URL,

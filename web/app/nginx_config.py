@@ -240,6 +240,12 @@ def run_request():
             return privileged_prepare(request, sys.modules[__name__])
         except MaintenanceError as exc:
             raise NginxConfigError(str(exc)) from exc
+    if request.get('action')=='install_live_killmails':
+        if __package__:
+            from .live_killmail_service import privileged_install
+        else:
+            from live_killmail_service import privileged_install
+        return privileged_install(request,sys.modules[__name__])
     return apply_config(request)
 
 

@@ -2,6 +2,7 @@ from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse
 
 from .audit import audit_log
+from . import live_killmails
 from .auth import require_login, require_permission_or_redirect
 from .layout import app_context
 from .main_objects import templates
@@ -35,7 +36,7 @@ def admin_update_pipeline(request: Request):
         active_menu_key="admin.update_pipeline",
     )
     context.update({
-        "pipeline": get_pipeline_status(include_history=True),
+        "pipeline": dict(get_pipeline_status(include_history=True),live_killmails=live_killmails.status()),
         "can_run": "admin.jobs.run" in user.get("permissions", set()),
         "error": request.query_params.get("error"),
         "success": request.query_params.get("success"),
@@ -53,7 +54,7 @@ def admin_update_pipeline_status(request: Request):
     redirect = require_permission_or_redirect(user, "admin.jobs.view")
     if redirect:
         return redirect
-    return JSONResponse(get_pipeline_status(include_history=True, include_next_plan=False))
+    return JSONResponse(dict(get_pipeline_status(include_history=True, include_next_plan=False),live_killmails=live_killmails.status()),headers={"Cache-Control":"no-store"})
 
 
 @router.get("/admin/update-pipeline/api/log")
@@ -99,3 +100,19 @@ def admin_update_pipeline_run_weekly(request: Request):
         code = "already_running" if str(exc) == "pipeline_already_running" else "start_failed"
         return _redirect_error(code)
     return RedirectResponse(url="/admin/update-pipeline?success=weekly_started", status_code=302)
+
+
+@router.post('/admin/update-pipeline/api/live')
+async def admin_live_control(request: Request):
+    user=require_login(request)
+    if require_permission_or_redirect(user,'admin.jobs.run'):
+        return JSONResponse({'error':'Forbidden'},status_code=403)
+    if (request.headers.get('origin') or '').rstrip('/')!=str(request.base_url).rstrip('/'):
+        return JSONResponse({'error':'Invalid origin'},status_code=403)
+    try:
+        enabled=(await request.json())['enabled']
+        if type(enabled) is not bool:raise ValueError()
+    except (ValueError,TypeError,KeyError):return JSONResponse({'error':'Invalid control'},status_code=400)
+    live_killmails.set_enabled(enabled)
+    audit_log(request,'admin_live_killmail_control',user_id=user['id'],username=user['username'],target_type='live_killmails',details='enabled='+str(enabled))
+    return JSONResponse(live_killmails.status(),headers={'Cache-Control':'no-store'})

@@ -732,6 +732,7 @@ def process_day(day_iso):
             insert_killmail(
                 conn,
                 payload,
+                skip_existing=True,
             )
 
             imported += 1

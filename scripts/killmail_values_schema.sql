@@ -7,3 +7,5 @@ ADD COLUMN IF NOT EXISTS estimated_value_cents BIGINT;
 
 COMMENT ON COLUMN rawkm.killmails.estimated_value_cents IS
  'Estimated total killmail value in hundredths of ISK, calculated from the local zKill daily price history.';
+
+ALTER TABLE rawkm.killmails ADD COLUMN IF NOT EXISTS live_price_date date;

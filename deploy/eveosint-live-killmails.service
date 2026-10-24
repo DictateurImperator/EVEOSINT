@@ -1,0 +1,21 @@
+[Unit]
+Description=EVEOSINT sequential live killmail consumer
+After=network-online.target postgresql.service
+Wants=network-online.target
+ConditionPathExists=/home/ubuntu/eveosint/scripts/stream_killmails.py
+
+[Service]
+Type=simple
+User=ubuntu
+Group=ubuntu
+WorkingDirectory=/home/ubuntu/eveosint
+ExecStart=/home/ubuntu/eveosint/venv/bin/python /home/ubuntu/eveosint/scripts/stream_killmails.py
+Environment=PYTHONUNBUFFERED=1
+Restart=always
+RestartSec=5
+KillSignal=SIGTERM
+TimeoutStopSec=90
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

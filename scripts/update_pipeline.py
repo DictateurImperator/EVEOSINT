@@ -481,6 +481,17 @@ def mark_blocked(state, from_index):
 
 
 def run_step(state, index, log_handle):
+    ident=state['steps'][index]['id']
+    if ident in ('killmail_archive_refresh','superintel_sync_killmails'):
+        from importlib import import_module
+        exclusive=import_module((__package__ + '.' if __package__ else '') + 'live_killmail_coordination').exclusive
+        log_line(log_handle,ident,'Waiting for the current live killmail to finish before archive import')
+        with exclusive('archive import'):
+            return _run_step(state,index,log_handle)
+    return _run_step(state,index,log_handle)
+
+
+def _run_step(state, index, log_handle):
     item = state["steps"][index]
     command = item.get("command") or []
     if not command:
@@ -725,6 +736,7 @@ def run_pipeline(mode, trigger):
         "weekly_days": WEEKLY_DAYS,
         "target_day": target_day.isoformat(),
         "pipeline_status": "running",
+        "live_coordination": True,
         "running": True,
         "started_at": iso_now(),
         "finished_at": None,

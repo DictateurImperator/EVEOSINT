@@ -557,14 +557,14 @@ def price_coverage(conn, through):
         return cur.fetchone()
 
 
-def month_counts(conn, month):
+def month_counts(conn, month, claimed=False):
     table = relation_name("killmails", month)
     if not ensure_partition_exists(conn, table):
         return 0, 0
     with conn.cursor() as cur:
         cur.execute(
-            sql.SQL("SELECT count(*),count(*) FILTER (WHERE estimated_value_cents IS NULL) FROM {}.{}")
-            .format(sql.Identifier("rawkm"), sql.Identifier(table))
+            sql.SQL("SELECT count(*),count(*) FILTER (WHERE (k.estimated_value_cents IS NULL OR k.live_price_date IS NOT NULL) AND {}) FROM rawkm.{} k")
+            .format(claimed_selection('k') if claimed else sql.SQL('TRUE'),sql.Identifier(table))
         )
         total, missing = cur.fetchone()
     return int(total), int(missing)
@@ -579,9 +579,13 @@ def pricing_date_sql(valuation_mode="zkill", alias=None):
     raise ValueError("Unknown valuation mode")
 
 
+def claimed_selection(alias='k'):
+    return sql.SQL("EXISTS(SELECT 1 FROM market.live_valuation_claims w WHERE w.month=date_trunc('month',{k}.killmail_time AT TIME ZONE 'UTC')::date AND COALESCE({k}.imported_at,'-infinity'::timestamptz)<=w.imported_through AND w.owner_pid=pg_backend_pid())").format(k=sql.Identifier(alias))
+
+
 def valuation_selection(month, recalculate_types=(), alias='k'):
     if not recalculate_types:
-        return sql.SQL('{}.estimated_value_cents IS NULL').format(sql.Identifier(alias))
+        return sql.SQL('({k}.estimated_value_cents IS NULL OR {k}.live_price_date IS NOT NULL)').format(k=sql.Identifier(alias))
     return sql.SQL("""EXISTS(SELECT 1 FROM rawkm.{items} a
         WHERE a.killmail_id={k}.killmail_id AND a.killmail_time={k}.killmail_time
           AND a.item_type_id=ANY({types}))""").format(
@@ -619,7 +623,7 @@ def target_months(conn, valuation_mode="zkill"):
         """SELECT date_trunc('month',killmail_time)::date,
                   max({price_day})
            FROM rawkm.killmails
-           WHERE estimated_value_cents IS NULL
+           WHERE (estimated_value_cents IS NULL OR live_price_date IS NOT NULL)
            GROUP BY 1 ORDER BY 1"""
     ).format(price_day=pricing_date_sql(valuation_mode))
     with conn.cursor() as cur:
@@ -627,10 +631,11 @@ def target_months(conn, valuation_mode="zkill"):
         return [(month, price_day) for month, price_day in cur]
 
 
-def needed_prices(conn, month, valuation_mode="zkill", recalculate_types=()):
+def needed_prices(conn, month, valuation_mode="zkill", recalculate_types=(), claimed=False):
     km = relation_name("killmails", month)
     items = relation_name("killmail_items", month)
     predicate = sql.SQL("WHERE {} ").format(valuation_selection(month, recalculate_types))
+    if claimed:predicate += sql.SQL(" AND {} ").format(claimed_selection())
     query = sql.SQL(
         """SELECT price_day,kill_day,item_type_id FROM (
              SELECT DISTINCT {price_day} price_day,
@@ -692,10 +697,12 @@ def boundary_prices(day, pairs, pricing):
     return rows
 
 
-def update_month(conn, month, price_rows, valuation_mode="zkill", recalculate_types=()):
+def update_month(conn, month, price_rows, valuation_mode="zkill", recalculate_types=(), claimed=False):
     km = relation_name("killmails", month)
     items = relation_name("killmail_items", month)
     condition = sql.SQL("AND {}").format(valuation_selection(month, recalculate_types))
+    if claimed:
+        condition += sql.SQL(" AND {} ").format(claimed_selection())
     with conn.cursor() as cur:
         cur.execute(
             """CREATE TEMP TABLE valuation_prices(
@@ -750,12 +757,12 @@ def update_month(conn, month, price_rows, valuation_mode="zkill", recalculate_ty
         )
         cur.execute(
             sql.SQL(
-                """UPDATE {}.{} k SET estimated_value_cents=s.value_cents
+                """UPDATE {}.{} k SET estimated_value_cents=s.value_cents,live_price_date=NULL
                    FROM valuation_stage s
                    WHERE k.killmail_id=s.killmail_id AND k.killmail_time=s.killmail_time
-                     AND {write_guard} AND k.estimated_value_cents IS DISTINCT FROM s.value_cents"""
+                     AND {write_guard} AND (k.estimated_value_cents IS DISTINCT FROM s.value_cents OR k.live_price_date IS NOT NULL)"""
             ).format(sql.Identifier("rawkm"), sql.Identifier(km),
-                     write_guard=sql.SQL("TRUE") if recalculate_types else sql.SQL("k.estimated_value_cents IS NULL"))
+                     write_guard=sql.SQL("TRUE") if recalculate_types else sql.SQL("(k.estimated_value_cents IS NULL OR k.live_price_date IS NOT NULL)"))
         )
         updated = cur.rowcount
         cur.execute("SELECT count(*) FROM valuation_prices WHERE used_fallback")
@@ -808,6 +815,7 @@ def main():
     stopped = threading.Event()
     conn = price_conn = None
     owns_lock = False
+    claimed = False
     state = {"pid": os.getpid(), "formula_version": FORMULA_VERSION, "months_processed": 0,
              "killmails_valued": 0, "fallback_price_pairs": 0,
              "valuation_mode": args.valuation_mode, "killmails_unvalued": 0,
@@ -854,6 +862,7 @@ def main():
             progress("checking_schema")
             cur.execute("SET lock_timeout='10s'; SET statement_timeout=0; SET TIME ZONE 'UTC'")
             cur.execute(SCHEMA.read_text())
+            cur.execute(Path(__file__).with_name("live_killmail_schema.sql").read_text())
         conn.commit()
         if args.schema_only:
             progress("schema_ready")
@@ -870,6 +879,15 @@ def main():
         if not targets:
             progress("completed", months_total=0, message="No matching killmail needs calculation.")
             return 0
+        from importlib import import_module
+        boundary = import_module((__package__ + '.' if __package__ else '') + 'live_killmail_coordination')
+        with boundary.exclusive('valuation list'):
+            with conn.cursor() as cur:
+                cur.execute('DELETE FROM market.live_valuation_claims')
+                for target_month,_day in targets:
+                    cur.execute('INSERT INTO market.live_valuation_claims VALUES(%s,pg_backend_pid(),clock_timestamp())',(target_month,))
+            conn.commit()
+            claimed=True
         months = [month for month, _price_day in targets]
         state.update(from_month=months[0].isoformat(), through_month=months[-1].isoformat(), months_total=len(months))
         target_price_through = max(price_day for _month, price_day in targets)
@@ -881,8 +899,8 @@ def main():
             raise RuntimeError("Import zKill price history before calculating killmail values")
         price_through = min(target_price_through, imported_through)
         if args.valuation_mode == "loss-day":
-            # Today's trading day is unfinished. Those kills stay NULL and
-            # are picked up automatically once its daily prices are imported.
+            # Today's live estimates stay marked for reconciliation until
+            # its completed daily prices are imported.
             price_through = min(price_through, datetime.now(UTC).date() - timedelta(days=1))
         state.update(price_available_through=price_through.isoformat(),
                      target_latest_price_day=target_price_through.isoformat())
@@ -945,12 +963,12 @@ def main():
             if shutil.disk_usage(args.progress.parent).free < args.min_free_gb * 1024**3:
                 raise RuntimeError("Disk reserve reached before the next month; free space and resume.")
             progress("counting_month", current_month=month.isoformat(), month_index=index)
-            total, missing = month_counts(conn, month)
+            total, missing = month_counts(conn, month, claimed=claimed)
             state.update(current_month=month.isoformat(), month_index=index, month_killmails=total,
                          month_missing=missing, phase="reading_items")
             progress("reading_items")
             should_write = bool(missing) or args.recalculate_abyssal
-            needed = needed_prices(conn, month, args.valuation_mode, recalculate_types) if should_write else {}
+            needed = needed_prices(conn, month, args.valuation_mode, recalculate_types, claimed=claimed) if should_write else {}
             if args.recalculate_abyssal:
                 with conn.cursor() as cur:
                     cur.execute(sql.SQL("SELECT count(*) FROM rawkm.{} k WHERE {} ").format(
@@ -982,7 +1000,7 @@ def main():
                 raise StopRequested()
             progress("writing_values", price_pairs=len(rows))
             try:
-                updated, fallback = update_month(conn, month, rows, args.valuation_mode, recalculate_types)
+                updated, fallback = update_month(conn, month, rows, args.valuation_mode, recalculate_types, claimed=claimed)
                 calculated = updated
                 if args.recalculate_abyssal:
                     with conn.cursor() as cur:
@@ -1025,6 +1043,12 @@ def main():
             progress("failed", error=str(exc))
         return 1
     finally:
+        if conn and claimed:
+            try:
+                conn.rollback()
+                with conn.cursor() as cur:cur.execute('DELETE FROM market.live_valuation_claims WHERE owner_pid=pg_backend_pid()')
+                conn.commit()
+            except Exception:conn.rollback()
         if price_conn:
             price_conn.close()
         if conn:

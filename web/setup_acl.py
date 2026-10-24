@@ -320,6 +320,8 @@ def main():
 
         conn.commit()
 
+    from app.live_killmail_service import install_if_updater
+    install_if_updater()
     print("ACL/menu tables ready.")
 
 

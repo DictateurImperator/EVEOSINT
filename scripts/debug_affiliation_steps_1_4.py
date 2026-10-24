@@ -325,6 +325,9 @@ def call_affiliation_batch(
             raise RuntimeError("debug_run_stopped")
         try:
             wait_started = time.perf_counter()
+            from importlib import import_module
+            wait_for_slot = import_module((__package__ + '.' if __package__ else '') + 'esi_global_quota').wait_for_slot
+            wait_for_slot()
             limiter.wait()
             rate_wait_ms += (time.perf_counter() - wait_started) * 1000.0
             http_started = time.perf_counter()

@@ -844,7 +844,15 @@ def run_pending_request():
             pass
 
         try:
-            _perform_action(action, target_ref)
+            from contextlib import nullcontext
+            guard=nullcontext()
+            if (REPO_ROOT/'scripts/live_killmail_coordination.py').is_file():
+                scripts_path=str(REPO_ROOT/'scripts')
+                if scripts_path not in sys.path:sys.path.insert(0,scripts_path)
+                from live_killmail_coordination import exclusive
+                guard=exclusive('deployment',root=REPO_ROOT/'data/run/live_killmails')
+            with guard:
+                _perform_action(action, target_ref)
         except Exception as exc:
             current = _read_json(STATUS_FILE, {})
             if current.get("phase") in {"queued", "running"}:
