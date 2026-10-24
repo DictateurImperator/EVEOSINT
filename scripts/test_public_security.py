@@ -13,6 +13,10 @@ from web.app import public_security as security, nginx_config as nginx
 
 
 class SecurityTests(unittest.TestCase):
+    def setUp(self):
+        patcher=patch.object(security,'configured_addresses',return_value=set(security.GOOGLE_IPS))
+        patcher.start();self.addCleanup(patcher.stop)
+
     def test_crawler_sources_and_user_agents(self):
         for ip in security.GOOGLE_IPS:
             self.assertTrue(security.blocked_crawler(ip,'Chrome'))
@@ -48,6 +52,31 @@ class SecurityTests(unittest.TestCase):
              patch.object(nginx,'queue_nginx_save',return_value='request'),\
              patch.object(nginx,'_read_json',return_value={'request_id':'request','result':'failed'}):
             with self.assertRaises(RuntimeError):security.install_logging_if_updater()
+
+    @unittest.skipUnless(shutil.which('nginx'),'Nginx needed for isolated block check')
+    def test_nginx_ip_block_can_be_added_and_removed(self):
+        for addresses,expected in (({'127.0.0.1'},403),(set(),200),({'::1'},200)):
+            with self.subTest(addresses=addresses),tempfile.TemporaryDirectory() as directory:
+                root=Path(directory)
+                with socket.socket() as sock:sock.bind(('127.0.0.1',0));port=sock.getsockname()[1]
+                server=f'server {{\n listen 127.0.0.1:{port};\n location / {{ return 200 "healthy"; }}\n}}\n'
+                config=root/'nginx.conf'
+                config.write_text(f'daemon off; master_process off; error_log {root}/error.log; pid {root}/nginx.pid; events {{worker_connections 32;}} http {{'+security.crawler_config(security.logging_config(server),addresses)+'}')
+                process=subprocess.Popen([shutil.which('nginx'),'-p',str(root),'-c',str(config)],stdout=subprocess.DEVNULL,stderr=subprocess.PIPE)
+                try:
+                    deadline=time.monotonic()+3
+                    while True:
+                        try:
+                            response=urlopen(f'http://127.0.0.1:{port}/page',timeout=1)
+                            self.assertEqual(response.status,expected);response.close();break
+                        except HTTPError as error:self.assertEqual(error.code,expected);break
+                        except OSError:
+                            if time.monotonic()>deadline:raise AssertionError('Nginx did not start')
+                            time.sleep(.03)
+                finally:
+                    process.terminate()
+                    try:process.communicate(timeout=3)
+                    except subprocess.TimeoutExpired:process.kill();process.communicate()
 
     @unittest.skipUnless(shutil.which('nginx'),'Nginx needed for isolated log check')
     def test_requests_and_upstream_errors_do_not_write_routine_ip_logs(self):

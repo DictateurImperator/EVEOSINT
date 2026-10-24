@@ -1,27 +1,2 @@
 {% extends "base.html" %}
-{% block content %}
-<dialog id="siteNotice" class="content-card p-4" style="color:inherit;max-width:42rem;width:calc(100% - 2rem)" aria-labelledby="siteNoticeTitle">
-  <h1 id="siteNoticeTitle" class="h4">Privacy, cookies and security</h1>
-  {% include "_public_privacy_text.html" %}
-  <p><a href="/public/legal">Read Legal &amp; Privacy</a></p>
-  <p id="noticeError" role="status"></p>
-  <div class="d-flex gap-2 flex-wrap"><button id="noticeAccept" class="btn btn-outline-info">Accept analytics</button><button id="noticeDecline" class="btn btn-outline-info">Continue without analytics</button></div>
-</dialog>
-<script>
-(() => {
-  const dialog=document.getElementById('siteNotice');dialog.showModal();
-  async function choose(choice) {
-    const buttons=[...dialog.querySelectorAll('button')];buttons.forEach(b=>b.disabled=true);
-    try {
-      const response=await fetch('/public/access/choice',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({choice}),cache:'no-store'});
-      if(!response.ok)throw new Error('Your choice could not be saved. Please try again.');
-      if(location.pathname==='/public/access-required')location.replace('/public');
-      else location.reload();
-    } catch(error) {document.getElementById('noticeError').textContent=error.message;buttons.forEach(b=>b.disabled=false);}
-  }
-  document.getElementById('noticeAccept').onclick=()=>choose('accepted');
-  document.getElementById('noticeDecline').onclick=()=>choose('declined');
-  dialog.addEventListener('cancel',event=>{event.preventDefault();choose('declined');});
-})();
-</script>
-{% endblock %}
+{% block content %}{% include "_privacy_notice.html" %}{% endblock %}

@@ -354,12 +354,25 @@ def start_cleanup():
     threading.Thread(target=loop,name='public-traffic-cleanup',daemon=True).start()
 
 
+def default_ip_blocks(conn):
+    from .public_security import GOOGLE_IPS
+    row=conn.execute("SELECT value FROM metadata WHERE key='google_ip_unblocked'").fetchone()
+    excluded=set(json.loads(row[0])) if row else set()
+    return set(GOOGLE_IPS)-excluded
+
+
+def active_blocked_addresses():
+    with connection() as conn:
+        return default_ip_blocks(conn) | {r[0] for r in conn.execute('SELECT ip FROM security_ips WHERE blocked=1')}
+
+
 def ip_blocked(address):
     try:
-        ip=str(ipaddress.ip_address(address))
+        parsed=ipaddress.ip_address(address)
+        ip=str(parsed.ipv4_mapped if isinstance(parsed,ipaddress.IPv6Address) and parsed.ipv4_mapped else parsed)
         with connection() as conn:
             row=conn.execute('SELECT blocked FROM security_ips WHERE ip=?',(ip,)).fetchone()
-        return bool(row and row[0])
+            return bool(row and row[0]) or ip in default_ip_blocks(conn)
     except (OSError,sqlite3.Error,ValueError,TypeError):return False
 
 
@@ -416,6 +429,8 @@ def snapshot(day=None, country=''):
         started = conn.execute("SELECT value FROM metadata WHERE key='started'").fetchone()
         ip_uniques_started = conn.execute("SELECT value FROM metadata WHERE key='ip_uniques_started'").fetchone()
         blocked_ips=[dict(r) for r in conn.execute('SELECT ip,reason,last_seen FROM security_ips WHERE blocked=1 ORDER BY last_seen DESC')]
+        listed={r['ip'] for r in blocked_ips}
+        blocked_ips += [dict(ip=ip,reason='GOOGLE BOT',last_seen=None) for ip in sorted(default_ip_blocks(conn)-listed)]
         country_pages_started = conn.execute("SELECT value FROM metadata WHERE key='country_pages_started'").fetchone()
         countries = [dict(r) for r in conn.execute('''SELECT country,SUM(count) requests,
             SUM(CASE WHEN kind='page' AND status BETWEEN 200 AND 299 THEN count ELSE 0 END) views,
@@ -423,9 +438,6 @@ def snapshot(day=None, country=''):
             (SELECT COUNT(*) FROM ip_country_visitors v WHERE v.day=? AND v.country=r.country) unique_visitors
             FROM country_requests r WHERE day=? GROUP BY country
             ORDER BY unique_visitors DESC, views DESC, requests DESC''',(day,day))]
-    from .public_security import GOOGLE_IPS
-    blocked_ips = [r for r in blocked_ips if r['ip'] not in GOOGLE_IPS]
-    blocked_ips += [dict(ip=ip, reason='GOOGLE BOT', enforced_by='Nginx', last_seen=None) for ip in GOOGLE_IPS]
     for r in recent:
         r['at'] = datetime.fromtimestamp(r['at'],timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
     for r in diagnostics:
@@ -442,8 +454,11 @@ def snapshot(day=None, country=''):
 async def traffic_middleware(request, call_next):
     path = request.url.path
     from .public_security import blocked_crawler
-    if path != '/robots.txt' and blocked_crawler(request.client.host if request.client else None, request.headers.get('user-agent', '')):
+    if path != '/robots.txt' and blocked_crawler(None, request.headers.get('user-agent', '')):
         return PlainTextResponse('Access denied.', status_code=403, headers={'Cache-Control': 'no-store'})
+    from .public_security import GOOGLE_IPS
+    if request.client and request.client.host in GOOGLE_IPS and path != '/robots.txt' and await run_in_threadpool(ip_blocked,request.client.host):
+        return PlainTextResponse('Access denied.',status_code=403,headers={'Cache-Control':'no-store'})
     if not (path == '/public' or path.startswith('/public/')):
         return await call_next(request)
     if path in ('/public/access/choice','/public/legal'):return await call_next(request)

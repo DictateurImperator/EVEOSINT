@@ -761,8 +761,10 @@
 
   </script>
 {% if not public_site or public_search %}<script>{% include "topbar_entity_search.js" %}</script>{% endif %}
-{% if (request.url.path == '/public' or request.url.path.startswith('/public/')) and not public_notice %}
+{% if not public_notice %}
 <div class="small text-center p-2"><a href="/public/access-required">Privacy and security</a></div>
+{% endif %}
+{% if (request.url.path == '/public' or request.url.path.startswith('/public/')) and not public_notice %}
 <script>
 (() => {
   const ping = () => {
@@ -796,5 +798,8 @@
   };
 })();
 </script>
+{% if user and not public_notice and site_privacy_choice is defined and site_privacy_choice(request) is none %}
+{% include "_privacy_notice.html" %}
+{% endif %}
 </body>
 </html>

@@ -120,8 +120,9 @@ async def access_choice(request: Request):
     if choice not in ('accepted','declined'):return Response(status_code=400)
     value=await run_in_threadpool(traffic.access_choice,choice)
     response=Response(status_code=204,headers={'Cache-Control':'no-store'})
+    response.delete_cookie(traffic.ACCESS_COOKIE,path='/public')
     response.set_cookie(traffic.ACCESS_COOKIE,value,max_age=180*86400,httponly=True,
-                        secure=request.url.scheme=='https',samesite='lax',path='/public')
+                        secure=request.url.scheme=='https',samesite='lax',path='/')
     return response
 
 
@@ -132,13 +133,37 @@ async def ip_block(request: Request):
         return Response(status_code=403)
     try:
         payload=await request.json()
-        address=str(traffic.ipaddress.ip_address(payload['ip']))
+        parsed=traffic.ipaddress.ip_address(payload['ip'])
+        address=str(parsed.ipv4_mapped if isinstance(parsed,traffic.ipaddress.IPv6Address) and parsed.ipv4_mapped else parsed)
+        if '%' in address:raise ValueError()
         blocked=payload['blocked'];reason=payload.get('reason','').strip()
         if type(blocked) is not bool or (blocked and not 1<=len(reason)<=500):raise ValueError()
     except (ValueError,KeyError,TypeError,AttributeError):return Response(status_code=400)
     def save():
-        with traffic.connection() as conn:
-            return conn.execute('UPDATE security_ips SET blocked=?,reason=? WHERE ip=?',
-                                (int(blocked),reason if blocked else '',address)).rowcount
-    count=await run_in_threadpool(save)
-    return JSONResponse({'updated':bool(count)},status_code=200 if count else 404,headers={'Cache-Control':'no-store'})
+        import fcntl
+        import json
+        import time
+        from .public_security import apply_proxy_blocks, GOOGLE_IPS
+        traffic.ROOT.mkdir(parents=True,exist_ok=True,mode=0o700)
+        with (traffic.ROOT/'ip-block.lock').open('a') as lock:
+            try:fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
+            except BlockingIOError:raise RuntimeError('Another IP block change is in progress; retry shortly')
+            addresses=traffic.active_blocked_addresses()
+            if blocked:addresses.add(address)
+            else:addresses.discard(address)
+            apply_proxy_blocks(addresses)
+            with traffic.connection() as conn:
+                now=time.time()
+                conn.execute('''INSERT INTO security_ips(ip,first_seen,last_seen,blocked,reason) VALUES (?,?,?,?,?)
+                    ON CONFLICT(ip) DO UPDATE SET blocked=excluded.blocked,reason=excluded.reason,last_seen=excluded.last_seen''',
+                    (address,now,now,int(blocked),reason if blocked else ''))
+                if address in GOOGLE_IPS:
+                    disabled=set(GOOGLE_IPS)-traffic.default_ip_blocks(conn)
+                    if blocked:disabled.discard(address)
+                    else:disabled.add(address)
+                    conn.execute("INSERT OR REPLACE INTO metadata(key,value) VALUES ('google_ip_unblocked',?)",(json.dumps(sorted(disabled)),))
+    try:
+        await run_in_threadpool(save)
+    except (OSError,traffic.sqlite3.Error,RuntimeError) as error:
+        return JSONResponse({'error':'IP block change was not confirmed. Check Nginx configuration status and retry.'},status_code=503,headers={'Cache-Control':'no-store'})
+    return JSONResponse({'updated':True},headers={'Cache-Control':'no-store'})

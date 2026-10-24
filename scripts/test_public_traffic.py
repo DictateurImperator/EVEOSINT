@@ -23,6 +23,7 @@ class TrafficTests(unittest.TestCase):
         from importlib import import_module
         self.security=import_module(f.PACKAGE+'.public_security')
         self.security._clients.clear()
+        self.proxy=patch.object(self.security,'apply_proxy_blocks');self.proxy.start()
         self.geo = patch.object(traffic.traffic_countries,'ensure_database');self.geo.start()
         app = FastAPI()
         app.middleware('http')(traffic.traffic_middleware)
@@ -43,7 +44,7 @@ class TrafficTests(unittest.TestCase):
         self.client.cookies.set(traffic.ACCESS_COOKIE,traffic.access_choice('accepted'))
 
     def tearDown(self):
-        self.geo.stop();self.root.stop();self.tmp.cleanup()
+        self.proxy.stop();self.geo.stop();self.root.stop();self.tmp.cleanup()
 
     def test_daily_and_per_page_uniques_and_requests_are_distinct(self):
         self.client.get('/public/character/1')
@@ -359,6 +360,48 @@ class TrafficTests(unittest.TestCase):
             self.client.cookies.set(traffic.ACCESS_COOKIE,value)
             self.assertIn('siteNotice',self.client.get('/public/character/1').text)
 
+    def test_manual_ip_add_remove_defaults_and_proxy_failure(self):
+        url='/admin/public-traffic/ip-block';headers={'origin':'http://testserver'}
+        with patch.object(routes,'require_login',return_value=ADMIN):
+            for bad in ('abc','10.0.0.0/8','127.0.0.1; return 200','fe80::1%eth0'):
+                self.assertEqual(self.client.post(url,json={'ip':bad,'blocked':True,'reason':'test'},headers=headers).status_code,400)
+            self.assertEqual(self.client.post(url,json={'ip':'2001:db8::1','blocked':True,'reason':'manual abuse'},headers=headers).status_code,200)
+            self.assertIn('2001:db8::1',self.security.apply_proxy_blocks.call_args.args[0])
+            self.assertTrue(traffic.ip_blocked('2001:db8::1'))
+            self.assertEqual(self.client.post(url,json={'ip':'192.178.4.161','blocked':False},headers=headers).status_code,200)
+            self.assertNotIn('192.178.4.161',self.security.apply_proxy_blocks.call_args.args[0])
+            self.assertFalse(traffic.ip_blocked('192.178.4.161'))
+            with traffic.connection() as conn:conn.execute('UPDATE security_ips SET last_seen=0')
+            traffic.purge()
+            self.assertFalse(traffic.ip_blocked('192.178.4.161'))
+            self.assertNotIn('192.178.4.161',[row['ip'] for row in traffic.snapshot()['blocked_ips']])
+            self.assertEqual(self.client.post(url,json={'ip':'192.178.4.161','blocked':True,'reason':'GOOGLE BOT'},headers=headers).status_code,200)
+            self.assertTrue(traffic.ip_blocked('192.178.4.161'))
+            with patch.object(self.security,'apply_proxy_blocks',side_effect=RuntimeError('reload failed')):
+                self.assertEqual(self.client.post(url,json={'ip':'1.1.1.1','blocked':True,'reason':'test'},headers=headers).status_code,503)
+            self.assertFalse(traffic.ip_blocked('1.1.1.1'))
+
+    def test_logged_in_pages_share_notice_and_cookie_applies_to_entire_site(self):
+        from starlette.requests import Request
+        original=f.templates.env.globals.get('site_privacy_choice')
+        f.templates.env.globals['site_privacy_choice']=traffic.access_decision
+        try:
+            self.client.cookies.clear()
+            request=Request({'type':'http','method':'GET','path':'/character/1','query_string':b'', 'headers':[], 'scheme':'http','server':('testserver',80)})
+            template=f.templates.env.from_string('{% extends "base.html" %}{% block content %}Private page{% endblock %}')
+            html=template.render(request=request,user=ADMIN,show_app_layout=False)
+            self.assertIn('id="siteNotice"',html)
+            response=self.client.post('/public/access/choice',json={'choice':'declined'},headers={'origin':'http://testserver'})
+            self.assertEqual(response.status_code,204)
+            self.assertTrue(any('Path=/;' in value for value in response.headers.get_list('set-cookie')))
+            request=Request({'type':'http','method':'GET','path':'/character/1','query_string':b'', 'headers':[(b'cookie',str(self.client.cookies).encode())], 'scheme':'http','server':('testserver',80)})
+            with patch.object(traffic,'access_decision',return_value='declined'):
+                f.templates.env.globals['site_privacy_choice']=traffic.access_decision
+                self.assertNotIn('id="siteNotice"',template.render(request=request,user=ADMIN,show_app_layout=False))
+        finally:
+            if original is None:f.templates.env.globals.pop('site_privacy_choice',None)
+            else:f.templates.env.globals['site_privacy_choice']=original
+
     def test_security_ip_block_enforced_and_purge_preserves_only_active_blocks(self):
         self.client.get('/public/character/1')
         traffic.record('/public/character/1','blocked',429,0,client_ip='8.8.8.8',security_incident=True)
@@ -375,6 +418,7 @@ class TrafficTests(unittest.TestCase):
         with traffic.connection() as c:self.assertEqual([r[0] for r in c.execute('SELECT ip FROM security_ips')],['8.8.8.8'])
         with patch.object(routes,'require_login',return_value=ADMIN):
             self.assertEqual(self.client.post(url,json={'ip':'8.8.8.8','blocked':False},headers=headers).status_code,200)
+        with traffic.connection() as c:c.execute('UPDATE security_ips SET last_seen=?',(time.time()-40*86400,))
         traffic.purge()
         with traffic.connection() as c:self.assertEqual(c.execute('SELECT COUNT(*) FROM security_ips').fetchone()[0],0)
 

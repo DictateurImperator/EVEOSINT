@@ -21,13 +21,12 @@ def blocked_crawler(address, agent):
     return address in GOOGLE_IPS or any(token in agent.lower() for token in GOOGLE_AGENTS)
 
 
-def crawler_config(content):
+def crawler_config(content, addresses=GOOGLE_IPS):
     import re
     content = re.sub(r'(?ms)^    # BEGIN EVEOSINT crawler block\n.*?^    # END EVEOSINT crawler block\n', '', content)
     rules = r'''    # BEGIN EVEOSINT crawler block
     set $eveosint_block_crawler 0;
     if ($http_user_agent ~* "(Googlebot|GoogleOther|Google-InspectionTool|Storebot-Google|Google-Extended)") { set $eveosint_block_crawler 1; }
-    if ($remote_addr ~ "^192[.]178[.]4[.](161|162|163)$") { set $eveosint_block_crawler 1; }
     if ($uri = /robots.txt) { set $eveosint_block_crawler 0; }
     if ($eveosint_block_crawler = 1) { return 403; }
     location = /robots.txt {
@@ -36,6 +35,8 @@ def crawler_config(content):
     }
     # END EVEOSINT crawler block
 '''
+    ip_rules = ''.join('    if ($remote_addr = "'+str(ipaddress.ip_address(ip))+'") { set $eveosint_block_crawler 1; }\n' for ip in sorted(set(addresses)))
+    rules = rules.replace('    if ($uri = /robots.txt)', ip_rules+'    if ($uri = /robots.txt)')
     result, count = re.subn(r'(?m)^([ \t]*server\s*\{)\n', lambda m: m[0] + rules, content)
     if not count:
         raise ValueError('No site server block found')
@@ -59,24 +60,36 @@ def install_logging_if_updater():
     try:group=Path('/proc/self/cgroup').read_text()
     except OSError:return
     if '/eveosint-code-update.service' not in group:return
+    apply_proxy_blocks(configured_addresses())
+
+
+def configured_addresses():
+    from .public_traffic import active_blocked_addresses
+    return active_blocked_addresses()
+
+
+def apply_proxy_blocks(addresses):
+    """Confirm the checked Nginx reload before reporting a security change as applied."""
     from . import nginx_config as nginx
-    content=nginx.load_nginx_config();updated=crawler_config(logging_config(content))
+    content=nginx.load_nginx_config()
+    updated=crawler_config(logging_config(content),addresses)
     if content==updated:return
     deadline=time.monotonic()+10
     while True:
         try:
-            request_id=nginx.queue_nginx_save(updated,'Code update: GOOGLE BOT block and incident-only IP logging')
+            request_id=nginx.queue_nginx_save(updated,'Admin IP security blocks')
             break
-        except nginx.NginxConfigError:
-            if time.monotonic()>=deadline:raise
+        except nginx.NginxConfigError as error:
+            if str(error)!='worker_busy' or time.monotonic()>=deadline:raise
             time.sleep(.1)
     while time.monotonic()<deadline:
         state=nginx._read_json(nginx.STATUS_FILE,{})
         if state.get('request_id')==request_id:
             if state.get('result')=='success':return
-            if state.get('result')=='failed':raise RuntimeError('Privacy logging configuration failed')
+            if state.get('result')=='failed':raise RuntimeError('IP security configuration failed; previous configuration restored')
         time.sleep(.1)
-    raise RuntimeError('Privacy logging configuration was not confirmed')
+    raise RuntimeError('IP security configuration was not confirmed; check Nginx worker status')
+
 
 RATE_LIMIT = 300
 WINDOW = 60
