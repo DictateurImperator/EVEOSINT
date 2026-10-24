@@ -775,5 +775,24 @@
 })();
 </script>
 {% endif %}
+<script>
+(() => {
+  let reloading = false;
+  function maintenance(response) {
+    if (!reloading && response.headers.get('X-EVEOSINT-Maintenance') === '1') {
+      reloading = true;
+      window.location.reload();
+    }
+    return response;
+  }
+  const fetchRequest = window.fetch.bind(window);
+  window.fetch = (...args) => fetchRequest(...args).then(maintenance);
+  const send = XMLHttpRequest.prototype.send;
+  XMLHttpRequest.prototype.send = function(...args) {
+    this.addEventListener('load', () => maintenance({headers:{get:name=>this.getResponseHeader(name)}}), {once:true});
+    return send.apply(this, args);
+  };
+})();
+</script>
 </body>
 </html>

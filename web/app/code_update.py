@@ -637,12 +637,21 @@ def queue_code_action(action, target_ref):
         raise CodeUpdateError("update_service_start_failed")
 
 
+def _prepare_deployment(force=False):
+    if __package__:
+        from .deployment_guard import prepare
+    else:
+        from deployment_guard import prepare
+    try:
+        prepare(REPO_ROOT, force=force)
+    except RuntimeError as exc:
+        raise CodeUpdateError("maintenance_preparation_failed") from exc
+
+
 def _restart_web_service():
-    # systemd can spend 90 seconds stopping a worker with active requests.
-    # Allow its stop/start cycle to finish before declaring a deployment failed.
     result = _run(
         ["sudo", "-n", SYSTEMCTL, "restart", WEB_SERVICE],
-        timeout=240,
+        timeout=30,
         check=False,
     )
     if result.returncode != 0:
@@ -699,6 +708,8 @@ def _run_post_checkout_steps():
 
 def _rollback_to(sha):
     _git(["reset", "--hard", sha], timeout=60)
+    # Interrupt a failed new web process as well; maintenance stays enabled.
+    _prepare_deployment(force=True)
     _run_post_checkout_steps()
     _restart_web_service()
     _health_check()
@@ -736,14 +747,17 @@ def _perform_action(action, target_ref):
     )
 
     changed_checkout = False
+    prepared = False
     try:
+        _prepare_deployment()
+        prepared = True
         _git(["reset", "--hard", target_sha], timeout=60)
         changed_checkout = True
         _run_post_checkout_steps()
         _restart_web_service()
         _health_check()
     except Exception as exc:
-        if changed_checkout:
+        if changed_checkout or prepared:
             try:
                 _rollback_to(previous_sha)
             except Exception:

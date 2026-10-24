@@ -40,13 +40,23 @@ class BranchDiscoveryTests(unittest.TestCase):
 
 
 class ServiceRestartTests(unittest.TestCase):
-    def test_restart_allows_systemd_to_finish_stop_and_start(self):
+    def test_restart_keeps_thirty_second_failure_deadline(self):
         with patch.object(code_update, "_run", return_value=SimpleNamespace(returncode=0)) as run:
             code_update._restart_web_service()
         command = run.call_args.args[0]
         self.assertEqual(command, ["sudo", "-n", code_update.SYSTEMCTL, "restart", code_update.WEB_SERVICE])
-        self.assertGreaterEqual(run.call_args.kwargs["timeout"], 90 + 90 + 30)
+        self.assertEqual(run.call_args.kwargs["timeout"], 30)
         self.assertFalse(run.call_args.kwargs["check"])
+
+    def test_rollback_interrupts_failed_web_requests_before_restart(self):
+        steps=[]
+        with patch.object(code_update,"_git",side_effect=lambda *a,**k:steps.append("restore")), \
+             patch.object(code_update,"_prepare_deployment",side_effect=lambda **k:steps.append(("stop_web",k))), \
+             patch.object(code_update,"_run_post_checkout_steps",side_effect=lambda:steps.append("setup")), \
+             patch.object(code_update,"_restart_web_service",side_effect=lambda:steps.append("restart")), \
+             patch.object(code_update,"_health_check",side_effect=lambda:steps.append("health")):
+            code_update._rollback_to("example")
+        self.assertEqual(steps,["restore",("stop_web",{"force":True}),"setup","restart","health"])
 
     def test_real_restart_failure_still_fails_the_deployment(self):
         with patch.object(code_update, "_run", return_value=SimpleNamespace(returncode=1)):
@@ -129,7 +139,8 @@ class BranchFetchTests(unittest.TestCase):
                 self.assertTrue(unrelated["can_deploy"])
                 self.assertIn("main", {item["label"] for item in snapshot["rollback_targets"]})
 
-                with patch.object(code_update, "_run_post_checkout_steps"), \
+                with patch.object(code_update, "_prepare_deployment"), \
+                     patch.object(code_update, "_run_post_checkout_steps"), \
                      patch.object(code_update, "_restart_web_service"), \
                      patch.object(code_update, "_health_check", return_value=True):
                     code_update.queue_code_action("deploy", unrelated["key"])

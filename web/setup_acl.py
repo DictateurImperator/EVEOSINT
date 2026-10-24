@@ -32,6 +32,10 @@ def t(name):
 
 
 def main():
+    # Also runs when the currently installed updater predates maintenance support.
+    # This hook is reached only through its existing, checked-out setup step.
+    from app.deployment_guard import prepare_if_updater
+    prepare_if_updater(Path.home() / "eveosint")
     with db() as conn:
         with conn.cursor() as cur:
             cur.execute(f"CREATE SCHEMA IF NOT EXISTS {SCHEMA};")

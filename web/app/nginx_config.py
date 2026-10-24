@@ -40,9 +40,17 @@ def _ensure_run_dir():
 
 def _atomic_write_json(path, payload):
     _ensure_run_dir()
-    tmp = path.with_name(path.name + f".{os.getpid()}.tmp")
-    tmp.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
-    os.replace(tmp, path)
+    fd, temporary = tempfile.mkstemp(prefix="." + path.name + ".", dir=path.parent)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            json.dump(payload, handle, indent=2, sort_keys=True)
+            if os.geteuid() == 0:
+                # Keep the root worker result readable by the application owner.
+                owner = REPO_ROOT.stat()
+                os.fchown(handle.fileno(), owner.st_uid, owner.st_gid)
+        os.replace(temporary, path)
+    finally:
+        Path(temporary).unlink(missing_ok=True)
 
 
 def _read_json(path, default=None):
@@ -162,6 +170,23 @@ def queue_nginx_save(content, requested_by):
     return request_id
 
 
+def queue_deployment_maintenance():
+    """Internal updater operation using the existing privileged configuration worker."""
+    if _service_running():
+        raise NginxConfigError("worker_busy")
+    request_id = uuid.uuid4().hex
+    _atomic_write_json(REQUEST_FILE, {"request_id": request_id,
+                                    "action": "prepare_deployment",
+                                    "requested_at": _utc_now(),
+                                    "requested_by": "code-update"})
+    _atomic_write_json(STATUS_FILE, {"request_id": request_id,"phase": "queued","result": None})
+    result = _run([SUDO, SYSTEMCTL, "--no-block", "start", SERVICE_NAME], timeout=10)
+    if result.returncode != 0:
+        REQUEST_FILE.unlink(missing_ok=True)
+        raise NginxConfigError("worker_start_failed")
+    return request_id
+
+
 def _combined_output(result):
     parts = []
     if result.stdout.strip():
@@ -206,6 +231,20 @@ def run_request():
     if not request_id or not isinstance(request_id, str):
         raise NginxConfigError("request_missing")
 
+    if request.get("action") == "prepare_deployment":
+        if __package__:
+            from .deployment_guard import MaintenanceError, privileged_prepare
+        else:
+            from deployment_guard import MaintenanceError, privileged_prepare
+        try:
+            return privileged_prepare(request, sys.modules[__name__])
+        except MaintenanceError as exc:
+            raise NginxConfigError(str(exc)) from exc
+    return apply_config(request)
+
+
+def apply_config(request):
+    request_id = request["request_id"]
     raw = _validate_content(request.get("content"))
 
     if not CONFIG_FILE.exists() or not CONFIG_FILE.is_file() or CONFIG_FILE.is_symlink():
