@@ -15,6 +15,7 @@ from urllib.parse import parse_qs, urlsplit
 
 from starlette.concurrency import run_in_threadpool
 from starlette.responses import PlainTextResponse
+from . import traffic_countries
 
 ROOT = Path(__file__).resolve().parents[2] / 'data' / 'public_traffic'
 COOKIE = 'eveosint_public_visitor'
@@ -25,9 +26,11 @@ _last_warning = 0
 
 
 def googlebot_blocked():
-    """Small local setting; default to the administrator's requested block."""
+    """Allow cache-only indexing by default; preserve explicit administrator blocks."""
     try:
         return json.loads((ROOT / 'crawler_policy.json').read_text()).get('block_googlebot') is not False
+    except FileNotFoundError:
+        return False
     except (OSError, ValueError, AttributeError):
         return True
 
@@ -119,6 +122,7 @@ def request_details(request):
     agent = client_type(request.headers.get('user-agent'))
     probe = bool(re.search(r'(?i)(?:/\.env(?:[./]|$)|/\.git(?:/|$)|wp-admin|wp-login|xmlrpc\.php|phpmyadmin|/vendor/phpunit)', target))
     return dict(target=target,method=request.method[:12],client=agent,
+                country=traffic_countries.country(request.client.host if request.client else None),
                 signal='Scanner-like path' if probe else 'Declared crawler' if '(declared)' in agent else
                 'Automation client' if agent in ('curl','wget','Python requests','Python HTTPX','Headless Chrome') else 'Unclassified')
 
@@ -150,8 +154,15 @@ def connection():
         CREATE TABLE IF NOT EXISTS request_details (
             id INTEGER PRIMARY KEY, target TEXT, method TEXT, client TEXT, signal TEXT);
         CREATE TABLE IF NOT EXISTS metadata (key TEXT PRIMARY KEY, value TEXT);
+        CREATE TABLE IF NOT EXISTS country_requests (
+            day TEXT, country TEXT, kind TEXT, status INTEGER, count INTEGER,
+            PRIMARY KEY(day,country,kind,status)) WITHOUT ROWID;
+        CREATE TABLE IF NOT EXISTS country_visitors (
+            day TEXT, visitor BLOB, country TEXT, PRIMARY KEY(day,visitor,country)) WITHOUT ROWID;
+        CREATE TABLE IF NOT EXISTS recent_countries (id INTEGER PRIMARY KEY, country TEXT);
         CREATE INDEX IF NOT EXISTS visitors_page ON visitors(day,page);
         CREATE INDEX IF NOT EXISTS presence_seen ON presence(seen);
+        CREATE INDEX IF NOT EXISTS country_visitors_country ON country_visitors(day,country);
         ''')
         yield conn
         conn.commit()
@@ -180,8 +191,17 @@ def record(page, kind, status, elapsed, cookie=None, now=None, presence=False, d
                 if details:
                     conn.execute('INSERT INTO request_details VALUES (?,?,?,?,?)',
                                  (inserted.lastrowid,details['target'],details['method'],details['client'],details['signal']))
+                    country = details.get('country','ZZ')
+                    if not isinstance(country,str) or not re.fullmatch('[A-Z]{2}',country):
+                        country = 'ZZ'
+                    conn.execute('INSERT INTO recent_countries VALUES (?,?)',(inserted.lastrowid,country))
+                    conn.execute('''INSERT INTO country_requests VALUES (?,?,?,?,1)
+                        ON CONFLICT(day,country,kind,status) DO UPDATE SET count=count+1''',(day,country,kind,status))
+                    if visitor and kind == 'page' and 200 <= status < 300:
+                        conn.execute('INSERT OR IGNORE INTO country_visitors VALUES (?,?,?)',(day,visitor,country))
                 conn.execute('DELETE FROM recent WHERE id <= (SELECT MAX(id)-1000 FROM recent)')
                 conn.execute('DELETE FROM request_details WHERE id < (SELECT MIN(id) FROM recent)')
+                conn.execute('DELETE FROM recent_countries WHERE id < (SELECT MIN(id) FROM recent)')
                 if visitor and kind == 'page' and 200 <= status < 300:
                     conn.executemany('INSERT OR IGNORE INTO visitors VALUES (?,?,?)', [(day,visitor,''),(day,visitor,page)])
             # Cleanup at most once per minute, shared by all web workers.
@@ -190,6 +210,8 @@ def record(page, kind, status, elapsed, cookie=None, now=None, presence=False, d
                 cutoff = datetime.fromtimestamp(now-RETENTION_DAYS*86400,timezone.utc).strftime('%Y-%m-%d')
                 conn.execute('DELETE FROM requests WHERE day <= ?', (cutoff,))
                 conn.execute('DELETE FROM visitors WHERE day <= ?', (cutoff,))
+                conn.execute('DELETE FROM country_requests WHERE day <= ?', (cutoff,))
+                conn.execute('DELETE FROM country_visitors WHERE day <= ?', (cutoff,))
                 conn.execute('DELETE FROM presence WHERE seen < ?', (now-90,))
                 conn.execute("INSERT INTO metadata VALUES ('cleaned',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", (str(now),))
             conn.execute("INSERT OR IGNORE INTO metadata VALUES ('started',?)", (str(now),))
@@ -229,7 +251,8 @@ def snapshot(day=None):
             FROM requests r WHERE r.day=? AND r.kind='page' AND r.status BETWEEN 200 AND 299
             GROUP BY r.page ORDER BY views DESC LIMIT 100''',(day,day))]
         recent = [dict(r) for r in conn.execute('''SELECT r.at,r.page,r.kind,r.status,r.elapsed,
-            d.target,d.method,d.client,d.signal FROM recent r LEFT JOIN request_details d ON d.id=r.id
+            d.target,d.method,d.client,d.signal,c.country FROM recent r LEFT JOIN request_details d ON d.id=r.id
+            LEFT JOIN recent_countries c ON c.id=r.id
             ORDER BY r.id DESC LIMIT 100''')]
         diagnostics = [dict(r) for r in conn.execute('''SELECT d.target,d.method,d.client,d.signal,
             r.status,COUNT(*) requests,MIN(r.at) first_seen,MAX(r.at) last_seen
@@ -239,6 +262,12 @@ def snapshot(day=None):
             ORDER BY requests DESC,last_seen DESC LIMIT 100''',
             (selected_start,selected_start+86400))]
         started = conn.execute("SELECT value FROM metadata WHERE key='started'").fetchone()
+        countries = [dict(r) for r in conn.execute('''SELECT country,SUM(count) requests,
+            SUM(CASE WHEN kind='page' AND status BETWEEN 200 AND 299 THEN count ELSE 0 END) views,
+            SUM(CASE WHEN kind='blocked' THEN count ELSE 0 END) blocked,
+            (SELECT COUNT(*) FROM country_visitors v WHERE v.day=? AND v.country=r.country) unique_visitors
+            FROM country_requests r WHERE day=? GROUP BY country
+            ORDER BY unique_visitors DESC, views DESC, requests DESC''',(day,day))]
     for r in recent:
         r['at'] = datetime.fromtimestamp(r['at'],timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
     for r in diagnostics:
@@ -246,7 +275,8 @@ def snapshot(day=None):
             r[key] = datetime.fromtimestamp(r[key],timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
     return dict(day=day,today=today,days=days,summary=summary,pages=pages,active=active,recent=recent,diagnostics=diagnostics,
                 started=datetime.fromtimestamp(float(started[0]),timezone.utc).isoformat() if started else None,
-                recording_error=_last_error, block_googlebot=googlebot_blocked())
+                recording_error=_last_error, block_googlebot=googlebot_blocked(),
+                countries=countries, country_database=traffic_countries.status())
 
 
 async def traffic_middleware(request, call_next):
@@ -254,17 +284,19 @@ async def traffic_middleware(request, call_next):
     if not (path == '/public' or path.startswith('/public/')):
         return await call_next(request)
     start = time.monotonic()
-    if 'googlebot' in request.headers.get('user-agent', '').lower() and googlebot_blocked():
-        await run_in_threadpool(record, page_key(str(request.url)), 'blocked', 403,
-                                (time.monotonic()-start)*1000, details=request_details(request))
-        return PlainTextResponse('Crawler access blocked.', status_code=403,
-                                 headers={'Cache-Control': 'no-store'})
+    crawler = 'googlebot' in request.headers.get('user-agent', '').lower()
+    if crawler:
+        response = await run_in_threadpool(googlebot_access, request)
+        if response is not None:
+            await run_in_threadpool(record, page_key(str(request.url)), 'blocked', response.status_code,
+                                    (time.monotonic()-start)*1000, details=request_details(request))
+            return response
     if path == '/public/traffic/presence':
         return await call_next(request)
     response = await call_next(request)
     is_page = path not in ('/public/read','/public/compute') and request.method == 'GET' and 'text/html' in response.headers.get('content-type','')
-    cookie = request.cookies.get(COOKIE)
-    if is_page and 200 <= response.status_code < 300 and visitor_id(cookie,'check') is None:
+    cookie = None if crawler else request.cookies.get(COOKIE)
+    if not crawler and is_page and 200 <= response.status_code < 300 and visitor_id(cookie,'check') is None:
         cookie = secrets.token_hex(16)
         response.set_cookie(COOKIE,cookie,max_age=30*86400,httponly=True,secure=request.url.scheme=='https',samesite='lax',path='/public')
     # API URLs contain the page scope; retain its safe page identity only.
@@ -273,3 +305,37 @@ async def traffic_middleware(request, call_next):
     await run_in_threadpool(record,key,'page' if is_page else 'data',response.status_code,
                             (time.monotonic()-start)*1000,cookie,details=request_details(request))
     return response
+
+
+def googlebot_access(request):
+    """No database, renderer, data endpoint or background task on a crawler miss."""
+    def denied(status=403):
+        headers = {'Cache-Control': 'no-store'}
+        if status == 503:
+            headers['Retry-After'] = '3600'
+        return PlainTextResponse('Crawler access blocked.' if status == 403 else 'Cached page unavailable.',
+                                 status_code=status, headers=headers)
+    if googlebot_blocked():
+        return denied()
+    path = request.url.path
+    if request.method != 'GET' or request.url.query:
+        return denied()
+    if path in ('/public', '/public/', '/public/entities'):
+        return None
+    from . import public_pages as public
+    try:
+        target = public.resolve(path)
+    except ValueError:
+        return denied()
+    if (target.key in ('tools', 'map', 'coalition') or target.tab not in ('overview', 'detail', 'index', 'character', 'dashboard', 'killboard')
+            or target.path == '/ship-category'):
+        return denied()
+    if not public.published(target, public.settings()):
+        return PlainTextResponse('Not found.', status_code=404, headers={'Cache-Control':'no-store'})
+    snapshot = public.load(target, allow_stale=True)
+    if snapshot is None:
+        return denied(503)
+    # Pass the actual snapshot to the shared gateway so expiry/eviction cannot
+    # cause a subsequent cache check to fall through to the expensive renderer.
+    request.state.googlebot_snapshot = snapshot
+    return None

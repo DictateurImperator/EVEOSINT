@@ -52,6 +52,64 @@ class PublicTests(unittest.TestCase):
     def enable(self, *values):
         return public.save_settings(set(values))
 
+    def test_googlebot_shared_pages_cache_only_and_revocation(self):
+        traffic=f.load('public_traffic')
+        with patch.object(traffic,'ROOT',Path(self.temp.name)/'traffic'), patch.object(f.package,'public_pages',public,create=True):
+            traffic.set_googlebot_blocked(False)
+            self.client.app.middleware('http')(traffic.traffic_middleware)
+            self.enable('character','character:overview','leaderboard','leaderboard:character')
+            headers={'user-agent':'Googlebot/2.1'}
+            self.assertEqual(self.client.get('/public',headers=headers).status_code,200)
+            self.assertEqual(self.client.get('/public/character/1',headers=headers).status_code,503)
+            self.renderer.assert_not_called()
+            # A human warms the same bounded cache using the existing renderer.
+            self.assertEqual(self.client.get('/public/character/1').status_code,200)
+            self.assertEqual(self.renderer.call_count,1)
+            target=public.resolve('/character/1')
+            cache_path=public.ROOT/('snapshot-'+target.digest+'.json')
+            value=json.loads(cache_path.read_text());value['created']=time.time()-86400
+            cache_path.write_text(json.dumps(value))
+            original_mtime=cache_path.stat().st_mtime_ns
+            self.assertIsNone(public.load(target))
+            response=self.client.get('/public/character/1',headers=headers)
+            self.assertEqual(response.status_code,200)
+            self.assertIn('On demand',response.text)
+            self.assertNotIn('set-cookie',response.headers)
+            self.assertEqual(self.renderer.call_count,1)
+            self.assertEqual(cache_path.stat().st_mtime_ns,original_mtime)
+            # Even if the cache disappears after the middleware read, never render.
+            original=public.load
+            def evict(*args,**kwargs):
+                value=original(*args,**kwargs)
+                if kwargs.get('allow_stale'):cache_path.unlink(missing_ok=True)
+                return value
+            with patch.object(public,'load',side_effect=evict):
+                self.assertEqual(self.client.get('/public/character/1',headers=headers).status_code,200)
+            self.assertEqual(self.renderer.call_count,1)
+            public.store(target,'<h1>Cached</h1>')
+            self.enable('leaderboard','leaderboard:character')
+            self.assertEqual(self.client.get('/public/character/1',headers=headers).status_code,404)
+            self.assertEqual(self.renderer.call_count,1)
+
+    def test_googlebot_never_runs_dynamic_queries_or_group_scans(self):
+        traffic=f.load('public_traffic')
+        with patch.object(traffic,'ROOT',Path(self.temp.name)/'traffic'), patch.object(f.package,'public_pages',public,create=True):
+            traffic.set_googlebot_blocked(False)
+            self.client.app.middleware('http')(traffic.traffic_middleware)
+            self.enable(*[row['key'] for row in public.CATALOG])
+            headers={'user-agent':'Mozilla/5.0 Googlebot/2.1'}
+            for path in ('/public/read?source=/character/1&path=/api/character/1/history',
+                         '/public/compute','/public/traffic/presence','/public/groups/example',
+                         '/public/tools','/public/map','/public/coalition/1',
+                         '/public/leaderboard?page=2','/public/character/1?tab=stats',
+                         '/public/character/1?q=search','/public/superintel/monthly-analysis'):
+                response=self.client.get(path,headers=headers)
+                self.assertEqual(response.status_code,403,path)
+                self.assertNotIn('set-cookie',response.headers)
+            self.assertEqual(self.client.post('/public/compute',headers=headers,json={}).status_code,403)
+            self.renderer.assert_not_called()
+            self.assertEqual(self.client.get('/public/groups/example').status_code,200)
+
     def test_default_closed_private_and_direct_tab_urls(self):
         for url in ('/public/leaderboard', '/public/character/1?tab=stats', '/public/admin',
                     '/public/account', '/public/profiles', '/public/api/entity-search', '/public/tools'):

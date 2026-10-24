@@ -19,6 +19,8 @@ class TrafficTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.root = patch.object(traffic,'ROOT',Path(self.tmp.name));self.root.start()
+        traffic.set_googlebot_blocked(True)
+        self.geo = patch.object(traffic.traffic_countries,'ensure_database');self.geo.start()
         app = FastAPI()
         app.middleware('http')(traffic.traffic_middleware)
         app.include_router(routes.router)
@@ -37,7 +39,7 @@ class TrafficTests(unittest.TestCase):
         self.client = TestClient(app)
 
     def tearDown(self):
-        self.root.stop();self.tmp.cleanup()
+        self.geo.stop();self.root.stop();self.tmp.cleanup()
 
     def test_daily_and_per_page_uniques_and_requests_are_distinct(self):
         self.client.get('/public/character/1')
@@ -175,8 +177,11 @@ class TrafficTests(unittest.TestCase):
         with traffic.connection() as c:
             c.executemany('INSERT INTO recent(at,page,kind,status,elapsed) VALUES (?,?,?,?,?)',
                           [(time.time(),'/public','page',200,1)]*1010)
+            c.execute("INSERT INTO recent_countries SELECT id,'FR' FROM recent")
         traffic.record('/public','page',200,1)
-        with traffic.connection() as c:self.assertEqual(c.execute('SELECT COUNT(*) FROM recent').fetchone()[0],1000)
+        with traffic.connection() as c:
+            self.assertEqual(c.execute('SELECT COUNT(*) FROM recent').fetchone()[0],1000)
+            self.assertLessEqual(c.execute('SELECT COUNT(*) FROM recent_countries').fetchone()[0],1000)
 
     def test_googlebot_blocked_before_handler_and_without_visitor_cookie(self):
         for path in ('/public/character/1', '/public/read', '/public/traffic/presence', '/public'):
@@ -216,7 +221,8 @@ class TrafficTests(unittest.TestCase):
             self.assertEqual(self.client.post(url,json={'blocked':False},headers=headers).status_code,200)
             self.assertFalse(traffic.googlebot_blocked())
             self.assertFalse(self.client.get('/admin/public-traffic/data').json()['block_googlebot'])
-            self.assertEqual(self.client.get('/public/character/1',headers={'user-agent':'Googlebot'}).status_code,200)
+            # Indexing permission never permits an uncached/unpublished page.
+            self.assertEqual(self.client.get('/public/character/1',headers={'user-agent':'Googlebot'}).status_code,404)
             self.assertEqual(self.client.post(url,json={'blocked':True},headers=headers).status_code,200)
             self.assertEqual(self.client.get('/public/character/1',headers={'user-agent':'Googlebot'}).status_code,403)
         self.assertTrue((traffic.ROOT/'crawler_policy.json').exists())
@@ -232,11 +238,71 @@ class TrafficTests(unittest.TestCase):
             self.assertTrue(response.headers['content-type'].startswith('text/plain'))
             self.assertEqual(response.headers['cache-control'],'public, max-age=300')
             parser=RobotFileParser();parser.parse(response.text.splitlines())
-            for path in ('/public','/public/','/public/character/1','/public/read?source=/character/1'):
+            for path in ('/public','/public/','/public/character/1'):
                 self.assertEqual(parser.can_fetch('Googlebot',path),not blocked)
                 self.assertTrue(parser.can_fetch('bingbot',path))
+            self.assertFalse(parser.can_fetch('Googlebot','/public/read'))
             self.assertTrue(parser.can_fetch('Googlebot','/robots.txt'))
         self.assertEqual(traffic.snapshot()['summary']['requests'],0)
+
+    def test_cache_indexing_default_preserves_explicit_block_and_fail_closed(self):
+        policy=traffic.ROOT/'crawler_policy.json'
+        policy.unlink()
+        self.assertFalse(traffic.googlebot_blocked())
+        traffic.set_googlebot_blocked(True)
+        self.assertTrue(traffic.googlebot_blocked())
+        policy.write_text('broken')
+        self.assertTrue(traffic.googlebot_blocked())
+
+    def test_country_daily_counts_dedupe_browsers_and_separate_bots(self):
+        with patch.object(traffic.traffic_countries,'country',return_value='FR'):
+            self.client.get('/public/character/1');self.client.get('/public/character/2')
+        with patch.object(traffic.traffic_countries,'country',return_value='DE'):
+            self.client.get('/public/character/1')
+            self.client.get('/public/read')
+            self.client.get('/public/character/1',headers={'user-agent':'Googlebot'})
+        s=traffic.snapshot();countries={r['country']:r for r in s['countries']}
+        self.assertEqual(countries['FR']['unique_visitors'],1)
+        self.assertEqual(countries['FR']['views'],2)
+        self.assertEqual(countries['DE']['unique_visitors'],1)
+        self.assertEqual(countries['DE']['views'],1)
+        self.assertEqual(countries['DE']['requests'],3)
+        self.assertEqual(countries['DE']['blocked'],1)
+        self.assertEqual(s['summary']['unique_visitors'],1)
+        self.assertEqual(s['recent'][0]['country'],'DE')
+        self.assertEqual(self.client.get('/admin/public-traffic/data').status_code,403)
+        with traffic.connection() as c:
+            self.assertEqual(c.execute('SELECT COUNT(*) FROM country_visitors').fetchone()[0],2)
+            # Only country codes are stored, never client addresses.
+            columns={r[1] for r in c.execute('PRAGMA table_info(recent_countries)')}
+            self.assertEqual(columns,{'id','country'})
+
+    def test_country_refresh_is_admin_only_and_background(self):
+        url='/admin/public-traffic/countries'
+        self.assertEqual(self.client.post(url,headers={'origin':'http://testserver'}).status_code,403)
+        with patch.object(routes,'require_login',return_value=ADMIN):
+            self.assertEqual(self.client.post(url).status_code,403)
+            self.assertEqual(self.client.post(url,headers={'origin':'https://foreign.example'}).status_code,403)
+            self.assertEqual(self.client.post(url,headers={'origin':'http://testserver'}).status_code,202)
+        traffic.traffic_countries.ensure_database.assert_called_once_with(force=True)
+
+    def test_country_uses_asgi_client_not_arbitrary_forwarded_header(self):
+        from starlette.requests import Request
+        request=Request({'type':'http','method':'GET','path':'/public','query_string':b'',
+                         'headers':[(b'x-forwarded-for',b'1.1.1.1')],
+                         'scheme':'http','server':('testserver',80),'client':('8.8.8.8',12345)})
+        with patch.object(traffic.traffic_countries,'country',return_value='US') as lookup:
+            self.assertEqual(traffic.request_details(request)['country'],'US')
+        lookup.assert_called_once_with('8.8.8.8')
+
+    def test_country_metrics_follow_thirty_day_retention(self):
+        details=dict(target='/public',method='GET',client='Safari',signal='Unclassified',country='FR')
+        traffic.record('/public','page',200,1,'a'*32,now=time.time()-40*86400,details=details)
+        with traffic.connection() as c:c.execute("DELETE FROM metadata WHERE key='cleaned'")
+        traffic.record('/public','page',200,1,'a'*32,details=dict(details,country='DE'))
+        with traffic.connection() as c:
+            self.assertEqual([r[0] for r in c.execute('SELECT country FROM country_requests')],['DE'])
+            self.assertEqual([r[0] for r in c.execute('SELECT country FROM country_visitors')],['DE'])
 
 
 if __name__ == '__main__':unittest.main()

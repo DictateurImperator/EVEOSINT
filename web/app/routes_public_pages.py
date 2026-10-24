@@ -387,7 +387,11 @@ def public_page(request: Request, path: str):
         return HTMLResponse(status_code=404, headers={'Cache-Control': 'no-store'})
     from .public_page_renderer import render
     try:
-        snapshot, hit = public.cached_result(target, lambda: render(request,target))
+        crawler_snapshot = getattr(request.state, 'googlebot_snapshot', None)
+        if crawler_snapshot is not None:
+            snapshot, hit = crawler_snapshot, True
+        else:
+            snapshot, hit = public.cached_result(target, lambda: render(request,target))
     except public.CacheBusy as exc:
         return HTMLResponse('<p>'+str(exc)+'</p>', status_code=503, headers={'Retry-After':'2','Cache-Control':'no-store'})
     except Exception:

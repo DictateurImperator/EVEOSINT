@@ -7,18 +7,24 @@
 <div id="trafficStatus" class="muted-line mb-3" role="status">Loading traffic…</div>
 <section class="content-card p-3 mb-3">
   <h2 class="h5">Googlebot access</h2>
-  <p class="muted-line small">Requests declaring Googlebot are blocked before public pages or calculations load. The same setting tells Googlebot not to crawl public pages through robots.txt; crawlers may cache that instruction. The User-Agent is a declaration, not a verified identity. Blocked attempts remain visible below.</p>
+  <p class="muted-line small">Cache-only indexing lets Googlebot read the home page and already cached public pages, without starting calculations. Filters, pagination, tools, maps, groups and dynamic data requests remain blocked. Missing cached pages return HTTP 503. Existing cached results can be older than five minutes. A full block is also available. robots.txt follows this setting; crawlers may cache it. User-Agent identities are declared, not verified.</p>
   <span id="googlebotStatus" role="status">Loading policy…</span>
-  <button id="googlebotToggle" type="button" class="btn btn-outline-info ms-2" disabled>Allow Googlebot</button>
+  <button id="googlebotToggle" type="button" class="btn btn-outline-info ms-2" disabled>Allow cache-only indexing</button>
 </section>
 <div id="trafficSummary" class="row g-3 mb-4"></div>
+<section class="content-card p-3 mb-3">
+  <div class="d-flex align-items-center justify-content-between flex-wrap gap-2"><h2 class="h5">Visitors by IP country · Selected day</h2><button id="countryRefresh" class="btn btn-outline-info" type="button">Update country database</button></div>
+  <p class="muted-line small">Approximate IP location, not nationality. VPNs, proxies and crawlers can represent another country. Unique browsers are counted once per country per UTC day; requests include bots and blocked attempts. Country collection starts with this update; earlier requests have no country. No visitor IP is stored or sent to a geolocation API. <a href="https://db-ip.com" target="_blank" rel="noopener noreferrer">IP Geolocation by DB-IP</a> · CC BY 4.0.</p>
+  <div id="countryStatus" class="muted-line small mb-2" role="status">Loading country database status…</div>
+  <div class="table-responsive"><table class="table"><thead><tr><th>Country</th><th>Unique visitors</th><th>Page views</th><th>Requests</th><th>Blocked</th></tr></thead><tbody id="trafficCountries"></tbody></table></div>
+</section>
 <div class="row g-3">
   <section class="col-lg-6"><div class="content-card p-3 h-100"><h2 class="h5">Active visitors by page · Now</h2><p class="muted-line small">Visible browser tabs with a heartbeat in the last 90 seconds. One browser is counted once per page.</p><div class="table-responsive"><table class="table"><thead><tr><th>Page</th><th>Active</th></tr></thead><tbody id="trafficActive"></tbody></table></div></div></section>
   <section class="col-lg-6"><div class="content-card p-3 h-100"><h2 class="h5">Daily history</h2><div class="table-responsive"><table class="table"><thead><tr><th>UTC day</th><th>Unique visitors</th><th>Page views</th><th>Requests</th></tr></thead><tbody id="trafficDays"></tbody></table></div></div></section>
 </div>
 <section class="content-card p-3 mt-3"><h2 class="h5">Most viewed pages · Selected day</h2><div class="table-responsive"><table class="table"><thead><tr><th>Page</th><th>Page views</th><th>Unique visitors</th><th>Average response</th></tr></thead><tbody id="trafficPages"></tbody></table></div></section>
 <section class="content-card p-3 mt-3"><h2 class="h5">Unknown routes and errors · Selected day</h2><p class="muted-line small">Repeated requests in the latest 1,000 recorded requests, filtered to the selected UTC day. Requested paths are shown without queries; token-like segments and public group links are redacted. Client labels come from the declared User-Agent and can be spoofed. Scanner-like paths are clues, not proof of a bot.</p><div class="table-responsive"><table class="table"><thead><tr><th>Requested path</th><th>Method</th><th>Client</th><th>Signal</th><th>HTTP</th><th>Requests in sample</th><th>First seen · UTC</th><th>Last seen · UTC</th></tr></thead><tbody id="trafficDiagnostics"></tbody></table></div></section>
-<section class="content-card p-3 mt-3"><h2 class="h5">Latest requests · All days</h2><div class="table-responsive" style="max-height:32rem"><table class="table"><thead><tr><th>Time · UTC</th><th>Page</th><th>Requested path</th><th>Method</th><th>Client</th><th>Signal</th><th>Type</th><th>HTTP</th><th>Response</th></tr></thead><tbody id="trafficRecent"></tbody></table></div></section>
+<section class="content-card p-3 mt-3"><h2 class="h5">Latest requests · All days</h2><div class="table-responsive" style="max-height:32rem"><table class="table"><thead><tr><th>Time · UTC</th><th>Page</th><th>Requested path</th><th>Country</th><th>Method</th><th>Client</th><th>Signal</th><th>Type</th><th>HTTP</th><th>Response</th></tr></thead><tbody id="trafficRecent"></tbody></table></div></section>
 <p class="muted-line small mt-3">30 days of daily metrics and unique visitor counts; the last 1,000 requests are retained. A unique visitor is a browser using an anonymous cookie, not an authenticated account. Clearing cookies or using another browser counts again. No IP addresses, account identities, search strings, cookies or public group links are stored. Requested paths and fixed client-family labels are retained with these recent records; raw User-Agent strings are not stored. Browser-cached pages may not produce a server request. Response times measure server time until response headers; heartbeat requests are excluded. Collection starts after deployment; earlier traffic is unavailable.</p>
 <script>
 (() => {
@@ -26,13 +32,28 @@
   day.value = new Date().toISOString().slice(0,10); day.max = day.value;
   const number = v => Number(v || 0).toLocaleString();
   const ms = v => number(Math.round(v || 0))+' ms';
+  const countryNames = typeof Intl.DisplayNames === 'function' ? new Intl.DisplayNames(['en'],{type:'region'}) : null;
+  const countryLabel = code => {
+    if(!code || code==='ZZ' || !/^[A-Z]{2}$/.test(code)) return 'Unknown / unavailable';
+    const flag=String.fromCodePoint(...[...code].map(c=>127397+c.charCodeAt(0)));
+    return flag+' '+(countryNames ? countryNames.of(code) : code)+' ('+code+')';
+  };
+  const countryButton=document.getElementById('countryRefresh'), countryStatus=document.getElementById('countryStatus');
+  countryButton.addEventListener('click',async () => {
+    countryButton.disabled=true;
+    try {
+      const response=await fetch('/admin/public-traffic/countries',{method:'POST',cache:'no-store'});
+      if(!response.ok) throw new Error('Cannot update country database (HTTP '+response.status+').');
+      countryStatus.textContent='Downloading the local country database…';
+    } catch(error) { countryStatus.textContent=error.message;countryButton.disabled=false; }
+  });
   let running = false;
   const crawlerToggle = document.getElementById('googlebotToggle');
   let crawlerBlocked = true, savingCrawler = false;
   function crawlerPolicy(blocked) {
     crawlerBlocked = blocked;
-    document.getElementById('googlebotStatus').textContent = blocked ? 'Blocked on public pages' : 'Allowed on public pages';
-    crawlerToggle.textContent = blocked ? 'Allow Googlebot' : 'Block Googlebot';
+    document.getElementById('googlebotStatus').textContent = blocked ? 'Blocked on public pages' : 'Cache-only indexing';
+    crawlerToggle.textContent = blocked ? 'Allow cache-only indexing' : 'Block Googlebot';
     crawlerToggle.disabled = savingCrawler;
   }
   crawlerToggle.addEventListener('click', async () => {
@@ -81,8 +102,12 @@
       rows('trafficActive',data.active,[pageLink,r=>number(r.visitors)]);
       rows('trafficDays',data.days,[r=>r.day,r=>number(r.unique_visitors),r=>number(r.views),r=>number(r.requests)]);
       rows('trafficPages',data.pages,[pageLink,r=>number(r.views),r=>number(r.unique_visitors),r=>ms(r.average)]);
+      rows('trafficCountries',data.countries || [],[r=>countryLabel(r.country),r=>number(r.unique_visitors),r=>number(r.views),r=>number(r.requests),r=>number(r.blocked)]);
+      const geo=data.country_database || {};
+      countryButton.disabled=geo.state==='downloading';
+      countryStatus.textContent=geo.state==='ready' ? 'Local database: '+geo.month+' · '+number(geo.bytes)+' bytes · Updated '+new Date(geo.updated*1000).toLocaleString() : geo.state==='downloading' ? 'Downloading the local country database…' : geo.state==='failed' ? geo.error+' Existing database remains in use if available.' : 'The local country database is not installed yet. Installation starts when Admin opens this page.';
       rows('trafficDiagnostics',data.diagnostics || [],[r=>r.target,r=>r.method,r=>r.client,r=>r.signal,r=>r.status,r=>number(r.requests),r=>r.first_seen,r=>r.last_seen]);
-      rows('trafficRecent',data.recent,[r=>r.at,pageLink,r=>r.target || 'Not recorded before this update',r=>r.method || '—',r=>r.client || '—',r=>r.signal || '—',r=>r.kind,r=>r.status,r=>ms(r.elapsed)]);
+      rows('trafficRecent',data.recent,[r=>r.at,pageLink,r=>r.target || 'Not recorded before this update',r=>countryLabel(r.country),r=>r.method || '—',r=>r.client || '—',r=>r.signal || '—',r=>r.kind,r=>r.status,r=>ms(r.elapsed)]);
       status.textContent = data.recording_error ? 'Some traffic could not be recorded. Check application logs and data directory permissions.' : data.started ? 'Updated '+new Date().toLocaleTimeString()+' · Collection started '+data.started : 'Waiting for the first public request.';
     } catch(error) {status.textContent=error.message+' Retrying in 15 seconds.';}
     finally {running=false;}

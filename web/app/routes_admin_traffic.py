@@ -1,6 +1,6 @@
 from urllib.parse import urlsplit
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, BackgroundTasks, Request
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, Response
 from starlette.concurrency import run_in_threadpool
 
@@ -16,7 +16,12 @@ router = APIRouter()
 def robots():
     # Keep the crawl instruction consistent with the enforced public access policy.
     # This file must itself remain available to Googlebot, including when blocked.
-    rule = 'Disallow: /public' if traffic.googlebot_blocked() else 'Allow: /'
+    rule = 'Disallow: /public' if traffic.googlebot_blocked() else '\n'.join([
+        'Disallow: /*?*', 'Disallow: /public/read', 'Disallow: /public/compute',
+        'Disallow: /public/traffic/', 'Disallow: /public/groups/', 'Disallow: /public/tools',
+        'Disallow: /public/map', 'Disallow: /public/coalition/', 'Disallow: /public/ship-analysis',
+        'Disallow: /public/superintel/evolution', 'Disallow: /public/ship-category',
+        'Disallow: /public/superintel/detailed', 'Disallow: /public/superintel/monthly-analysis'])
     return PlainTextResponse(f'User-agent: Googlebot\n{rule}\n\nUser-agent: *\nDisallow:\n',
                              headers={'Cache-Control': 'public, max-age=300'})
 
@@ -27,10 +32,12 @@ def authorized(request):
 
 
 @router.get('/admin/public-traffic', response_class=HTMLResponse)
-def dashboard(request: Request):
+def dashboard(request: Request, background_tasks: BackgroundTasks):
     user, redirect = authorized(request)
     if redirect:
         return redirect
+    # Initial install/monthly refresh only from authenticated Admin, off the request path.
+    background_tasks.add_task(traffic.traffic_countries.ensure_database)
     context = app_context(request=request,user=user,title='EVEOSINT - Public traffic',
                           active_module='admin',active_menu_key='admin.public_traffic')
     return templates.TemplateResponse(request=request,name='admin_public_traffic.html',context=context,
@@ -85,3 +92,13 @@ async def googlebot_policy(request: Request):
     except OSError:
         return JSONResponse({'error': 'Cannot save crawler policy.'}, status_code=503, headers=headers)
     return JSONResponse({'block_googlebot': payload['blocked']}, headers=headers)
+
+
+@router.post('/admin/public-traffic/countries')
+def refresh_countries(request: Request, background_tasks: BackgroundTasks):
+    _, redirect = authorized(request)
+    headers = {'Cache-Control':'no-store'}
+    if redirect or (request.headers.get('origin') or '').rstrip('/') != str(request.base_url).rstrip('/'):
+        return JSONResponse({'error':'Forbidden'},status_code=403,headers=headers)
+    background_tasks.add_task(traffic.traffic_countries.ensure_database,force=True)
+    return JSONResponse({'state':'downloading'},status_code=202,headers=headers)

@@ -1,0 +1,2 @@
+# Additive runtime dependency: local IP country lookups, never a per-visitor API.
+maxminddb==3.2.0

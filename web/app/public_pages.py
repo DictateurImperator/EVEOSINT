@@ -394,15 +394,16 @@ def _prune(rows, limit):
     _atomic(ROOT / 'index.json', [dict(source=row['source'], created=row['created'], bytes=row['bytes']) for row in rows])
 
 
-def load(target):
+def load(target, *, allow_stale=False):
     try:
         path = ROOT / ('snapshot-' + target.digest + '.json')
         if path.stat().st_size > MAX_ENTRY_BYTES:
             return None
         data = json.loads(path.read_text())
-        if data.get('cache_version')!=CACHE_VERSION or data['source'] != target.source or time.time() - data['created'] >= MAX_AGE:
+        if data.get('cache_version')!=CACHE_VERSION or data['source'] != target.source or (not allow_stale and time.time() - data['created'] >= MAX_AGE):
             return None
-        os.utime(path, None)  # LRU access; no index rewrite/fsync on cache hits.
+        if not allow_stale:
+            os.utime(path, None)  # Crawlers must not keep old results in the LRU.
         return data
     except (OSError, ValueError, KeyError, TypeError):
         return None
