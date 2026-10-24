@@ -223,5 +223,20 @@ class TrafficTests(unittest.TestCase):
         (traffic.ROOT/'crawler_policy.json').write_text('invalid')
         self.assertTrue(traffic.googlebot_blocked())
 
+    def test_robots_is_available_to_blocked_bot_and_follows_policy(self):
+        from urllib.robotparser import RobotFileParser
+        for blocked in (True,False,True):
+            traffic.set_googlebot_blocked(blocked)
+            response=self.client.get('/robots.txt',headers={'user-agent':'Googlebot'})
+            self.assertEqual(response.status_code,200)
+            self.assertTrue(response.headers['content-type'].startswith('text/plain'))
+            self.assertEqual(response.headers['cache-control'],'public, max-age=300')
+            parser=RobotFileParser();parser.parse(response.text.splitlines())
+            for path in ('/public','/public/','/public/character/1','/public/read?source=/character/1'):
+                self.assertEqual(parser.can_fetch('Googlebot',path),not blocked)
+                self.assertTrue(parser.can_fetch('bingbot',path))
+            self.assertTrue(parser.can_fetch('Googlebot','/robots.txt'))
+        self.assertEqual(traffic.snapshot()['summary']['requests'],0)
+
 
 if __name__ == '__main__':unittest.main()

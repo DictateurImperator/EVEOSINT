@@ -1,7 +1,7 @@
 from urllib.parse import urlsplit
 
 from fastapi import APIRouter, Request
-from fastapi.responses import HTMLResponse, JSONResponse, Response
+from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, Response
 from starlette.concurrency import run_in_threadpool
 
 from .auth import require_login, require_permission_or_redirect
@@ -10,6 +10,15 @@ from .main_objects import templates
 from . import public_traffic as traffic
 
 router = APIRouter()
+
+
+@router.get('/robots.txt', response_class=PlainTextResponse)
+def robots():
+    # Keep the crawl instruction consistent with the enforced public access policy.
+    # This file must itself remain available to Googlebot, including when blocked.
+    rule = 'Disallow: /public' if traffic.googlebot_blocked() else 'Allow: /'
+    return PlainTextResponse(f'User-agent: Googlebot\n{rule}\n\nUser-agent: *\nDisallow:\n',
+                             headers={'Cache-Control': 'public, max-age=300'})
 
 
 def authorized(request):
