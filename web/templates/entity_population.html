@@ -864,7 +864,7 @@
 
       async function fetchGroupRowsBatched(groupKey, dates, onProgress, tokenStillValid) {
         const rows=[];
-        const batchSize=groupKey==='first_pvp' ? 1 : ((groupKey==='retention'||groupKey==='core') ? 2 : 4);
+        const batchSize=groupKey==='first_pvp' ? 16 : ((groupKey==='retention'||groupKey==='core') ? 2 : 4);
         const batches=[];
         for(let i=0;i<dates.length;i+=batchSize)batches.push(dates.slice(i,i+batchSize));
         for(let i=0;i<batches.length;i+=1){
@@ -1109,7 +1109,7 @@
         }
 
         const anchors=buildSeriesAnchors(rangeStartDate,rangeEndDate);
-        const batchSize=groupKey==='first_pvp'?1:((groupKey==='retention'||groupKey==='core')?2:3);
+        const batchSize=groupKey==='first_pvp'?16:((groupKey==='retention'||groupKey==='core')?2:3);
         const batches=[];
         for(let i=0;i<anchors.length;i+=batchSize)batches.push(anchors.slice(i,i+batchSize));
         chartRows=[];

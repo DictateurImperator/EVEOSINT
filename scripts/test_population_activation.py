@@ -42,11 +42,24 @@ class ActivationPrecisionTests(unittest.TestCase):
     def test_instant_activation_is_zero(self):
         self.assertEqual(self.calculate('alliance', timedelta(0)), 0)
 
+    def test_sixteen_daily_candidates_share_one_spell_lookup(self):
+        joined = datetime(2026, 10, 1, tzinfo=UTC)
+        first_at = joined + timedelta(hours=12)
+        conn = f.Connection(rows=[(1, joined, first_at, None)])
+        candidates = [(str(day), 1, joined, joined + timedelta(days=day)) for day in range(1, 17)]
+        result = population._load_first_activity_for_anchor_candidates(conn, candidates, 'attacker')
+        self.assertEqual(result, {str(day): first_at for day in range(1, 17)})
+        selects = [(sql, params) for sql, params in conn.queries if params is not None]
+        self.assertEqual(len(selects), 1)
+        self.assertEqual(selects[0][1], ([1], [joined], [joined + timedelta(days=16)]))
+        self.assertNotIn('rawkm.killmails ', selects[0][0])
+
     def test_database_loader_preserves_event_timestamp_for_each_mode(self):
         first_at = datetime(2026, 10, 21, 0, 10, tzinfo=UTC)
         for mode in ['any', 'attacker', 'loss']:
             with self.subTest(mode=mode):
-                conn = f.Connection(rows=[('candidate', first_at)])
+                joined = first_at - timedelta(minutes=20)
+                conn = f.Connection(rows=[(1, joined, first_at if mode != 'loss' else None, first_at if mode != 'attacker' else None)])
                 result = population._load_first_activity_for_anchor_candidates(conn, [
                     ('candidate', 1, first_at - timedelta(minutes=20), first_at + timedelta(days=1))
                 ], mode)

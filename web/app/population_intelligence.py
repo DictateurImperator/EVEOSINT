@@ -908,91 +908,75 @@ def _load_first_activity_for_spells(conn, candidates, max_day, mode):
 
 
 def _load_first_activity_for_anchor_candidates(conn, candidates, mode):
-    """Return first qualifying PvP for anchor-bounded membership windows.
+    """Read each membership spell once, then apply each anchor's end boundary.
 
-    candidates contains (candidate_key, character_id, spell_start, spell_end).
-    spell_end is already capped at the analysed anchor, so Loss only can safely
-    enforce victims-minus-attackers for each analysed date independently.
+    The first attack/loss is sufficient for every requested date in the same
+    spell. In particular a future attack must not remove an earlier Loss-only
+    observation. All reuse is local to this request, with no persisted cache.
     """
     normalized = []
+    spell_ends = {}
     for candidate_key, character_id, spell_start, spell_end in candidates:
         if spell_start is None or spell_end is None or spell_start >= spell_end:
             continue
-        normalized.append((str(candidate_key), int(character_id), spell_start, spell_end))
+        spell_key = (int(character_id), spell_start)
+        normalized.append((str(candidate_key), spell_key, spell_end))
+        previous_end = spell_ends.get(spell_key)
+        if previous_end is None or spell_end > previous_end:
+            spell_ends[spell_key] = spell_end
     if not normalized:
         return {}
 
-    result = {}
+    first_hits = {}
+    spells = list(spell_ends)
     chunk_size = 500
     with conn.cursor() as cur:
         cur.execute("SET LOCAL statement_timeout = '45000ms'")
-        for offset in range(0, len(normalized), chunk_size):
-            chunk = normalized[offset:offset + chunk_size]
-            keys = [row[0] for row in chunk]
-            ids = [row[1] for row in chunk]
-            starts = [row[2] for row in chunk]
-            ends = [row[3] for row in chunk]
-
-            if mode == "attacker":
-                predicate_sql = """
-                    SELECT MIN(ka.killmail_time) AS first_at
-                    FROM rawkm.killmail_attackers ka
-                    WHERE ka.character_id = c.character_id
-                      AND ka.killmail_time >= c.spell_start
-                      AND ka.killmail_time < c.spell_end
-                """
-            elif mode == "loss":
-                predicate_sql = """
-                    SELECT MIN(km.killmail_time) AS first_at
-                    FROM rawkm.killmails km
-                    WHERE km.victim_character_id = c.character_id
-                      AND km.killmail_time >= c.spell_start
-                      AND km.killmail_time < c.spell_end
-                      AND NOT EXISTS (
-                          SELECT 1
-                          FROM rawkm.killmail_attackers ka
-                          WHERE ka.character_id = c.character_id
-                            AND ka.killmail_time >= c.spell_start
-                            AND ka.killmail_time < c.spell_end
-                      )
-                """
-            else:
-                predicate_sql = """
-                    SELECT MIN(event_time) AS first_at
-                    FROM (
-                        SELECT MIN(km.killmail_time) AS event_time
-                        FROM rawkm.killmails km
-                        WHERE km.victim_character_id = c.character_id
-                          AND km.killmail_time >= c.spell_start
-                          AND km.killmail_time < c.spell_end
-                        UNION ALL
-                        SELECT MIN(ka.killmail_time) AS event_time
-                        FROM rawkm.killmail_attackers ka
-                        WHERE ka.character_id = c.character_id
-                          AND ka.killmail_time >= c.spell_start
-                          AND ka.killmail_time < c.spell_end
-                    ) events
-                """
-
+        for offset in range(0, len(spells), chunk_size):
+            chunk = spells[offset:offset + chunk_size]
+            # Attacker-only needs no victim-table access.
+            victim_sql = "NULL::timestamptz" if mode == "attacker" else """(
+                SELECT MIN(km.killmail_time)
+                FROM rawkm.killmails km
+                WHERE km.victim_character_id = c.character_id
+                  AND km.killmail_time >= c.spell_start
+                  AND km.killmail_time < c.spell_end
+            )"""
             cur.execute(
                 """
                 WITH candidates AS (
                     SELECT *
-                    FROM unnest(
-                        %s::text[], %s::bigint[], %s::timestamptz[], %s::timestamptz[]
-                    ) AS t(candidate_key, character_id, spell_start, spell_end)
+                    FROM unnest(%s::bigint[], %s::timestamptz[], %s::timestamptz[])
+                         AS t(character_id, spell_start, spell_end)
                 )
-                SELECT c.candidate_key, first_hit.first_at
+                SELECT c.character_id, c.spell_start,
+                    (SELECT MIN(ka.killmail_time)
+                     FROM rawkm.killmail_attackers ka
+                     WHERE ka.character_id = c.character_id
+                       AND ka.killmail_time >= c.spell_start
+                       AND ka.killmail_time < c.spell_end) AS first_attack,
+                """ + victim_sql + """ AS first_loss
                 FROM candidates c
-                JOIN LATERAL (
-                """ + predicate_sql + """
-                ) first_hit ON first_hit.first_at IS NOT NULL
                 """,
-                (keys, ids, starts, ends),
+                ([key[0] for key in chunk], [key[1] for key in chunk],
+                 [spell_ends[key] for key in chunk]),
             )
-            for candidate_key, first_at in cur.fetchall():
-                # Preserve the timestamp: calendar dates discard sub-day delays.
-                result[str(candidate_key)] = first_at
+            for character_id, spell_start, first_attack, first_loss in cur.fetchall():
+                first_hits[(int(character_id), spell_start)] = (first_attack, first_loss)
+
+    result = {}
+    for candidate_key, spell_key, anchor_end in normalized:
+        first_attack, first_loss = first_hits.get(spell_key, (None, None))
+        attack = first_attack if first_attack is not None and first_attack < anchor_end else None
+        loss = first_loss if first_loss is not None and first_loss < anchor_end else None
+        if mode == "attacker":
+            first_at = attack
+        elif mode == "loss":
+            first_at = loss if attack is None else None
+        else:
+            first_at = min(attack, loss) if attack is not None and loss is not None else (attack or loss)
+        if first_at is not None:
+            result[candidate_key] = first_at
     return result
 
 
