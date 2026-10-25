@@ -705,7 +705,7 @@
         if (type === 'signed_percent') return (n > 0 ? '+' : '') + twoDecimal.format(n) + '%';
         if (type === 'signed_pp') return (n > 0 ? '+' : '') + twoDecimal.format(n) + ' pp';
         if (type === 'years') return oneDecimal.format(n) + ' y';
-        if (type === 'days') return oneDecimal.format(n) + ' d';
+        if (type === 'days') return twoDecimal.format(n) + ' d';
         return twoDecimal.format(n);
       }
 
@@ -733,7 +733,7 @@
           return '<span class="' + cls + '">' + absolute + '</span>';
         }
         if (type === 'years') absolute = (info.delta > 0 ? '+' : '') + oneDecimal.format(info.delta) + ' y';
-        else if (type === 'days') absolute = (info.delta > 0 ? '+' : '') + oneDecimal.format(info.delta) + ' d';
+        else if (type === 'days') absolute = (info.delta > 0 ? '+' : '') + twoDecimal.format(info.delta) + ' d';
         else absolute = (info.delta > 0 ? '+' : '') + numberFormat.format(Math.round(info.delta));
         const relative = info.pct == null ? '—' : (info.pct > 0 ? '+' : '') + twoDecimal.format(info.pct) + '%';
         return '<span class="' + cls + '">' + absolute + ' (' + relative + ')</span>';

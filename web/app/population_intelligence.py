@@ -991,7 +991,8 @@ def _load_first_activity_for_anchor_candidates(conn, candidates, mode):
                 (keys, ids, starts, ends),
             )
             for candidate_key, first_at in cur.fetchall():
-                result[str(candidate_key)] = first_at.date() if isinstance(first_at, datetime) else first_at
+                # Preserve the timestamp: calendar dates discard sub-day delays.
+                result[str(candidate_key)] = first_at
     return result
 
 
@@ -1417,10 +1418,10 @@ def _calculate_intelligence(
                 if not (window_start <= spell[0].date() <= anchor_day):
                     continue
                 candidate_key = candidate_keys.get((anchor_day, int(character_id), spell[0]))
-                first_day = first_dates.get(candidate_key) if candidate_key else None
-                if first_day is None or first_day > anchor_day or first_day < window_start:
+                first_at = first_dates.get(candidate_key) if candidate_key else None
+                if first_at is None or not (window_start <= first_at.date() <= anchor_day):
                     continue
-                delays.append(max(0, (first_day - spell[0].date()).days))
+                delays.append(max(0.0, (first_at - spell[0]).total_seconds() / 86400.0))
 
             target = by_date[anchor_day.isoformat()]
             target["median_activation_delay_days"] = _serialize_number(
@@ -2176,10 +2177,10 @@ def _calculate_corporation_intelligence(
                 if not (window_start <= spell[0].date() <= anchor_day):
                     continue
                 candidate_key = candidate_keys.get((anchor_day, int(character_id), spell[0]))
-                first_day = first_dates.get(candidate_key) if candidate_key else None
-                if first_day is None or first_day > anchor_day or first_day < window_start:
+                first_at = first_dates.get(candidate_key) if candidate_key else None
+                if first_at is None or not (window_start <= first_at.date() <= anchor_day):
                     continue
-                delays.append(max(0, (first_day - spell[0].date()).days))
+                delays.append(max(0.0, (first_at - spell[0]).total_seconds() / 86400.0))
             target = by_date[anchor_day.isoformat()]
             target["median_activation_delay_days"] = _serialize_number(median(delays) if delays else None)
 
@@ -3457,10 +3458,10 @@ def _calculate_coalition_intelligence(
                 candidate_key = candidate_keys.get(
                     (anchor_day, int(character_id), spell[0])
                 )
-                first_day = first_dates.get(candidate_key) if candidate_key else None
-                if first_day is None or first_day > anchor_day or first_day < window_start:
+                first_at = first_dates.get(candidate_key) if candidate_key else None
+                if first_at is None or not (window_start <= first_at.date() <= anchor_day):
                     continue
-                delays.append(max(0, (first_day - spell[0].date()).days))
+                delays.append(max(0.0, (first_at - spell[0]).total_seconds() / 86400.0))
             target = by_date[anchor_day.isoformat()]
             target["median_activation_delay_days"] = _serialize_number(
                 median(delays) if delays else None
