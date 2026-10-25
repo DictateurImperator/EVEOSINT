@@ -47,7 +47,7 @@ class DatabaseTests(unittest.TestCase):
                 cur.execute('''INSERT INTO public.sde_groups VALUES ('25','{"categoryID":6}'),('10','{"categoryID":7}');
                     INSERT INTO public.sde_types VALUES ('10','{"groupID":25,"name":{"en":"Hull"}}'),('20','{"groupID":10,"name":{"en":"Module"}}');''')
             live.importer.ensure_tables(conn)
-        self.backend=live.Backend();self.addCleanup(self.backend.close)
+        self.backend=live.Backend();self.addCleanup(lambda: None if self.backend.conn.closed else self.backend.close())
         with self.backend.conn.cursor() as cur:
             cur.execute('''CREATE TABLE market.zkill_daily_prices(price_date date PRIMARY KEY,prices jsonb);
                 CREATE TABLE market.zkill_recovered_prices(item_type_id bigint,price_date date,unit_price_isk numeric,PRIMARY KEY(item_type_id,price_date));
@@ -95,6 +95,52 @@ class DatabaseTests(unittest.TestCase):
             self.assertEqual(cur.fetchone()[0],4)
             cur.execute('SELECT next_sequence FROM rawkm.live_killmail_cursor')
             self.assertEqual(cur.fetchone()[0],103)
+
+    def mismatching_package(self,ident,sequence):
+        package=self.package(ident,sequence)
+        package['esi']['victim']['corporation_id']=202
+        return package
+
+    def test_same_pilot_history_is_limited_to_once_per_hour_without_blocking_kills(self):
+        self.backend.process(self.package(),100);self.calls.clear()
+        self.backend.process(self.mismatching_package(141000002,101),101)
+        self.assertNotIn('/characters/101/corporationhistory/',self.calls)
+        self.assertNotIn('/characters/101/',self.calls)
+        self.assertEqual(self.backend.metrics['histories_hourly_skipped'],1)
+        self.assertEqual(self.backend.cursor()[0],102)
+        with self.backend.conn.cursor() as cur:
+            cur.execute("UPDATE rawkm.live_character_history_checks SET checked_at=clock_timestamp()-interval '61 minutes' WHERE character_id=101")
+        self.backend.conn.commit();self.calls.clear()
+        self.backend.process(self.mismatching_package(141000003,102),102)
+        self.assertEqual(self.calls.count('/characters/101/corporationhistory/'),1)
+        self.calls.clear()
+        self.backend.process(self.mismatching_package(141000004,103),103)
+        self.assertNotIn('/characters/101/corporationhistory/',self.calls)
+
+    def test_hourly_limit_survives_consumer_restart(self):
+        self.backend.process(self.package(),100)
+        self.backend.close()
+        self.backend=live.Backend();self.addCleanup(lambda: None if self.backend.conn.closed else self.backend.close())
+        self.calls.clear()
+        self.backend.process(self.mismatching_package(141000002,101),101)
+        self.assertNotIn('/characters/101/corporationhistory/',self.calls)
+        self.assertEqual(self.backend.cursor()[0],102)
+
+    def test_daily_history_refresh_ignores_and_does_not_reset_live_hourly_limit(self):
+        self.backend.process(self.package(),100)
+        with self.backend.conn.cursor() as cur:
+            cur.execute('SELECT checked_at FROM rawkm.live_character_history_checks WHERE character_id=101')
+            original=cur.fetchone()[0]
+        self.backend.conn.commit();self.calls.clear()
+        # This is the exact existing function used by the daily targeted stage.
+        live.affiliations.fetch_character_history(self.backend.run_id,101,force=True)
+        self.assertIn('/characters/101/corporationhistory/',self.calls)
+        with self.backend.conn.cursor() as cur:
+            cur.execute('SELECT checked_at FROM rawkm.live_character_history_checks WHERE character_id=101')
+            self.assertEqual(cur.fetchone()[0],original)
+        self.backend.conn.commit();self.calls.clear()
+        self.backend.process(self.mismatching_package(141000002,101),101)
+        self.assertNotIn('/characters/101/corporationhistory/',self.calls)
 
     def test_pending_daily_pilot_is_left_to_daily_job(self):
         run=str(uuid.uuid4());live.affiliations.create_run_row(self.backend.conn,run,'rawkm.killmails','victim_character_id')

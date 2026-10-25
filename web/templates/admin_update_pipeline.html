@@ -331,7 +331,7 @@ function renderState(state) {
   const live=state.live_killmails || {}, liveStatus=document.getElementById('liveState'), liveMetrics=document.getElementById('liveMetrics');
   liveStatus.textContent=(live.running ? (live.phase || 'running') : 'Service not running')+(live.reason ? ' · '+live.reason : '')+(!live.enabled && live.phase!=='paused' ? ' · Pause requested; finishing the current KM' : '')+(live.error ? ' · Retrying: '+live.error : '');
   liveMetrics.replaceChildren();
-  for(const [label,key] of [['Next sequence','next_sequence'],['Last killmail','killmail_id'],['Feed delay · seconds','feed_lag_seconds'],['Participants checked','participants_done'],['Participants total','participants_total'],['Histories updated','histories_refreshed'],['Entities loaded','entities_loaded'],['Affiliations left to daily','affiliations_deferred'],['Values left to daily','valuation_deferred']]){
+  for(const [label,key] of [['Next sequence','next_sequence'],['Last killmail','killmail_id'],['Feed delay · seconds','feed_lag_seconds'],['Participants checked','participants_done'],['Participants total','participants_total'],['Histories updated','histories_refreshed'],['History checks avoided · hourly limit','histories_hourly_skipped'],['Entities loaded','entities_loaded'],['Affiliations left to daily','affiliations_deferred'],['Values left to daily','valuation_deferred']]){
     if(live[key]!==undefined && live[key]!==null){const item=document.createElement('span');item.className='metric-pill';item.textContent=label+' '+live[key];liveMetrics.append(item);}
   }
   const liveButton=document.getElementById('liveToggle');

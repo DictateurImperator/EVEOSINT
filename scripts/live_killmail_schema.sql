@@ -14,3 +14,9 @@ CREATE TABLE IF NOT EXISTS market.live_valuation_claims (
 ALTER TABLE rawkm.killmails ADD COLUMN IF NOT EXISTS live_price_date date;
 COMMENT ON COLUMN rawkm.killmails.live_price_date IS
     'Live estimate awaiting the daily loss-date price reconciliation; cleared by the standard calculator.';
+
+-- Sparse live-only throttle; daily ESI jobs do not read or write this table.
+CREATE TABLE IF NOT EXISTS rawkm.live_character_history_checks (
+    character_id bigint PRIMARY KEY,
+    checked_at timestamptz NOT NULL
+);

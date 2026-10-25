@@ -122,7 +122,7 @@ class Backend:
         self.conn = importer.db()
         self.ensured = set()
         self.run_id = str(uuid.uuid4())
-        self.metrics = dict(histories_refreshed=0, affiliations_deferred=0, entities_loaded=0, valuation_deferred=0)
+        self.metrics = dict(histories_refreshed=0, affiliations_deferred=0, entities_loaded=0, valuation_deferred=0, histories_hourly_skipped=0)
         self.pricing = None
         self.on_progress=None
         self.last_progress=(None,0)
@@ -180,6 +180,18 @@ class Backend:
             except PermissionError:return True
         return False
 
+    def history_checked_recently(self, ident):
+        with self.conn.cursor() as cur:
+            cur.execute('''SELECT EXISTS(SELECT 1 FROM rawkm.live_character_history_checks
+                WHERE character_id=%s AND checked_at>clock_timestamp()-interval '1 hour')''',(ident,))
+            return cur.fetchone()[0]
+
+    def mark_history_checked(self, ident):
+        with self.conn.cursor() as cur:
+            cur.execute('''INSERT INTO rawkm.live_character_history_checks(character_id,checked_at)
+                VALUES(%s,clock_timestamp()) ON CONFLICT(character_id)
+                DO UPDATE SET checked_at=excluded.checked_at''',(ident,))
+
     def refresh_entities(self, payload):
         self.conn.commit()
         self.conn.autocommit=True
@@ -207,8 +219,12 @@ class Backend:
             if row and row[0]:continue
             expected=(participant.get('corporation_id'),participant.get('alliance_id'))
             if row is None or tuple(row[1:]) != expected:
+                if self.history_checked_recently(ident):
+                    self.metrics['histories_hourly_skipped']+=1
+                    continue
                 affiliations.fetch_public_character(self.run_id,ident)
                 affiliations.fetch_character_history(self.run_id,ident,force=True)
+                self.mark_history_checked(ident)
                 self.metrics['histories_refreshed']+=1
                 refreshed.append(ident)
                 with self.conn.cursor() as cur:

@@ -9,6 +9,7 @@ Exactly one `pending.json` is kept during processing. After all required work (o
 Daily coordination:
 
 * Archive refresh and archive import acquire an exclusive boundary and wait for the current live kill to finish. Other daily stages run concurrently.
+* The live consumer refreshes a pilot history at most once per hour after a successful check, even when subsequent KMs still disagree with the cached CCP history. This sparse database timestamp survives restarts. Daily affiliation jobs are not subject to this live-only limit and do not reset its timer. Failed refreshes remain retryable.
 * Pending/running character and corporation work belonging to a running affiliation job is left to that job. Dead process records do not suppress live checks.
 * The calculator briefly records a per-month import-time cutoff, then releases the boundary. This fixes its work set without copying every kill ID; subsequent live imports remain live-owned. Reservations are ignored after the calculator's database lock disappears.
 * Live estimates are marked for reconciliation with the completed loss-date daily prices. The daily archive import preserves already imported kills and their valuations.
