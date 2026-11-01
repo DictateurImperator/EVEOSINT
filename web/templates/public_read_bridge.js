@@ -12,10 +12,11 @@
   if(method!=='GET') {
    if(method!=='POST')return Promise.reject(new Error('This action requires login.'));
    const payload=typeof options.body==='string'?JSON.parse(options.body):null;
-   return nativeFetch('/public/compute',{...options,method:'POST',credentials:'omit',cache:'no-store',headers:{'Content-Type':'application/json'},body:JSON.stringify({source,path:url.pathname,payload})});
+   return nativeFetch('/public/compute',{...options,method:'POST',credentials:'same-origin',cache:'no-store',headers:{'Content-Type':'application/json'},body:JSON.stringify({source,path:url.pathname,payload})});
   }
+  // Keep the site notice cookie; the gateway strips credentials from internal reads.
   const params=new URLSearchParams({source,path:url.pathname+url.search});
-  const forwarded={...options,method:'GET',cache:'default',credentials:'omit'};
+  const forwarded={...options,method:'GET',cache:'default',credentials:'same-origin'};
   delete forwarded.body;
   return nativeFetch('/public/read?'+params.toString(),forwarded);
  };
