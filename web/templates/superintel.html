@@ -357,7 +357,11 @@
             <div class="muted-line small">1-month evolution: {{ dashboard.day_month.isoformat() }} → {{ dashboard.today.isoformat() }}</div>
           </div>
           <div class="d-flex gap-2 align-items-center flex-wrap justify-content-end">
+            {% if public_mode %}
+            <a id="superintelGlobalRankingMore" data-expanded="{{ 1 if dashboard.full_ranking else 0 }}" class="btn btn-outline-primary btn-sm" href="/superintel?view={{ dashboard.entity_type }}&amp;sort={{ dashboard.ranking_sort }}{% if not dashboard.full_ranking %}&amp;more=1{% endif %}">{% if dashboard.full_ranking %}Top 10{% else %}More{% endif %}</a>
+            {% else %}
             <button id="superintelGlobalRankingMore" class="btn btn-outline-primary btn-sm" type="button" data-expanded="{% if dashboard.full_ranking %}1{% else %}0{% endif %}">{% if dashboard.full_ranking %}Top 10{% else %}More{% endif %}</button>
+            {% endif %}
           </div>
         </div>
 
@@ -456,7 +460,7 @@
             };
 
             input.addEventListener("input", applyRankingVisibility);
-            if (button) {
+            if (button && button.tagName === "BUTTON") {
               button.addEventListener("click", () => {
                 button.dataset.expanded = button.dataset.expanded === "1" ? "0" : "1";
                 applyRankingVisibility();
