@@ -12,6 +12,7 @@ from .routes_admin_traffic import router as admin_traffic_router
 from .main_objects import templates
 from .routes_account import router as account_router
 from .routes_killmail_generator import router as killmail_generator_router
+from .routes_combat_timeline import router as combat_timeline_router
 from .routes_admin_audit import router as admin_audit_router
 from .routes_admin_coalitions import router as admin_coalitions_router
 from .routes_admin_debug import router as admin_debug_router
@@ -135,7 +136,6 @@ def _requires_csrf_check(request: Request) -> bool:
         path == "/logout"
         or path in {"/account/password", "/account/delete"}
         or path.startswith("/account/groups/")
-        or path.startswith("/account/combat-collector/")
         or path == "/admin"
         or path.startswith("/admin/")
     )
@@ -267,6 +267,7 @@ app.include_router(login_router)
 app.include_router(home_router)
 app.include_router(account_router)
 app.include_router(killmail_generator_router)
+app.include_router(combat_timeline_router)
 app.include_router(personal_groups_router)
 app.include_router(superintel_router)
 app.include_router(entities_router)

@@ -23,14 +23,12 @@ class ValidationTests(unittest.TestCase):
         self.assertEqual(store.validate_report(raw())[0]['logi'][0]['shield'],1092)
         for changed in ({'window_seconds':3600},{'version':True},{'partial':'false'},{'source':'private path'},{'status':'confirmed'}, {'logi':[{'pilot':'X','ship':'Y','shield':-1}]},{'logi':[{'pilot':'X','ship':'Y','shield':True}]}):
             with self.subTest(changed=changed),self.assertRaises(ValueError):store.validate_report(raw(dict(BODY,**changed)))
-    def test_collector_key_mutations_have_csrf_protection(self):
-        tree=ast.parse((Path(__file__).resolve().parents[1]/'web/app/main.py').read_text())
-        fn=next(n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name=='_requires_csrf_check')
-        ns={'Request':object};exec(compile(ast.Module(body=[fn],type_ignores=[]),'<csrf helper>','exec'),ns)
-        check=ns['_requires_csrf_check']
-        for path in ('/account/combat-collector/token','/account/combat-collector/revoke'):
-            self.assertTrue(check(types.SimpleNamespace(method='POST',url=types.SimpleNamespace(path=path))))
-        self.assertFalse(check(types.SimpleNamespace(method='POST',url=types.SimpleNamespace(path='/api/combat-repairs'))))
+    def test_reader_key_management_routes_not_exposed(self):
+        app=FastAPI();app.include_router(routes.router)
+        with TestClient(app) as client:
+            for path in ('/account/combat-collector','/account/combat-collector/token','/account/combat-collector/revoke'):
+                self.assertEqual(client.get(path).status_code,404)
+                self.assertEqual(client.post(path).status_code,404)
 
     def test_missing_auth_never_connects(self):
         app=FastAPI();app.include_router(routes.router)
@@ -86,8 +84,7 @@ class SQLTests(unittest.TestCase):
     def test_failure_at_commit_cannot_return_stored(self):
         with patch.object(store,'store_report',side_effect=psycopg2.OperationalError('simulated commit failure')):
             with self.assertRaises(psycopg2.OperationalError):self.client.post('/api/combat-repairs',content=self.body,headers=self.headers)
-    def test_account_route_requires_login(self):
-        with patch.object(routes,'require_login',return_value=None):
-            self.assertEqual(self.client.post('/account/combat-collector/token',follow_redirects=False).status_code,302)
+    def test_account_route_is_removed(self):
+        self.assertEqual(self.client.post('/account/combat-collector/token',follow_redirects=False).status_code,404)
 
 if __name__=='__main__':unittest.main()

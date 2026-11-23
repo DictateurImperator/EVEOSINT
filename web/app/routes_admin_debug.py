@@ -373,7 +373,7 @@ def admin_debug(request: Request, tab: str = "economics"):
         return redirect
     context=app_context(request=request,user=user,title="EVEOSINT - Debug",
                         active_module="admin",active_menu_key="admin.debug")
-    context.update(debug_tab="killmail" if tab == "killmail" else "economics",
+    context.update(debug_tab=tab if tab in {"killmail", "combat"} else "economics",
                    can_import_killmail="admin.jobs.run" in user.get("permissions", set()))
     return templates.TemplateResponse(request=request,name="admin_debug_index.html",context=context)
 

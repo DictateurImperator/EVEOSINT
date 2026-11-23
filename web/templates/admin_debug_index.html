@@ -1,10 +1,13 @@
 {% extends "base.html" %}
 {% block content %}
 <nav class="nav nav-tabs mb-4" aria-label="Tests Debug">
-  <a class="nav-link {% if debug_tab != 'killmail' %}active{% endif %}" href="/admin/debug?tab=economics" {% if debug_tab != 'killmail' %}aria-current="page"{% endif %}>Indices économiques</a>
+  <a class="nav-link {% if debug_tab == 'economics' %}active{% endif %}" href="/admin/debug?tab=economics" {% if debug_tab == 'economics' %}aria-current="page"{% endif %}>Indices économiques</a>
   <a class="nav-link {% if debug_tab == 'killmail' %}active{% endif %}" href="/admin/debug?tab=killmail" {% if debug_tab == 'killmail' %}aria-current="page"{% endif %}>Import killmail</a>
+  <a class="nav-link {% if debug_tab == 'combat' %}active{% endif %}" href="/admin/debug?tab=combat">Combat logs</a>
 </nav>
-{% if debug_tab == 'killmail' %}
+{% if debug_tab == 'combat' %}
+{% include 'debug_combat_timeline.html' %}
+{% elif debug_tab == 'killmail' %}
 {% include 'debug_killmail_import.html' %}
 {% else %}
 <h1 class="h3 mb-2">Economic indices · Debug</h1>
