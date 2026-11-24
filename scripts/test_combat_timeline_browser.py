@@ -60,7 +60,6 @@ def main():
                 expect(page.locator('#ctKillmails .killmail-row-kill')).to_have_count(1)
                 expect(page.locator('#ctKillmails a[href="/admin/debug/combat/kill/900"]').first).to_be_visible()
                 expect(page.locator('#ctKillmails .killmail-table')).to_have_count(1)
-                page.get_by_text('Raw observations',exact=True).click()
                 expect(page.locator('#ctRows a[href="/admin/debug/combat/kill/900"]')).to_have_count(1)
                 page.locator('#ctObserver').select_option('Pilot A');expect(page.locator('#ctRows tr')).to_have_count(2)
                 page.locator('#ctKind').select_option('loss_signal');expect(page.locator('#ctRows tr')).to_have_count(1)
