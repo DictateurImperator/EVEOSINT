@@ -36,7 +36,10 @@
  const $=id=>document.getElementById(id);
  const types={damage_in:'Damage received',damage_out:'Damage dealt',miss_in:'Incoming miss',miss_out:'Outgoing miss',shield_in:'Shield received',shield_out:'Shield sent',armor_in:'Armor received',armor_out:'Armor sent',hull_in:'Hull received',hull_out:'Hull sent',capacitor_in:'Capacitor received',capacitor_out:'Capacitor sent',capacitor_neutralized:'Energy neutralized',capacitor_drained:'Energy drained',warp_scramble:'Warp scramble attempt',warp_disruption:'Warp disruption attempt',jammed:'Locks broken',loss_signal:'Loss signal · unconfirmed',jump:'System jump',undock:'Undocking',warp:'Warp',module:'Module notification',combat_other:'Other combat'};
  for(const [key,label] of Object.entries(types))$('ctKind').add(new Option(label,key));
- let cursor='',controller=null,older=false,kmController=null,kmPage=1,kmSide='both';
+ const initial=new URLSearchParams(location.search);
+ let cursor='',controller=null,older=false,kmController=null,kmPage=Math.max(1,Number(initial.get('kb_page'))||1),kmSide=initial.get('kb_side')||'both';
+ if(initial.get('observer')){$('ctObserver').add(new Option(initial.get('observer'),initial.get('observer')));$('ctObserver').value=initial.get('observer');}
+ for(const [id,key] of [['ctFrom','date_from'],['ctTo','date_to']])if(initial.get(key))$(id).value=initial.get(key).replace('Z','');
  async function loadKillmails(){
   kmController?.abort();kmController=new AbortController();const local=kmController;
   try{
@@ -44,6 +47,7 @@
    if(!r.ok)throw new Error('Killmail links could not be loaded (HTTP '+r.status+').');
    const data=await r.json();if(local!==kmController)return;
    $('ctKillmails').innerHTML=data.html;
+   for(const link of $('ctKillmails').querySelectorAll('[data-killmail-page]')){const p=killmailParams();p.delete('page');p.delete('side');p.set('tab','combat');p.set('kb_page',link.dataset.killmailPage);p.set('kb_side',kmSide);link.href='/admin/debug?'+p.toString();link.removeAttribute('data-killmail-page');}
    $('ctUnknown').replaceChildren();for(const loss of data.unmatched_losses){const line=document.createElement('div');line.textContent=loss.occurred_at+' · '+loss.observer+' · '+(loss.status==='ambiguous'?'Ambiguous loss':'Unknown killmail');$('ctUnknown').appendChild(line);}
    $('ctKmState').textContent=data.scans.some(s=>s.status==='error')?'Lookup failed; the site will retry.':data.scans.length?'Last site lookup: '+data.scans.map(s=>s.observer+' '+s.checked_at).join(' · '):'Waiting for the site to match received events…';
   }catch(e){if(e.name!=='AbortError')$('ctKmState').textContent=e.message;}
