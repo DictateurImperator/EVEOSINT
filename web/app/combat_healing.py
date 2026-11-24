@@ -115,18 +115,23 @@ def enrich(killmail, rows):
 
 def get_healers(killmail):
     if not killmail or not killmail.get('killmail_time'): return []
-    # A KM without observations keeps its current presentation unchanged.
-    path=store.ROOT/'timeline.sqlite3'
-    if not path.is_file() or path.is_symlink(): return []
-    end=killmail['killmail_time'].astimezone(timezone.utc)
-    start=end-timedelta(minutes=30)
     try:
-        with store.connection() as conn:
-            events=(json.loads(r['payload']) for r in conn.execute('''SELECT payload FROM events
-                WHERE kind IN ('shield_in','shield_out','armor_in','armor_out','hull_in','hull_out')
-                  AND occurred_at>=? AND occurred_at<=? ORDER BY occurred_at,event_id''',
-                (start.strftime('%Y-%m-%dT%H:%M:%SZ'),end.strftime('%Y-%m-%dT%H:%M:%SZ'))))
-            rows=collect(killmail,events)
+        with store.connection() as conn,conn.cursor() as cur:
+            # Repeated ship/pod notifications must not multiply the same healing.
+            cur.execute('''SELECT s.owner,s.summary_id,s.payload FROM devencour.death_summaries s
+              JOIN devencour.summary_killmail_links l USING(owner,summary_id)
+              WHERE l.killmail_id=%s AND s.character_id=%s
+              ORDER BY abs(extract(epoch FROM (s.occurred_at-%s))),s.received_at,s.summary_id LIMIT 1''',
+              (killmail['killmail_id'],(killmail.get('victim',{}).get('character') or {}).get('entity_id'),killmail['killmail_time']))
+            summary=cur.fetchone()
+            if not summary: return []
+            killmail['recorded_activity']=summary[2]['emitted']
+            cur.execute('SELECT payload FROM devencour.received_healing WHERE owner=%s AND summary_id=%s ORDER BY healer_index',summary[:2])
+            healing=[r[0] for r in cur.fetchall()]
+        total=sum(h['hp'] for h in healing)
+        rows=[dict(source={k:v for k,v in h.items() if k!='hp'},shield=0,armor=0,hull=0,total=h['hp'],percent=h['hp']/total*100 if total else 0,
+          recipients=[],ship_names={h['ship']} if h.get('ship') else set()) for h in healing if h['hp']>0]
+        rows.sort(key=lambda r:(-r['total'],r['source']['name'].casefold()))
         return enrich(killmail,rows)
     except Exception:
         logger.warning('Recorded healing unavailable for killmail %s',killmail.get('killmail_id'),exc_info=True)

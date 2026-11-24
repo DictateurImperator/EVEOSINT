@@ -12,6 +12,9 @@ import uvicorn
 from scripts.test_combat_timeline import store, routes, ADMIN, event, body
 from scripts import test_killmail_forensics as f
 import tempfile
+import os
+import psycopg2
+from scripts.test_combat_dev import DSN,summary
 
 
 class ReadConnection:
@@ -28,18 +31,24 @@ def hydrate(conn,entries):
 
 
 def main():
+    if not psycopg2.extensions.parse_dsn(DSN).get('host','').startswith('/tmp/'):
+        raise RuntimeError('Set EVEOSINT_COMBAT_TEST_DSN to a disposable local PostgreSQL')
     with tempfile.TemporaryDirectory(prefix='combat-browser-') as directory, \
-         patch.object(store,'ROOT',Path(directory)), \
+         patch.object(store,'db',lambda:psycopg2.connect(DSN)), \
          patch.object(routes.links,'db',return_value=ReadConnection()), \
          patch.object(f.entities,'_hydrate_global_killmail_entries',side_effect=hydrate), \
          patch.object(routes,'require_login',return_value=ADMIN), \
          patch.object(routes,'require_permission_or_redirect',return_value=None), \
          patch.object(routes.links,'read_killboard',side_effect=lambda *_:iter([(900,datetime(2026,10,20,19,22,13,tzinfo=timezone.utc),'loss',670,'Capsule','29'),(901,datetime(2026,10,20,19,22,14,tzinfo=timezone.utc),'kill',587,'Rifter','25')])):
+        with store.connection() as conn,conn.cursor() as cur:cur.execute('DROP SCHEMA IF EXISTS devencour CASCADE')
+        store.setup()
         app=FastAPI();app.include_router(routes.router)
         rows=[event(1,'Pilot A'),event(2,'Pilot B','damage_out'),event(3,'Pilot A','loss_signal')]
         rows[2]['character_id']=123
         rows[0]['source']['name']='<img src=x onerror=alert(1)>'
         payload=body(rows);store.receive(1,payload,__import__('hashlib').sha256(payload).hexdigest())
+        loss=dict(summary(3),character_name='Pilot A')
+        payload=json.dumps(loss).encode();store.receive(1,payload,__import__('hashlib').sha256(payload).hexdigest(),True)
         renderer=f.load('public_page_renderer')
         @app.get('/admin/debug')
         def page(tab: str='combat'):

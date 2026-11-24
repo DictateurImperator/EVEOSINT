@@ -1,37 +1,15 @@
-"""Read a character's killboard; keep debug links only in the timeline SQLite DB."""
+"""Explicit debug matching; existing killmails are read-only."""
 from contextlib import closing
 from datetime import datetime, timedelta, timezone
-import json
 import logging
 import threading
+from psycopg2.extras import RealDictCursor
 from .db import db
 from . import combat_timeline as store
 
-logger = logging.getLogger(__name__)
-_lock = threading.Lock()
-
-
-def schema(conn):
-    conn.executescript('''
-        CREATE TABLE IF NOT EXISTS combat_killmails (
-            owner INTEGER NOT NULL, observer TEXT NOT NULL, character_id INTEGER NOT NULL,
-            killmail_id INTEGER NOT NULL, occurred_at TEXT NOT NULL, side TEXT NOT NULL,
-            ship_type_id INTEGER, ship_name TEXT, is_pod INTEGER,
-            PRIMARY KEY(owner,observer,killmail_id));
-        CREATE INDEX IF NOT EXISTS combat_killmails_time ON combat_killmails(occurred_at DESC,killmail_id DESC);
-        CREATE TABLE IF NOT EXISTS combat_killmail_scans (
-            owner INTEGER NOT NULL,observer TEXT NOT NULL,events INTEGER NOT NULL,
-            checked_at TEXT NOT NULL,status TEXT NOT NULL,PRIMARY KEY(owner,observer));
-        CREATE TABLE IF NOT EXISTS combat_loss_links (
-            owner INTEGER NOT NULL,event_id TEXT NOT NULL,status TEXT NOT NULL,
-            killmail_id INTEGER, candidates TEXT NOT NULL,checked_at TEXT NOT NULL,
-            PRIMARY KEY(owner,event_id));
-    ''')
-
-
-def utc(value):
-    return value.astimezone(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
-
+logger=logging.getLogger(__name__)
+_lock=threading.Lock()
+utc=store.utc
 
 def read_killboard(character_id, first, last):
     """The existing KM store is strictly read-only, including the transaction."""
@@ -73,97 +51,83 @@ def choose_loss(at, candidates):
     return ('linked',best[0],best) if len(best)==1 else ('ambiguous',None,best)
 
 
+
 def refresh(force=False):
-    """Explicit recalculation; concurrent requests do not queue another scan."""
     if not _lock.acquire(blocking=False): return False
     try:
-        with store.connection() as conn:
-            schema(conn)
-            streams=[dict(r) for r in conn.execute('''SELECT s.*,x.events AS scanned_events,x.checked_at
-                FROM streams s LEFT JOIN combat_killmail_scans x USING(owner,observer)''')]
+        store.check_writing()
+        with store.connection() as conn,conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute('SELECT * FROM devencour.collector_streams WHERE character_id>0 ORDER BY owner,observer')
+            streams=cur.fetchall()
         for stream in streams:
-            checked=stream['checked_at']
-            if checked and not force:
-                age=(datetime.now(timezone.utc)-datetime.fromisoformat(checked.replace('Z','+00:00'))).total_seconds()
-                if age<30 or (stream['scanned_events']==stream['events'] and age<300): continue
-            try:
-                refresh_stream(stream)
+            store.check_writing()
+            try: refresh_stream(stream)
+            except store.Maintenance: raise
             except Exception:
                 logger.exception('Combat debug killboard lookup failed')
-                with store.connection() as conn:
-                    schema(conn)
-                    conn.execute('INSERT OR REPLACE INTO combat_killmail_scans VALUES(?,?,?,?,?)',
-                        (stream['owner'],stream['observer'],stream['events'],store.now(),'error'))
-                    conn.commit()
+                record_scan(stream,'error')
         return True
-    finally:
-        _lock.release()
+    finally: _lock.release()
+
+
+def record_scan(stream,status):
+    store.check_writing()
+    with store.connection() as conn,conn.cursor() as cur:
+        cur.execute('''INSERT INTO devencour.killboard_scans VALUES(%s,%s,%s,clock_timestamp(),%s)
+          ON CONFLICT(owner,observer) DO UPDATE SET events=excluded.events,checked_at=excluded.checked_at,status=excluded.status''',
+          (stream['owner'],stream['observer'],stream['events'],status))
 
 
 def refresh_stream(stream):
     owner,observer=stream['owner'],stream['observer']
-    with store.connection() as conn:
-        bounds=conn.execute('SELECT min(occurred_at),max(occurred_at) FROM events WHERE owner=? AND observer=?',(owner,observer)).fetchone()
-        identity=conn.execute("SELECT payload FROM events WHERE owner=? AND observer=? AND json_extract(payload,'$.character_id')>0 LIMIT 1",(owner,observer)).fetchone()
-    if not identity: return
-    character_id=json.loads(identity['payload'])['character_id']
-    first=datetime.fromisoformat(bounds[0].replace('Z','+00:00'))-timedelta(seconds=30)
-    last=datetime.fromisoformat(bounds[1].replace('Z','+00:00'))+timedelta(seconds=30)
-    # PostgreSQL only supplies KB rows; every write below targets separate SQLite.
-    with store.connection() as conn:
-        schema(conn)
-        for km_id,at,side,ship_id,ship_name,group_id in read_killboard(character_id,first,last):
-            conn.execute('INSERT OR REPLACE INTO combat_killmails VALUES(?,?,?,?,?,?,?,?,?)',
-                (owner,observer,character_id,km_id,utc(at),side,ship_id,ship_name,
-                 None if group_id is None else int(group_id=='29')))
-        losses=[dict(r) for r in conn.execute("SELECT * FROM combat_killmails WHERE owner=? AND observer=? AND side='loss'",(owner,observer))]
-        signals=conn.execute("SELECT event_id,occurred_at FROM events WHERE owner=? AND observer=? AND kind='loss_signal'",(owner,observer)).fetchall()
-        for signal in signals:
-            status,km_id,candidates=choose_loss(datetime.fromisoformat(signal['occurred_at'].replace('Z','+00:00')),losses)
-            conn.execute('INSERT OR REPLACE INTO combat_loss_links VALUES(?,?,?,?,?,?)',
-                (owner,signal['event_id'],status,km_id,json.dumps(candidates),store.now()))
-        conn.execute('INSERT OR REPLACE INTO combat_killmail_scans VALUES(?,?,?,?,?)',
-            (owner,observer,stream['events'],store.now(),'complete'))
-        conn.commit()
+    first=stream['first_at']-timedelta(seconds=30);last=stream['last_at']+timedelta(seconds=30)
+    entries=list(read_killboard(stream['character_id'],first,last))
+    losses=[dict(killmail_id=r[0],occurred_at=utc(r[1])) for r in entries if r[2]=='loss']
+    store.check_writing()
+    with store.connection() as conn,conn.cursor(cursor_factory=RealDictCursor) as cur:
+        cur.execute('DELETE FROM devencour.killboard_entries WHERE owner=%s AND observer=%s',(owner,observer))
+        for km_id,at,side,ship_id,ship_name,group_id in entries:
+            cur.execute('INSERT INTO devencour.killboard_entries VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s)',
+              (owner,observer,stream['character_id'],km_id,at,side,ship_id,ship_name,None if group_id is None else group_id=='29'))
+        cur.execute('SELECT summary_id,occurred_at FROM devencour.death_summaries WHERE owner=%s AND observer=%s',(owner,observer))
+        summaries=cur.fetchall()
+        for summary in summaries:
+            status,km_id,_=choose_loss(summary['occurred_at'],losses)
+            cur.execute('DELETE FROM devencour.summary_killmail_links WHERE owner=%s AND summary_id=%s',(owner,summary['summary_id']))
+            if status=='linked':
+                cur.execute('INSERT INTO devencour.summary_killmail_links(owner,summary_id,killmail_id) VALUES(%s,%s,%s)',(owner,summary['summary_id'],km_id))
+    record_scan(stream,'complete')
 
 
-def report(observer='', page=1, date_from='', date_to='', month='', side='both', killmail_id=''):
-    if observer: store.text(observer,128)
+def report(observer='',page=1,date_from='',date_to='',month='',side='both',killmail_id=''):
     page=max(1,int(page));per_page=100
     if side not in ('both','kills','losses'): raise ValueError('Invalid side')
     filters=[];values=[]
-    if observer: filters.append('observer=?');values.append(observer)
+    if observer: filters.append('observer=%s');values.append(store.text(observer,128))
     if month:
-        datetime.strptime(month,'%Y-%m')
-        filters.append('substr(occurred_at,1,7)=?');values.append(month)
-    for value,operator in ((date_from,'>='),(date_to,'<=')):
-        if value:
-            store.timestamp(value);filters.append('occurred_at'+operator+'?');values.append(value)
-    if killmail_id:
-        if not str(killmail_id).isascii() or not str(killmail_id).isdigit(): raise ValueError('Invalid killmail id')
-        filters.append('killmail_id=?');values.append(int(killmail_id))
+        datetime.strptime(month,'%Y-%m');filters.append("to_char(occurred_at AT TIME ZONE 'UTC','YYYY-MM')=%s");values.append(month)
+    for value,op in ((date_from,'>='),(date_to,'<=')):
+        if value: store.timestamp(value);filters.append('occurred_at'+op+'%s');values.append(value)
+    if killmail_id: filters.append('killmail_id=%s');values.append(int(killmail_id))
     where=' WHERE '+' AND '.join(filters) if filters else ''
-    # Deduplicate KMs shared by several observers. A loss takes precedence.
-    grouped="SELECT killmail_id,occurred_at,max(side='loss') AS is_loss FROM combat_killmails"+where+' GROUP BY killmail_id,occurred_at'
-    if side!='both': grouped+=' HAVING is_loss='+('1' if side=='losses' else '0')
-    with store.connection() as conn:
-        schema(conn)
-        total=conn.execute('SELECT count(*) FROM ('+grouped+')',values).fetchone()[0]
+    grouped="SELECT killmail_id,occurred_at,bool_or(side='loss') AS is_loss FROM devencour.killboard_entries"+where+' GROUP BY killmail_id,occurred_at'
+    if side!='both': grouped+=" HAVING bool_or(side='loss')="+('true' if side=='losses' else 'false')
+    with store.connection() as conn,conn.cursor(cursor_factory=RealDictCursor) as cur:
+        cur.execute('SELECT count(*) AS n FROM ('+grouped+') x',values);total=cur.fetchone()['n']
         pages=max(1,(total+per_page-1)//per_page);page=min(page,pages)
-        rows=[dict(r) for r in conn.execute(grouped+' ORDER BY occurred_at DESC,killmail_id DESC LIMIT ? OFFSET ?',values+[per_page,(page-1)*per_page])]
-        # Keep the compact report fields used by the debug API.
-        for row in rows:
-            detail=conn.execute('SELECT * FROM combat_killmails WHERE killmail_id=? AND occurred_at=?'+(' AND observer=?' if observer else '')+" ORDER BY (side='loss') DESC LIMIT 1",
-                [row['killmail_id'],row['occurred_at']]+([observer] if observer else [])).fetchone()
-            row.update(dict(detail));row['side']='loss' if row['is_loss'] else 'kill';row['url']='/kill/'+str(row['killmail_id'])
-        unknown_filters=["e.kind='loss_signal'","l.status!='linked'"];unknown_values=[]
-        if observer: unknown_filters.append('e.observer=?');unknown_values.append(observer)
-        if month: unknown_filters.append('substr(e.occurred_at,1,7)=?');unknown_values.append(month)
-        for value,operator in ((date_from,'>='),(date_to,'<=')):
-            if value: unknown_filters.append('e.occurred_at'+operator+'?');unknown_values.append(value)
-        unknown=[dict(r) for r in conn.execute('SELECT e.observer,e.occurred_at,e.event_id,l.status,l.candidates FROM events e JOIN combat_loss_links l USING(owner,event_id) WHERE '+' AND '.join(unknown_filters)+' ORDER BY e.occurred_at DESC',unknown_values)]
-        scans=[dict(r) for r in conn.execute('SELECT * FROM combat_killmail_scans'+(' WHERE observer=?' if observer else ''),([observer] if observer else []))]
-        months=[r[0] for r in conn.execute("SELECT DISTINCT substr(occurred_at,1,7) FROM events"+(' WHERE observer=?' if observer else '')+' ORDER BY 1 DESC',([observer] if observer else []))]
+        cur.execute(grouped+' ORDER BY occurred_at DESC,killmail_id DESC LIMIT %s OFFSET %s',values+[per_page,(page-1)*per_page])
+        rows=[dict(r,occurred_at=utc(r['occurred_at']),side='loss' if r['is_loss'] else 'kill',url='/kill/'+str(r['killmail_id'])) for r in cur.fetchall()]
+        bounds=[];params=[]
+        if observer: bounds.append('s.observer=%s');params.append(observer)
+        for v,op in ((date_from,'>='),(date_to,'<=')):
+            if v: bounds.append('s.occurred_at'+op+'%s');params.append(v)
+        cur.execute('''SELECT s.observer,s.occurred_at,s.summary_id AS event_id FROM devencour.death_summaries s
+          LEFT JOIN devencour.summary_killmail_links l USING(owner,summary_id) WHERE l.summary_id IS NULL'''+(' AND '+' AND '.join(bounds) if bounds else '')+' ORDER BY s.occurred_at DESC',params)
+        unknown=[dict(r,occurred_at=utc(r['occurred_at']),status='unknown',candidates=[]) for r in cur.fetchall()]
+        cur.execute('SELECT * FROM devencour.killboard_scans'+(' WHERE observer=%s' if observer else ''),[observer] if observer else [])
+        scans=[{k:utc(v) for k,v in dict(r).items()} for r in cur.fetchall()]
+        cur.execute("SELECT DISTINCT to_char(first_at AT TIME ZONE 'UTC','YYYY-MM') AS month FROM devencour.collector_streams ORDER BY 1 DESC")
+        months=[r['month'] for r in cur.fetchall()]
     pagination=dict(page=page,per_page=per_page,total=total,pages=pages,has_prev=page>1,has_next=page<pages,prev_page=max(1,page-1),next_page=min(pages,page+1))
     return dict(killmails=rows,unmatched_losses=unknown,scans=scans,months=months,pagination=pagination)
 
@@ -186,13 +150,12 @@ def killboard_page(report, side='both'):
 
 
 def attach_links(payload):
-    with store.connection() as conn:
-        schema(conn)
-        for event in payload['events']:
-            if event['kind']!='loss_signal': continue
-            row=conn.execute('SELECT status,killmail_id FROM combat_loss_links WHERE owner=? AND event_id=?',
-                (event['collector_owner'],event['event_id'])).fetchone()
-            if row:
-                event['killmail_link']=dict(row)
-                if row['killmail_id']: event['killmail_link']['url']='/admin/debug/combat/kill/'+str(row['killmail_id'])
+    signals=[(e['collector_owner'],e['event_id']) for e in payload['events'] if e['kind']=='loss_signal']
+    if not signals: return payload
+    with store.connection() as conn,conn.cursor() as cur:
+        cur.execute('SELECT owner,summary_id,killmail_id FROM devencour.summary_killmail_links WHERE (owner,summary_id) IN ('+','.join(['(%s,%s)']*len(signals))+')',[v for pair in signals for v in pair])
+        matched={(r[0],r[1]):r[2] for r in cur.fetchall()}
+    for e in payload['events']:
+        km=matched.get((e['collector_owner'],e['event_id']))
+        if km: e['killmail_link']=dict(status='linked',killmail_id=km,url='/admin/debug/combat/kill/'+str(km))
     return payload

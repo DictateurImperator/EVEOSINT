@@ -1,5 +1,6 @@
 """Admin-only timeline and authenticated, bounded desktop collector intake."""
 from contextlib import closing
+import zlib
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 from starlette.concurrency import run_in_threadpool
@@ -53,24 +54,51 @@ def killmails(request: Request, observer: str='', page: int=1, date_from: str=''
 def recalculate(request: Request):
     user, redirect = admin(request, 'admin.jobs.run')
     if redirect: return redirect
-    if not links.refresh(force=True):
-        raise HTTPException(409, 'A recalculation is already running.')
+    try:
+        if not links.refresh(force=True): raise HTTPException(409, 'A recalculation is already running.')
+    except store.Maintenance: return maintenance_response()
     return JSONResponse({'status':'finished'},headers={'Cache-Control':'no-store'})
 
 
+def maintenance_response():
+    return JSONResponse({'status':'paused'},status_code=503,
+        headers={'Cache-Control':'no-store','Retry-After':'5','X-EVEOSINT-Maintenance':'1'})
+
+
+@router.get('/collector/status')
+async def collector_status(request: Request):
+    if store.MAINTENANCE.exists(): return maintenance_response()
+    auth=request.headers.get('authorization','')
+    if not auth.startswith('Bearer ') or await run_in_threadpool(active_collector,auth[7:]) is None:
+        raise HTTPException(401)
+    return JSONResponse({'version':2,'status':'ready'},headers={'Cache-Control':'no-store'})
+
+
 @router.post('/collector/combat-events')
+@router.post('/collector/death-summaries')
 async def collect(request: Request):
+    if store.MAINTENANCE.exists(): return maintenance_response()
     auth=request.headers.get('authorization','')
     if not auth.startswith('Bearer '): raise HTTPException(401)
     owner=await run_in_threadpool(active_collector, auth[7:])
     if owner is None: raise HTTPException(401)
     body=bytearray()
-    async for chunk in request.stream():
-        if len(body)+len(chunk)>store.MAX_BODY: raise HTTPException(413)
-        body.extend(chunk)
-    try: ack=await run_in_threadpool(store.receive,owner,bytes(body),request.headers.get('idempotency-key',''))
-    except store.EventConflict: raise HTTPException(409,'Conflicting event')
-    except (ValueError,UnicodeError): raise HTTPException(422,'Invalid telemetry batch')
+    encoding=request.headers.get('content-encoding','identity').lower()
+    if encoding not in ('identity','gzip'): raise HTTPException(415)
+    decoder=zlib.decompressobj(16+zlib.MAX_WBITS) if encoding=='gzip' else None
+    wire_size=0
+    try:
+        async for chunk in request.stream():
+            if store.MAINTENANCE.exists(): return maintenance_response()
+            wire_size+=len(chunk)
+            if wire_size>store.MAX_BODY: raise HTTPException(413)
+            body.extend(decoder.decompress(chunk,store.MAX_BODY+1-len(body)) if decoder else chunk)
+            if len(body)>store.MAX_BODY or (decoder and decoder.unconsumed_tail): raise HTTPException(413)
+        if decoder and (not decoder.eof or decoder.unused_data): raise ValueError('Invalid gzip')
+        ack=await run_in_threadpool(store.receive,owner,bytes(body),request.headers.get('idempotency-key',''),request.url.path.endswith('/death-summaries'))
+    except store.Maintenance: return maintenance_response()
+    except store.EventConflict: raise HTTPException(409,'Conflicting observation')
+    except (ValueError,UnicodeError,zlib.error): raise HTTPException(422,'Invalid telemetry batch')
     return JSONResponse(ack,headers={'Cache-Control':'no-store'})
 
 

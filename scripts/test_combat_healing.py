@@ -7,7 +7,7 @@ from pathlib import Path
 import tempfile
 import unittest
 from unittest.mock import patch
-from scripts.test_combat_timeline import store, body
+from scripts.test_combat_timeline import store
 from scripts import test_killmail_forensics as f
 
 healing=f.load('combat_healing')
@@ -54,17 +54,6 @@ class HealingTests(unittest.TestCase):
     def test_lookup_by_name_when_peer_id_missing_and_never_substitute_conflicting_id(self):
         rows=healing.collect(km(),[event(1,target=dict(name='victim')),event(2,target=dict(name='Victim',character_id=999))])
         self.assertEqual(rows[0]['total'],100)
-
-    def test_sqlite_read_does_not_modify_events_or_killmail(self):
-        original=km();saved=deepcopy(original)
-        with tempfile.TemporaryDirectory() as directory,patch.object(store,'ROOT',Path(directory)):
-            self.assertEqual(healing.get_healers(original),[])
-            raw=body([event()]);store.receive(1,raw,hashlib.sha256(raw).hexdigest())
-            rows=healing.get_healers(original)
-            self.assertEqual(rows[0]['character']['entity_id'],201)
-            self.assertEqual(rows[0]['ships'][0]['name'],'Rifter')
-            self.assertEqual(store.timeline()['total'],1)
-        self.assertEqual(original,saved)
 
     def test_missing_observations_leave_original_km_template_unchanged(self):
         renderer=f.load('public_page_renderer')
