@@ -1,0 +1,85 @@
+      {% set healing = healing|default(false) %}
+      {% set panel_id = 'healers' if healing else 'attackers' %}
+      <section class="eve-window {{ 'healers-window' if healing else 'attackers-window' }}" data-participants-panel data-healing="{{ '1' if healing else '0' }}"{% if healing %} aria-label="Healing participants"{% endif %}>
+        <div class="eve-window-title">
+          <span>{{ 'Healing' if healing else 'Attackers' }}</span>
+          <div class="attackers-title-controls">
+            <span class="muted" id="{{ panel_id }}-summary">{{ killmail.attackers_count }} involved</span>
+            <div class="attacker-view-toggle" role="group" aria-label="Attacker grouping">
+              <button type="button" class="attacker-view-button active" data-attacker-mode="individual">Individual</button>
+              <button type="button" class="attacker-view-button" data-attacker-mode="corporation">Corporation</button>
+              <button type="button" class="attacker-view-button" data-attacker-mode="alliance">Alliance</button>
+              <button type="button" class="attacker-view-button" data-attacker-mode="coalition">Coalition</button>
+            </div>
+          </div>
+        </div>
+        <div
+          class="attackers-list"
+          id="{{ panel_id }}-list"
+          data-victim-damage="{{ killmail.victim.damage_taken or 0 }}"
+        >
+          {% for attacker in killmail.attackers %}
+          {% set attacker_pct = (attacker.damage_percent_value or 0)|float %}
+          {% set is_top_damage = killmail.top_damage and attacker.attacker_index == killmail.top_damage.attacker_index %}
+          <div
+            class="attacker-row{% if healing %} healer-row{% endif %}{% if attacker.final_blow %} final-blow{% endif %}{% if is_top_damage %} top-damage{% endif %}"
+            data-order="{{ loop.index0 }}"
+            data-attacker-index="{{ attacker.attacker_index or loop.index0 }}"
+            data-damage="{{ attacker.damage_done or 0 }}"
+            data-percent="{{ attacker_pct }}"
+            data-final-blow="{% if attacker.final_blow %}1{% else %}0{% endif %}"
+            data-character-name="{{ (attacker.character.name if attacker.character else 'Unknown attacker')|e }}"
+            data-character-url="{{ (attacker.character.url if attacker.character else '')|e }}"
+            data-character-image="{{ (attacker.character.image_url if attacker.character and attacker.character.image_url else '')|e }}"
+            data-corporation-id="{{ attacker.corporation.entity_id if attacker.corporation else '' }}"
+            data-corporation-name="{{ (attacker.corporation.name if attacker.corporation else 'No corporation')|e }}"
+            data-corporation-ticker="{{ (attacker.corporation.ticker if attacker.corporation and attacker.corporation.ticker else '')|e }}"
+            data-corporation-url="{{ (attacker.corporation.url if attacker.corporation else '')|e }}"
+            data-corporation-image="{{ (attacker.corporation.image_url if attacker.corporation and attacker.corporation.image_url else '')|e }}"
+            data-alliance-id="{{ attacker.alliance.entity_id if attacker.alliance else '' }}"
+            data-alliance-name="{{ (attacker.alliance.name if attacker.alliance else 'No alliance')|e }}"
+            data-alliance-ticker="{{ (attacker.alliance.ticker if attacker.alliance and attacker.alliance.ticker else '')|e }}"
+            data-alliance-url="{{ (attacker.alliance.url if attacker.alliance else '')|e }}"
+            data-alliance-image="{{ (attacker.alliance.image_url if attacker.alliance and attacker.alliance.image_url else '')|e }}"
+            data-coalition-id="{{ attacker.coalition.coalition_id if attacker.coalition else '' }}"
+            data-coalition-name="{{ (attacker.coalition.name if attacker.coalition else 'AUTRE')|e }}"
+            data-coalition-ticker="{{ (attacker.coalition.short_name if attacker.coalition and attacker.coalition.short_name else '')|e }}"
+            data-coalition-url="{{ (attacker.coalition.url if attacker.coalition and attacker.coalition.url else '')|e }}"
+            data-coalition-image="{{ (attacker.coalition.image_url if attacker.coalition and attacker.coalition.image_url else '')|e }}"
+            data-ship-name="{{ (attacker.ship.name if attacker.ship else 'Unknown ship')|e }}"
+            data-ship-image="{{ (attacker.ship.image_url if attacker.ship and attacker.ship.image_url else '')|e }}"
+            data-ship-url="{{ (attacker.ship.url if attacker.ship else '')|e }}"
+            data-weapon-name="{{ (attacker.weapon.name if attacker.weapon else '')|e }}"
+          >
+            <div class="attacker-ship">
+              {% if attacker.character and attacker.character.image_url %}
+              <img class="attacker-entity-image" src="{{ attacker.character.image_url }}" alt="{{ attacker.character.name }}" loading="lazy">
+              {% endif %}
+              {% if attacker.ship and attacker.ship.image_url %}
+              <img class="attacker-ship-badge" src="{{ attacker.ship.image_url }}" alt="{{ attacker.ship.name }}" loading="lazy">
+              {% endif %}
+            </div>
+            <div class="attacker-main">
+              <div class="attacker-name">
+                {% if attacker.character %}<a href="{{ attacker.character.url }}">{{ attacker.character.name }}</a>{% else %}Unknown attacker{% endif %}
+              </div>
+              {% if attacker.final_blow or is_top_damage %}
+              <div class="attacker-tags">
+                {% if attacker.final_blow %}<span class="attacker-tag final-blow-label">Final Blow</span>{% endif %}
+                {% if is_top_damage %}<span class="attacker-tag top-damage-label">{{ 'Top Healer' if healing else 'Top Damage' }}</span>{% endif %}
+              </div>
+              {% endif %}
+              <div class="attacker-sub">{% if attacker.ship %}{{ attacker.ship.name }}{% else %}Unknown ship{% endif %}{% if attacker.weapon %} · {{ attacker.weapon.name }}{% endif %}</div>
+              <div class="attacker-sub">{% if attacker.alliance %}{{ attacker.alliance.ticker or attacker.alliance.name }}{% elif attacker.corporation %}{{ attacker.corporation.ticker or attacker.corporation.name }}{% endif %}</div>
+            </div>
+            <div class="attacker-damage">
+              <div class="pct">{{ "%.1f"|format(attacker_pct) }}%</div>
+              <div class="raw">{{ "{:,}".format(attacker.damage_done or 0) }}{% if healing %} HP{% endif %}</div>
+            </div>
+            <div class="damage-track"><span style="width: {{ attacker_pct }}%;"></span></div>
+          </div>
+          {% else %}
+          <div class="inventory-empty">No attackers.</div>
+          {% endfor %}
+        </div>
+      </section>

@@ -339,12 +339,8 @@
   }
 
   .killmail-shell.has-healers { max-width: 1800px; }
-  .has-healers .killmail-main-grid { grid-template-columns: minmax(240px, .65fr) minmax(680px, 1.55fr) minmax(360px, .85fr); }
+  .has-healers .killmail-main-grid { grid-template-columns: minmax(360px, .85fr) minmax(680px, 1.55fr) minmax(360px, .85fr); }
   .healers-window { align-self: start; }
-  .healing-note { padding: .65rem .7rem 0; margin: 0 0 .35rem; color: #9ab8ab; font-size: .7rem; }
-  .healer-row { border-color: #438b6266; box-shadow: inset 3px 0 0 #438b62; }
-  .attacker-tag.healing-label { color: #bdf5cb; background: #2a874848; border-color: #5bd07e7a; }
-  .healer-row .healing-track span { background: #65c18c; }
   @media (max-width: 1600px) { .has-healers .killmail-main-grid { grid-template-columns: 1fr; } }
 
   .attackers-window {
@@ -942,89 +938,7 @@
         </div>
       </section>
 
-      <section class="eve-window attackers-window">
-        <div class="eve-window-title">
-          <span>Attackers</span>
-          <div class="attackers-title-controls">
-            <span class="muted" id="attackers-summary">{{ killmail.attackers_count }} involved</span>
-            <div class="attacker-view-toggle" role="group" aria-label="Attacker grouping">
-              <button type="button" class="attacker-view-button active" data-attacker-mode="individual">Individual</button>
-              <button type="button" class="attacker-view-button" data-attacker-mode="corporation">Corporation</button>
-              <button type="button" class="attacker-view-button" data-attacker-mode="alliance">Alliance</button>
-              <button type="button" class="attacker-view-button" data-attacker-mode="coalition">Coalition</button>
-            </div>
-          </div>
-        </div>
-        <div
-          class="attackers-list"
-          id="attackers-list"
-          data-victim-damage="{{ killmail.victim.damage_taken or 0 }}"
-        >
-          {% for attacker in killmail.attackers %}
-          {% set attacker_pct = (attacker.damage_percent_value or 0)|float %}
-          {% set is_top_damage = killmail.top_damage and attacker.attacker_index == killmail.top_damage.attacker_index %}
-          <div
-            class="attacker-row{% if attacker.final_blow %} final-blow{% endif %}{% if is_top_damage %} top-damage{% endif %}"
-            data-order="{{ loop.index0 }}"
-            data-attacker-index="{{ attacker.attacker_index or loop.index0 }}"
-            data-damage="{{ attacker.damage_done or 0 }}"
-            data-percent="{{ attacker_pct }}"
-            data-final-blow="{% if attacker.final_blow %}1{% else %}0{% endif %}"
-            data-character-name="{{ (attacker.character.name if attacker.character else 'Unknown attacker')|e }}"
-            data-character-url="{{ (attacker.character.url if attacker.character else '')|e }}"
-            data-character-image="{{ (attacker.character.image_url if attacker.character and attacker.character.image_url else '')|e }}"
-            data-corporation-id="{{ attacker.corporation.entity_id if attacker.corporation else '' }}"
-            data-corporation-name="{{ (attacker.corporation.name if attacker.corporation else 'No corporation')|e }}"
-            data-corporation-ticker="{{ (attacker.corporation.ticker if attacker.corporation and attacker.corporation.ticker else '')|e }}"
-            data-corporation-url="{{ (attacker.corporation.url if attacker.corporation else '')|e }}"
-            data-corporation-image="{{ (attacker.corporation.image_url if attacker.corporation and attacker.corporation.image_url else '')|e }}"
-            data-alliance-id="{{ attacker.alliance.entity_id if attacker.alliance else '' }}"
-            data-alliance-name="{{ (attacker.alliance.name if attacker.alliance else 'No alliance')|e }}"
-            data-alliance-ticker="{{ (attacker.alliance.ticker if attacker.alliance and attacker.alliance.ticker else '')|e }}"
-            data-alliance-url="{{ (attacker.alliance.url if attacker.alliance else '')|e }}"
-            data-alliance-image="{{ (attacker.alliance.image_url if attacker.alliance and attacker.alliance.image_url else '')|e }}"
-            data-coalition-id="{{ attacker.coalition.coalition_id if attacker.coalition else '' }}"
-            data-coalition-name="{{ (attacker.coalition.name if attacker.coalition else 'AUTRE')|e }}"
-            data-coalition-ticker="{{ (attacker.coalition.short_name if attacker.coalition and attacker.coalition.short_name else '')|e }}"
-            data-coalition-url="{{ (attacker.coalition.url if attacker.coalition and attacker.coalition.url else '')|e }}"
-            data-coalition-image="{{ (attacker.coalition.image_url if attacker.coalition and attacker.coalition.image_url else '')|e }}"
-            data-ship-name="{{ (attacker.ship.name if attacker.ship else 'Unknown ship')|e }}"
-            data-ship-image="{{ (attacker.ship.image_url if attacker.ship and attacker.ship.image_url else '')|e }}"
-            data-ship-url="{{ (attacker.ship.url if attacker.ship else '')|e }}"
-            data-weapon-name="{{ (attacker.weapon.name if attacker.weapon else '')|e }}"
-          >
-            <div class="attacker-ship">
-              {% if attacker.character and attacker.character.image_url %}
-              <img class="attacker-entity-image" src="{{ attacker.character.image_url }}" alt="{{ attacker.character.name }}" loading="lazy">
-              {% endif %}
-              {% if attacker.ship and attacker.ship.image_url %}
-              <img class="attacker-ship-badge" src="{{ attacker.ship.image_url }}" alt="{{ attacker.ship.name }}" loading="lazy">
-              {% endif %}
-            </div>
-            <div class="attacker-main">
-              <div class="attacker-name">
-                {% if attacker.character %}<a href="{{ attacker.character.url }}">{{ attacker.character.name }}</a>{% else %}Unknown attacker{% endif %}
-              </div>
-              {% if attacker.final_blow or is_top_damage %}
-              <div class="attacker-tags">
-                {% if attacker.final_blow %}<span class="attacker-tag final-blow-label">Final Blow</span>{% endif %}
-                {% if is_top_damage %}<span class="attacker-tag top-damage-label">Top Damage</span>{% endif %}
-              </div>
-              {% endif %}
-              <div class="attacker-sub">{% if attacker.ship %}{{ attacker.ship.name }}{% else %}Unknown ship{% endif %}{% if attacker.weapon %} · {{ attacker.weapon.name }}{% endif %}</div>
-              <div class="attacker-sub">{% if attacker.alliance %}{{ attacker.alliance.ticker or attacker.alliance.name }}{% elif attacker.corporation %}{{ attacker.corporation.ticker or attacker.corporation.name }}{% endif %}</div>
-            </div>
-            <div class="attacker-damage">
-              <div class="pct">{{ "%.1f"|format(attacker_pct) }}%</div>
-              <div class="raw">{{ "{:,}".format(attacker.damage_done or 0) }}</div>
-            </div>
-            <div class="damage-track"><span style="width: {{ attacker_pct }}%;"></span></div>
-          </div>
-          {% else %}
-          <div class="inventory-empty">No attackers.</div>
-          {% endfor %}
-        </div>
-      </section>
+      {% include 'killmail_attackers.html' %}
     </div>
 
     <section class="eve-window inventory-board">
@@ -1116,9 +1030,11 @@
 
 <script>
 (() => {
-  const list = document.getElementById("attackers-list");
-  const summary = document.getElementById("attackers-summary");
-  const buttons = Array.from(document.querySelectorAll("[data-attacker-mode]"));
+  document.querySelectorAll('[data-participants-panel]').forEach((panel) => {
+  const healing = panel.dataset.healing === '1';
+  const list = panel.querySelector('.attackers-list');
+  const summary = panel.querySelector('.muted');
+  const buttons = Array.from(panel.querySelectorAll('[data-attacker-mode]'));
 
   if (!list || !summary || buttons.length === 0) {
     return;
@@ -1178,7 +1094,7 @@
 
   function buildGroupedRow(group, isTopDamage) {
     const row = document.createElement("div");
-    row.className = "attacker-row grouped-attacker";
+    row.className = "attacker-row grouped-attacker" + (healing ? " healer-row" : "");
     if (group.finalBlow) {
       row.classList.add("final-blow");
     }
@@ -1224,7 +1140,7 @@
         addTag(tags, "Final Blow", "final-blow-label");
       }
       if (isTopDamage) {
-        addTag(tags, "Top Damage", "top-damage-label");
+        addTag(tags, healing ? "Top Healer" : "Top Damage", "top-damage-label");
       }
       main.appendChild(tags);
     }
@@ -1254,7 +1170,7 @@
 
     const raw = document.createElement("div");
     raw.className = "raw";
-    raw.textContent = numberFormatter.format(group.damage);
+    raw.textContent = numberFormatter.format(group.damage) + (healing ? " HP" : "");
     damage.appendChild(raw);
 
     row.appendChild(damage);
@@ -1389,6 +1305,7 @@
       }
     });
   }
+  });
 })();
 </script>
 
