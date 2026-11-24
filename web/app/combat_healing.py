@@ -1,10 +1,12 @@
 """Display recorded remote healing without changing killmail data."""
 from collections import Counter
+from contextlib import closing
 from datetime import datetime, timedelta, timezone
 import json
 import logging
 from . import combat_timeline as store
-from .entities import _entity_ref
+from .entities import _entity_ref, _killmail_type_ref
+from .db import db
 
 logger = logging.getLogger(__name__)
 HEAL_KINDS = ('shield_in','shield_out','armor_in','armor_out','hull_in','hull_out')
@@ -23,7 +25,7 @@ def participants(killmail):
 
 def collect(killmail, events):
     """Count each observed heal once across sender/receiver logs, retaining cycles."""
-    by_id,by_name=participants(killmail)
+    by_id,by_name=participants(dict(victim=killmail.get('victim'),attackers=[]))
     end=killmail['killmail_time'].astimezone(timezone.utc)
     start=end-timedelta(minutes=30)
     observations={}; seen=set()
@@ -64,17 +66,49 @@ def collect(killmail, events):
     return result
 
 
+def healing_refs(rows):
+    refs={key:{} for key in ('character','ship','corporation','alliance')}
+    names=sorted({r['source']['name'] for r in rows})
+    ships=sorted({name for r in rows for name in r['ship_names']})
+    corps=sorted({r['source']['corporation'] for r in rows if r['source'].get('corporation')})
+    alliances=sorted({r['source']['alliance'] for r in rows if r['source'].get('alliance')})
+    queries=[
+        ('character',names,'SELECT character_id,name,NULL::text FROM entities.characters WHERE name=ANY(%s)',(names,)),
+        ('ship',ships,"SELECT sde_key::bigint,data->'name'->>'en',NULL::text FROM public.sde_types WHERE data->'name'->>'en'=ANY(%s)",(ships,)),
+        ('corporation',corps,'SELECT corporation_id,name,ticker FROM entities.corporations WHERE ticker=ANY(%s) OR name=ANY(%s)',(corps,corps)),
+        ('alliance',alliances,'SELECT alliance_id,name,ticker FROM entities.alliances WHERE ticker=ANY(%s) OR name=ANY(%s)',(alliances,alliances))]
+    try:
+        with closing(db()) as conn:
+            conn.set_session(readonly=True)
+            for kind,values,sql,params in queries:
+                if not values: continue
+                try:
+                    with conn.cursor() as cur:
+                        cur.execute(sql,params)
+                        for entity_id,name,ticker in cur.fetchall():
+                            ref=(_killmail_type_ref(entity_id,name,'ship',64) if kind=='ship' else _entity_ref(kind,entity_id,name,ticker))
+                            refs[kind][name.casefold()]=ref
+                            if ticker: refs[kind][ticker.casefold()]=ref
+                except Exception:
+                    conn.rollback()
+                    logger.warning('Healing %s lookup unavailable; keeping recorded HP',kind)
+    except Exception:
+        logger.warning('Healing metadata unavailable; keeping recorded HP')
+    return refs
+
+
 def enrich(killmail, rows):
     if not rows: return rows
     by_id,by_name=participants(killmail)
+    refs=healing_refs(rows)
     for row in rows:
         source=row['source'];name=source['name'];existing=by_id.get(source.get('character_id')) or by_name.get(name.casefold()) or {}
         cid=source.get('character_id')
-        row['character']=existing.get('character') or _entity_ref('character',cid,name) or dict(name=name)
-        row['corporation']=existing.get('corporation')
-        row['alliance']=existing.get('alliance')
+        row['character']=existing.get('character') or _entity_ref('character',cid,name) or refs['character'].get(name.casefold()) or dict(name=name)
+        row['corporation']=refs['corporation'].get(source.get('corporation','').casefold()) or existing.get('corporation')
+        row['alliance']=refs['alliance'].get(source.get('alliance','').casefold()) or existing.get('alliance')
         row['logged_corporation']=source.get('corporation','')
-        row['ships']=[dict(name=name) for name in sorted(row['ship_names'])]
+        row['ships']=[refs['ship'].get(name.casefold()) or dict(name=name) for name in sorted(row['ship_names'])]
         if not row['ships'] and existing.get('ship'): row['ships']=[existing['ship']]
     return rows
 

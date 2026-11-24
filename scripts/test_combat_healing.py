@@ -44,12 +44,12 @@ class HealingTests(unittest.TestCase):
         self.assertEqual(rows[0]['total'],200)
         self.assertEqual(rows[0]['percent'],100)
 
-    def test_attacker_healing_layers_and_unrelated_zero_capacitor_excluded(self):
+    def test_only_victim_healing_counts_and_zero_capacitor_excluded(self):
         rows=healing.collect(km(),[event(1,kind='armor_out',amount=80,observer='Logi',target=dict(name='Attacker',character_id=200)),
             event(2,kind='hull_in',amount=20),event(3,amount=0),event(4,kind='capacitor_in',amount=900),
             event(5,target=dict(name='Unrelated',character_id=999)),event(6,target=dict(name='Logi',character_id=201))])
-        self.assertEqual(rows[0]['total'],100);self.assertEqual(rows[0]['armor'],80);self.assertEqual(rows[0]['hull'],20)
-        self.assertEqual({r['side'] for r in rows[0]['recipients']},{'Victim','Attacker'})
+        self.assertEqual(rows[0]['total'],20);self.assertEqual(rows[0]['armor'],0);self.assertEqual(rows[0]['hull'],20)
+        self.assertEqual({r['side'] for r in rows[0]['recipients']},{'Victim'})
 
     def test_lookup_by_name_when_peer_id_missing_and_never_substitute_conflicting_id(self):
         rows=healing.collect(km(),[event(1,target=dict(name='victim')),event(2,target=dict(name='Victim',character_id=999))])
@@ -83,6 +83,47 @@ class HealingTests(unittest.TestCase):
         self.assertIn('&lt;script&gt;bad()&lt;/script&gt;',html)
         self.assertIn('100 HP',html)
         self.assertLess(html.index('aria-label="Healing participants"'),html.index('Victim & fitting'))
+
+
+    def test_outside_km_healer_gets_portrait_ship_corporation_and_alliance(self):
+        source=dict(name='Outside Logi',ship='Test Logi Ship',corporation='LOGI',alliance='ALLY')
+        rows=healing.collect(km(),[event(source=source)])
+        class Connection:
+            def __init__(self): self.readonly=False;self.sql=''
+            def set_session(self,readonly): self.readonly=readonly
+            def __enter__(self): return self
+            def __exit__(self,*args): pass
+            def cursor(self): return self
+            def execute(self,sql,params): self.sql=sql
+            def close(self): pass
+            def rollback(self): pass
+            def fetchall(self):
+                if 'entities.characters' in self.sql: return [(301,'Outside Logi',None)]
+                if 'sde_types' in self.sql: return [(302,'Test Logi Ship',None)]
+                if 'entities.corporations' in self.sql: return [(303,'Test Corporation','LOGI')]
+                return [(304,'Test Alliance','ALLY')]
+        conn=Connection()
+        with patch.object(healing,'db',return_value=conn): row=healing.enrich(km(),rows)[0]
+        self.assertTrue(conn.readonly)
+        self.assertIn('/characters/301/portrait',row['character']['image_url'])
+        self.assertEqual(row['character']['url'],'/character/301')
+        self.assertIn('/types/302/icon',row['ships'][0]['image_url'])
+        self.assertEqual(row['corporation']['url'],'/corporation/303')
+        self.assertEqual(row['alliance']['url'],'/alliance/304')
+        html=f.load('public_page_renderer').content('killmail_healers.html',dict(healers=[row]))
+        self.assertIn('/characters/301/portrait',html)
+        self.assertIn('/types/302/icon',html)
+        self.assertIn('100 HP',html)
+        self.assertNotIn('To:',html)
+
+    def test_metadata_failure_keeps_healing_visible(self):
+        rows=healing.collect(km(),[event(source=dict(name='Outside Logi',ship='Test Logi Ship'))])
+        with patch.object(healing,'db',side_effect=RuntimeError('lookup unavailable')):
+            row=healing.enrich(km(),rows)[0]
+        html=f.load('public_page_renderer').content('killmail_healers.html',dict(healers=[row]))
+        self.assertIn('Outside Logi',html)
+        self.assertIn('100 HP',html)
+        self.assertIn('Test Logi Ship',html)
 
 
 if __name__=='__main__':unittest.main()
