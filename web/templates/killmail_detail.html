@@ -676,6 +676,7 @@
     .fit-only-card { width: 100%; }
   }
 </style><div class="killmail-page">
+{% if combat_debug %}<div class="mb-3"><strong class="badge text-bg-warning">TEST</strong> <a href="/admin/debug?tab=combat">Back to Combat logs · Debug</a></div>{% endif %}
 {% if error %}
   <div class="alert alert-danger py-2">Killmail loading failed: {{ error }}</div>
 {% elif not killmail %}

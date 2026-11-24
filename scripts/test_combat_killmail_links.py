@@ -69,3 +69,45 @@ class AutomaticWebsiteTests(RouteTests):
         from fastapi.responses import RedirectResponse
         with patch.object(routes,'require_login',return_value=None),patch.object(routes,'require_permission_or_redirect',return_value=RedirectResponse('/login',302)):
             self.assertEqual(self.client.get('/admin/debug/combat/killmails',follow_redirects=False).status_code,302)
+
+
+class DebugPaginationTests(StorageTests):
+    def test_all_killboard_pages_and_date_filters_are_reachable(self):
+        with store.connection() as conn:
+            links.schema(conn)
+            conn.executemany('INSERT INTO combat_killmails VALUES(?,?,?,?,?,?,?,?,?)',
+                [(1,'Test Pilot',123,i,'2026-05-03T18:18:07Z','loss' if i%2 else 'kill',587,'Rifter',0) for i in range(1,206)])
+            conn.commit()
+        pages=[links.report(page=p) for p in (1,2,3)]
+        ids=[r['killmail_id'] for p in pages for r in p['killmails']]
+        self.assertEqual(len(ids),205);self.assertEqual(len(set(ids)),205)
+        self.assertFalse(pages[-1]['pagination']['has_next'])
+        self.assertEqual(links.report(date_to='2026-05-01T00:00:00Z')['pagination']['total'],0)
+        self.assertEqual(links.report(side='losses')['pagination']['total'],103)
+
+    def test_shared_kb_template_has_explicit_test_link_and_loss_color(self):
+        from scripts import test_killmail_forensics as f
+        from scripts.test_combat_timeline_browser import ReadConnection,hydrate
+        report={'killmails':[dict(side='loss',killmail_id=900,occurred_at='2026-10-20T19:22:13Z')],
+                'pagination':dict(page=1,has_prev=False,has_next=False)}
+        with patch.object(links,'db',return_value=ReadConnection()),patch.object(f.entities,'_hydrate_global_killmail_entries',side_effect=hydrate):
+            kb=links.killboard_page(report)
+        html=f.templates.env.get_template('entity_killmails_fragment.html').render(killmail_page=kb)
+        self.assertIn('killmail-row-loss',html)
+        self.assertIn('/admin/debug/combat/kill/900',html)
+        self.assertIn('TEST',html)
+
+
+class DebugPreviewTests(RouteTests):
+    def test_test_link_opens_existing_killmail_renderer_with_healing(self):
+        import sys
+        from types import SimpleNamespace
+        from scripts.test_combat_healing import km, healing, event as heal_event
+        mail=km();healers=healing.enrich(mail,healing.collect(mail,[heal_event()]))
+        source=SimpleNamespace(kill_profile=lambda *args:SimpleNamespace(context=dict(killmail=mail,error=None,healers=healers)))
+        with patch.dict(sys.modules,{routes.__package__+'.routes_entities':source}),patch.object(routes,'require_login',return_value=ADMIN),patch.object(routes,'require_permission_or_redirect',return_value=None):
+            response=self.client.get('/admin/debug/combat/kill/123')
+        self.assertEqual(response.status_code,200)
+        self.assertIn('+ Healing',response.text)
+        self.assertIn('100 HP',response.text)
+        self.assertIn('TEST',response.text)

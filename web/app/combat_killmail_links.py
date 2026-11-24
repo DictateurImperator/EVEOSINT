@@ -123,20 +123,62 @@ def refresh_stream(stream):
         conn.commit()
 
 
-def report(observer=''):
+def report(observer='', page=1, date_from='', date_to='', month='', side='both', killmail_id=''):
     if observer: store.text(observer,128)
-    filters=[]; values=[]
+    page=max(1,int(page));per_page=100
+    if side not in ('both','kills','losses'): raise ValueError('Invalid side')
+    filters=[];values=[]
     if observer: filters.append('observer=?');values.append(observer)
+    if month:
+        datetime.strptime(month,'%Y-%m')
+        filters.append('substr(occurred_at,1,7)=?');values.append(month)
+    for value,operator in ((date_from,'>='),(date_to,'<=')):
+        if value:
+            store.timestamp(value);filters.append('occurred_at'+operator+'?');values.append(value)
+    if killmail_id:
+        if not str(killmail_id).isascii() or not str(killmail_id).isdigit(): raise ValueError('Invalid killmail id')
+        filters.append('killmail_id=?');values.append(int(killmail_id))
     where=' WHERE '+' AND '.join(filters) if filters else ''
+    # Deduplicate KMs shared by several observers. A loss takes precedence.
+    grouped="SELECT killmail_id,occurred_at,max(side='loss') AS is_loss FROM combat_killmails"+where+' GROUP BY killmail_id,occurred_at'
+    if side!='both': grouped+=' HAVING is_loss='+('1' if side=='losses' else '0')
     with store.connection() as conn:
         schema(conn)
-        rows=[dict(r) for r in conn.execute('SELECT * FROM combat_killmails'+where+' ORDER BY occurred_at DESC,killmail_id DESC',values)]
-        unknown=[dict(r) for r in conn.execute('''SELECT e.observer,e.occurred_at,e.event_id,l.status,l.candidates
-            FROM events e JOIN combat_loss_links l USING(owner,event_id)
-            WHERE e.kind='loss_signal' AND l.status!='linked' '''+('AND e.observer=? ' if observer else '')+'ORDER BY e.occurred_at DESC',([observer] if observer else []))]
+        total=conn.execute('SELECT count(*) FROM ('+grouped+')',values).fetchone()[0]
+        pages=max(1,(total+per_page-1)//per_page);page=min(page,pages)
+        rows=[dict(r) for r in conn.execute(grouped+' ORDER BY occurred_at DESC,killmail_id DESC LIMIT ? OFFSET ?',values+[per_page,(page-1)*per_page])]
+        # Keep the compact report fields used by the debug API.
+        for row in rows:
+            detail=conn.execute('SELECT * FROM combat_killmails WHERE killmail_id=? AND occurred_at=?'+(' AND observer=?' if observer else '')+" ORDER BY (side='loss') DESC LIMIT 1",
+                [row['killmail_id'],row['occurred_at']]+([observer] if observer else [])).fetchone()
+            row.update(dict(detail));row['side']='loss' if row['is_loss'] else 'kill';row['url']='/kill/'+str(row['killmail_id'])
+        unknown_filters=["e.kind='loss_signal'","l.status!='linked'"];unknown_values=[]
+        if observer: unknown_filters.append('e.observer=?');unknown_values.append(observer)
+        if month: unknown_filters.append('substr(e.occurred_at,1,7)=?');unknown_values.append(month)
+        for value,operator in ((date_from,'>='),(date_to,'<=')):
+            if value: unknown_filters.append('e.occurred_at'+operator+'?');unknown_values.append(value)
+        unknown=[dict(r) for r in conn.execute('SELECT e.observer,e.occurred_at,e.event_id,l.status,l.candidates FROM events e JOIN combat_loss_links l USING(owner,event_id) WHERE '+' AND '.join(unknown_filters)+' ORDER BY e.occurred_at DESC',unknown_values)]
         scans=[dict(r) for r in conn.execute('SELECT * FROM combat_killmail_scans'+(' WHERE observer=?' if observer else ''),([observer] if observer else []))]
-    for row in rows: row['url']='/kill/'+str(row['killmail_id'])
-    return {'killmails':rows,'unmatched_losses':unknown,'scans':scans}
+        months=[r[0] for r in conn.execute("SELECT DISTINCT substr(occurred_at,1,7) FROM events"+(' WHERE observer=?' if observer else '')+' ORDER BY 1 DESC',([observer] if observer else []))]
+    pagination=dict(page=page,per_page=per_page,total=total,pages=pages,has_prev=page>1,has_next=page<pages,prev_page=max(1,page-1),next_page=min(pages,page+1))
+    return dict(killmails=rows,unmatched_losses=unknown,scans=scans,months=months,pagination=pagination)
+
+
+def killboard_page(report, side='both'):
+    # Reuse the production KB loader and row template, not a debug copy.
+    from .entities import _hydrate_global_killmail_entries, _group_killmails_by_date
+    entries=[(row['side'],row['killmail_id'],datetime.fromisoformat(row['occurred_at'].replace('Z','+00:00'))) for row in report['killmails']]
+    rows=[]
+    if entries:
+        with closing(db()) as conn:
+            conn.set_session(readonly=True)
+            with conn: rows=_hydrate_global_killmail_entries(conn,entries)
+    sides={row['killmail_id']:row['side'] for row in report['killmails']}
+    for row in rows:
+        row['side']=sides[row['killmail_id']];row['is_loss']=row['side']=='loss';row['is_kill']=not row['is_loss']
+        row['detail_url']='/admin/debug/combat/kill/'+str(row['killmail_id'])
+        row['source_tag']='TEST';row['tag_url']=row['detail_url']
+    return dict(killmail_groups=_group_killmails_by_date(rows),killmail_pagination=report['pagination'],killmail_participation=side,killmail_mode='api')
 
 
 def attach_links(payload):
@@ -148,5 +190,5 @@ def attach_links(payload):
                 (event['collector_owner'],event['event_id'])).fetchone()
             if row:
                 event['killmail_link']=dict(row)
-                if row['killmail_id']: event['killmail_link']['url']='/kill/'+str(row['killmail_id'])
+                if row['killmail_id']: event['killmail_link']['url']='/admin/debug/combat/kill/'+str(row['killmail_id'])
     return payload

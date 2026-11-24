@@ -5,6 +5,7 @@ from fastapi.responses import JSONResponse
 from starlette.concurrency import run_in_threadpool
 from .auth import require_login, require_permission_or_redirect, get_user_permissions
 from .db import db
+from .main_objects import templates
 from . import combat_timeline as store
 from . import combat_killmail_links as links
 
@@ -37,10 +38,13 @@ def active_collector(token):
 
 
 @router.get('/admin/debug/combat/killmails')
-def killmails(request: Request, background_tasks: BackgroundTasks, observer: str=''):
+def killmails(request: Request, background_tasks: BackgroundTasks, observer: str='', page: int=1, date_from: str='', date_to: str='', month: str='', side: str='both', killmail_id: str=''):
     user, redirect = admin(request)
     if redirect: return redirect
-    try: payload=links.report(observer)
+    try:
+        payload=links.report(observer,page,date_from,date_to,month,side,killmail_id)
+        kb=links.killboard_page(payload,side)
+        payload['html']=templates.env.get_template('entity_killmails_fragment.html').render(killmail_page=kb,killmail_public=False)
     except ValueError: raise HTTPException(400, 'Invalid observer')
     background_tasks.add_task(links.refresh)
     return JSONResponse(payload,headers={'Cache-Control':'no-store'})
@@ -61,3 +65,14 @@ async def collect(request: Request, background_tasks: BackgroundTasks):
     except (ValueError,UnicodeError): raise HTTPException(422,'Invalid telemetry batch')
     background_tasks.add_task(links.refresh)
     return JSONResponse(ack,headers={'Cache-Control':'no-store'})
+
+
+@router.get('/admin/debug/combat/kill/{killmail_id}')
+def killmail_test(request: Request, killmail_id: int):
+    user, redirect = admin(request)
+    if redirect: return redirect
+    from .routes_entities import kill_profile
+    response=kill_profile(request,killmail_id)
+    if not hasattr(response,'context'): return response
+    return templates.TemplateResponse(request=request,name='killmail_detail.html',
+        context=dict(response.context,combat_debug=True))

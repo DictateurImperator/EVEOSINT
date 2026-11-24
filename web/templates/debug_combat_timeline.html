@@ -1,3 +1,4 @@
+{% include "killmail_table_styles.html" %}
 <h1 class="h3 mb-2">Combat logs · Debug</h1>
 <p class="muted-line">Combat observations. Filter by observer to inspect one character's point of view. These are player-supplied logs, not verified killmails.</p>
 <section class="content-card p-3 p-md-4 mb-3">
@@ -13,38 +14,42 @@
     <label class="align-self-center small"><input id="ctLive" type="checkbox" checked> Live · 5 seconds</label>
   </div>
   <div id="ctStreams" class="d-flex flex-wrap gap-2 small mb-3"></div>
+<section class="content-card p-3 p-md-4 mb-3">
+  <h2 class="h5">Kills and losses · Killmail links</h2>
+  <p class="small muted-line">The site reads each observer's killboard for the logged period. Inflicted kills come from that killboard. Loss notifications are compared with that character's losses by UTC time (nearest within 30 seconds). Repeated notifications may link to the same loss. Unknown or ambiguous losses stay separate. All links are stored in the separate debug database; existing killmails are never modified.</p>
+  <div id="ctKmState" class="small muted-line" role="status"></div>
+  <div id="ctKillmails"></div>
+  <div id="ctUnknown" class="small muted-line"></div>
+</section>
+  <details class="mt-3"><summary>Raw observations</summary>
   <div class="table-responsive"><table class="table table-dark table-hover table-sm align-middle">
     <thead><tr><th>Time (UTC)</th><th>Observer</th><th>Event</th><th>Source → Target</th><th>Amount logged</th><th>Weapon / module</th><th>Loss link</th></tr></thead>
     <tbody id="ctRows"></tbody>
   </table></div>
   <p class="small muted-line">Newest observations first; up to 200 per page. Incoming and outgoing observations remain separate. A loss signal may describe a ship, a pod or a repeated notification; no automatic death counting is applied. Deflected damage is shown separately.</p>
   <button id="ctOlder" class="btn btn-outline-secondary btn-sm" type="button" hidden>Older observations</button>
+  </details>
 </section>
-<section class="content-card p-3 p-md-4 mb-3">
-  <h2 class="h5">Kills and losses · Killmail links</h2>
-  <p class="small muted-line">The site reads each observer's killboard for the logged period. Inflicted kills come from that killboard. Loss notifications are compared with that character's losses by UTC time (nearest within 30 seconds). Repeated notifications may link to the same loss. Unknown or ambiguous losses stay separate. All links are stored in the separate debug database; existing killmails are never modified.</p>
-  <div id="ctKmState" class="small muted-line" role="status"></div>
-  <div class="table-responsive"><table class="table table-dark table-sm"><thead><tr><th>UTC</th><th>Character</th><th>Side</th><th>Ship / pod</th><th>Killmail</th></tr></thead><tbody id="ctKillmails"></tbody></table></div>
-  <div id="ctUnknown" class="small muted-line"></div>
-</section>
+
 <script>
 (() => {
  const $=id=>document.getElementById(id);
  const types={damage_in:'Damage received',damage_out:'Damage dealt',miss_in:'Incoming miss',miss_out:'Outgoing miss',shield_in:'Shield received',shield_out:'Shield sent',armor_in:'Armor received',armor_out:'Armor sent',hull_in:'Hull received',hull_out:'Hull sent',capacitor_in:'Capacitor received',capacitor_out:'Capacitor sent',capacitor_neutralized:'Energy neutralized',capacitor_drained:'Energy drained',warp_scramble:'Warp scramble attempt',warp_disruption:'Warp disruption attempt',jammed:'Locks broken',loss_signal:'Loss signal · unconfirmed',jump:'System jump',undock:'Undocking',warp:'Warp',module:'Module notification',combat_other:'Other combat'};
  for(const [key,label] of Object.entries(types))$('ctKind').add(new Option(label,key));
- let cursor='',controller=null,older=false,kmController=null;
+ let cursor='',controller=null,older=false,kmController=null,kmPage=1,kmSide='both';
  async function loadKillmails(){
   kmController?.abort();kmController=new AbortController();const local=kmController;
   try{
-   const r=await fetch('/admin/debug/combat/killmails?'+new URLSearchParams({observer:$('ctObserver').value}),{signal:local.signal,cache:'no-store'});
+   const r=await fetch('/admin/debug/combat/killmails?'+killmailParams(),{signal:local.signal,cache:'no-store'});
    if(!r.ok)throw new Error('Killmail links could not be loaded (HTTP '+r.status+').');
    const data=await r.json();if(local!==kmController)return;
-   $('ctKillmails').replaceChildren();
-   for(const k of data.killmails){const tr=document.createElement('tr');cell(tr,k.occurred_at.replace('T',' ').replace('Z',''));cell(tr,k.observer);cell(tr,k.side==='kill'?'Inflicted':'Suffered');cell(tr,(k.is_pod?'Pod · ':k.is_pod===0?'Ship · ':'')+(k.ship_name||k.ship_type_id||'Unknown'));const td=cell(tr,'');const a=document.createElement('a');a.href=k.url;a.textContent='#'+k.killmail_id;td.appendChild(a);$('ctKillmails').appendChild(tr);}
+   $('ctKillmails').innerHTML=data.html;
    $('ctUnknown').replaceChildren();for(const loss of data.unmatched_losses){const line=document.createElement('div');line.textContent=loss.occurred_at+' · '+loss.observer+' · '+(loss.status==='ambiguous'?'Ambiguous loss':'Unknown killmail');$('ctUnknown').appendChild(line);}
    $('ctKmState').textContent=data.scans.some(s=>s.status==='error')?'Lookup failed; the site will retry.':data.scans.length?'Last site lookup: '+data.scans.map(s=>s.observer+' '+s.checked_at).join(' · '):'Waiting for the site to match received events…';
   }catch(e){if(e.name!=='AbortError')$('ctKmState').textContent=e.message;}
  }
+ function killmailParams(){const p=params();p.delete('kind');p.set('page',kmPage);p.set('side',kmSide);return p;}
+ $('ctKillmails').addEventListener('click',e=>{const page=e.target.closest('[data-killmail-page]');const side=e.target.closest('[data-killmail-participation]');if(page){e.preventDefault();kmPage=Number(page.dataset.killmailPage);$('ctLive').checked=false;loadKillmails();}if(side){kmSide=side.dataset.killmailParticipation;kmPage=1;loadKillmails();}});
  function cell(row,value){const td=document.createElement('td');td.textContent=value??'—';row.appendChild(td);return td;}
  function actor(a){return a?(a.name||a.ship||'Unknown')+(a.name&&a.ship?' ('+a.ship+')':''):'';}
  function params(){const p=new URLSearchParams({observer:$('ctObserver').value,kind:$('ctKind').value});for(const [id,key,end] of [['ctFrom','date_from',false],['ctTo','date_to',true]]){if($(id).value){let value=$(id).value;if(value.length===16)value+=end?':59':':00';p.set(key,value+'Z');}}return p;}
@@ -64,7 +69,8 @@
    $('ctTotal').textContent=data.total.toLocaleString('en-US')+' observations received';$('ctState').textContent=data.events.length?'Updated '+new Date().toLocaleTimeString():'No matching observations yet.';
   }catch(e){if(e.name!=='AbortError')$('ctState').textContent=e.message;}
  }
- for(const id of ['ctObserver','ctKind','ctFrom','ctTo'])$(id).onchange=()=>{load();loadKillmails();};
+ for(const id of ['ctObserver','ctFrom','ctTo'])$(id).onchange=()=>{kmPage=1;load();loadKillmails();};
+ $('ctKind').onchange=()=>load();
  $('ctRefresh').onclick=()=>{load();loadKillmails();};$('ctOlder').onclick=()=>{$('ctLive').checked=false;load(true);};
  setInterval(()=>{if($('ctLive').checked&&!document.hidden&&!older){load();loadKillmails();}},5000);
  window.addEventListener('beforeunload',()=>{controller?.abort();kmController?.abort();});

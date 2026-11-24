@@ -14,9 +14,24 @@ from scripts import test_killmail_forensics as f
 import tempfile
 
 
+class ReadConnection:
+    def set_session(self, **kwargs): pass
+    def __enter__(self): return self
+    def __exit__(self,*args): pass
+    def close(self): pass
+
+
+def hydrate(conn,entries):
+    return [dict(killmail_id=kid,killmail_time=at,date_key=at.date().isoformat(),time_label=at.strftime('%H:%M'),
+        victim_ship=dict(name='Capsule' if kid==900 else 'Rifter',image_url='/test-icon',url='/ship/670'),
+        location={},victim_character=dict(name='Victim',url='/character/123'),entity_context_type='global') for side,kid,at in entries]
+
+
 def main():
     with tempfile.TemporaryDirectory(prefix='combat-browser-') as directory, \
          patch.object(store,'ROOT',Path(directory)), \
+         patch.object(routes.links,'db',return_value=ReadConnection()), \
+         patch.object(f.entities,'_hydrate_global_killmail_entries',side_effect=hydrate), \
          patch.object(routes,'require_login',return_value=ADMIN), \
          patch.object(routes,'require_permission_or_redirect',return_value=None), \
          patch.object(routes.links,'read_killboard',side_effect=lambda *_:iter([(900,datetime(2026,10,20,19,22,13,tzinfo=timezone.utc),'loss',670,'Capsule','29'),(901,datetime(2026,10,20,19,22,14,tzinfo=timezone.utc),'kill',587,'Rifter','25')])):
@@ -41,10 +56,12 @@ def main():
                 expect(page.get_by_role('link',name='Combat logs',exact=True)).to_have_class('nav-link active')
                 expect(page.locator('#ctRows img')).to_have_count(0)
                 page.locator('#ctRefresh').click()
-                expect(page.locator('#ctKillmails tr')).to_have_count(2)
-                expect(page.locator('#ctKillmails')).to_contain_text('Inflicted')
-                expect(page.locator('#ctKillmails')).to_contain_text('Pod · Capsule')
-                expect(page.locator('#ctRows a[href="/kill/900"]')).to_have_count(1)
+                expect(page.locator('#ctKillmails .killmail-row-loss')).to_have_count(1)
+                expect(page.locator('#ctKillmails .killmail-row-kill')).to_have_count(1)
+                expect(page.locator('#ctKillmails a[href="/admin/debug/combat/kill/900"]').first).to_be_visible()
+                expect(page.locator('#ctKillmails .killmail-table')).to_have_count(1)
+                page.get_by_text('Raw observations',exact=True).click()
+                expect(page.locator('#ctRows a[href="/admin/debug/combat/kill/900"]')).to_have_count(1)
                 page.locator('#ctObserver').select_option('Pilot A');expect(page.locator('#ctRows tr')).to_have_count(2)
                 page.locator('#ctKind').select_option('loss_signal');expect(page.locator('#ctRows tr')).to_have_count(1)
                 page.locator('#ctObserver').select_option('');page.locator('#ctKind').select_option('')
