@@ -338,6 +338,15 @@
     text-decoration: underline;
   }
 
+  .killmail-shell.has-healers { max-width: 1800px; }
+  .has-healers .killmail-main-grid { grid-template-columns: minmax(240px, .65fr) minmax(680px, 1.55fr) minmax(360px, .85fr); }
+  .healers-window { align-self: start; }
+  .healing-note { padding: .65rem .7rem 0; margin: 0 0 .35rem; color: #9ab8ab; font-size: .7rem; }
+  .healer-row { border-color: #438b6266; box-shadow: inset 3px 0 0 #438b62; }
+  .attacker-tag.healing-label { color: #bdf5cb; background: #2a874848; border-color: #5bd07e7a; }
+  .healer-row .healing-track span { background: #65c18c; }
+  @media (max-width: 1600px) { .has-healers .killmail-main-grid { grid-template-columns: 1fr; } }
+
   .attackers-window {
     min-height: 100%;
   }
@@ -709,7 +718,7 @@
     {% endif %}
   {% endfor %}
 
-  <div class="killmail-shell">
+  <div class="killmail-shell{% if healers %} has-healers{% endif %}">
     <div class="killmail-summary">
       <div class="summary-main">
         <div>
@@ -754,6 +763,7 @@
     </div>
 
     <div class="killmail-main-grid">
+      {% if healers %}{% include "killmail_healers.html" %}{% endif %}
       <section class="eve-window">
         <div class="eve-window-title">
           <span>{% if killmail.is_structure %}Structure & fitting{% else %}Victim & fitting{% endif %}</span>

@@ -39,6 +39,7 @@ def connection():
                     CREATE TABLE IF NOT EXISTS events(owner INTEGER NOT NULL,event_id TEXT NOT NULL,occurred_at TEXT NOT NULL,
                         observer TEXT NOT NULL,kind TEXT NOT NULL,payload TEXT NOT NULL,received_at TEXT NOT NULL,
                         PRIMARY KEY(owner,event_id));
+                    CREATE INDEX IF NOT EXISTS events_kind_time ON events(kind,occurred_at);
                     CREATE INDEX IF NOT EXISTS events_time ON events(occurred_at DESC,event_id DESC,owner DESC);
                     CREATE INDEX IF NOT EXISTS events_observer_time ON events(observer,occurred_at DESC,event_id DESC,owner DESC);
                     CREATE TABLE IF NOT EXISTS streams(owner INTEGER NOT NULL,observer TEXT NOT NULL,events INTEGER NOT NULL,

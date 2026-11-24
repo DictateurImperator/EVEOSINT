@@ -1,0 +1,25 @@
+<section class="eve-window healers-window" aria-label="Healing participants">
+  <div class="eve-window-title"><span>+ Healing</span><span class="muted">{{ healers|length }} pilots</span></div>
+  <p class="healing-note">Recorded HP · 30 minutes before destruction</p>
+  <div class="attackers-list healers-list">
+    {% for healer in healers %}
+    <div class="attacker-row healer-row">
+      <div class="attacker-ship">
+        {% if healer.character.image_url %}<img class="attacker-entity-image" src="{{ healer.character.image_url }}" alt="{{ healer.character.name }}" loading="lazy">{% endif %}
+        {% if healer.ships and healer.ships[0].image_url %}<img class="attacker-ship-badge" src="{{ healer.ships[0].image_url }}" alt="{{ healer.ships[0].name }}" loading="lazy">{% endif %}
+      </div>
+      <div class="attacker-main">
+        <div class="attacker-name">{% if healer.character.url %}<a href="{{ healer.character.url }}">{{ healer.character.name }}</a>{% else %}{{ healer.character.name }}{% endif %}</div>
+        <div class="attacker-tags"><span class="attacker-tag healing-label">+ Healing</span></div>
+        {% if healer.ships %}<div class="attacker-sub">{% for ship in healer.ships %}{% if not loop.first %} · {% endif %}{% if ship.url %}<a href="{{ ship.url }}">{{ ship.name }}</a>{% else %}{{ ship.name }}{% endif %}{% endfor %}</div>{% endif %}
+        <div class="attacker-sub">{% if healer.alliance %}<a href="{{ healer.alliance.url }}">{{ healer.alliance.ticker or healer.alliance.name }}</a>{% elif healer.corporation %}<a href="{{ healer.corporation.url }}">{{ healer.corporation.ticker or healer.corporation.name }}</a>{% else %}{{ healer.logged_corporation }}{% endif %}</div>
+        <div class="attacker-sub">To: {% for target in healer.recipients %}{% if not loop.first %}, {% endif %}<a href="{{ target.character.url }}">{{ target.character.name }}</a> ({{ target.side }}){% endfor %}</div>
+      </div>
+      <div class="attacker-damage" title="Shield: {{ '{:,}'.format(healer.shield) }} HP · Armor: {{ '{:,}'.format(healer.armor) }} HP · Hull: {{ '{:,}'.format(healer.hull) }} HP">
+        <div class="pct">{{ '%.1f'|format(healer.percent) }}%</div><div class="raw">{{ '{:,}'.format(healer.total) }} HP</div>
+      </div>
+      <div class="damage-track healing-track"><span style="width: {{ healer.percent }}%;"></span></div>
+    </div>
+    {% endfor %}
+  </div>
+</section>
