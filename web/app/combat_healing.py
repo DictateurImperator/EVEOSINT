@@ -1,12 +1,10 @@
 """Display recorded remote healing without changing killmail data."""
 from collections import Counter
-from contextlib import closing
 from datetime import datetime, timedelta, timezone
 import json
 import logging
 from . import combat_timeline as store
-from .db import db
-from .entities import _entity_ref, _killmail_type_ref
+from .entities import _entity_ref
 
 logger = logging.getLogger(__name__)
 HEAL_KINDS = ('shield_in','shield_out','armor_in','armor_out','hull_in','hull_out')
@@ -69,27 +67,14 @@ def collect(killmail, events):
 def enrich(killmail, rows):
     if not rows: return rows
     by_id,by_name=participants(killmail)
-    names=[r['source']['name'] for r in rows if not r['source'].get('character_id') and r['source']['name'].casefold() not in by_name]
-    ships=sorted({name for r in rows for name in r['ship_names']})
-    characters={};types={}
-    if names or ships:
-        with closing(db()) as conn:
-            conn.set_session(readonly=True)
-            with conn,conn.cursor() as cur:
-                if names:
-                    cur.execute('SELECT character_id,name FROM entities.characters WHERE name=ANY(%s)',(names,))
-                    characters={name.casefold():(cid,name) for cid,name in cur.fetchall()}
-                if ships:
-                    cur.execute("SELECT sde_key::bigint,data->'name'->>'en' FROM public.sde_types WHERE data->'name'->>'en'=ANY(%s)",(ships,))
-                    types={name:tid for tid,name in cur.fetchall()}
     for row in rows:
         source=row['source'];name=source['name'];existing=by_id.get(source.get('character_id')) or by_name.get(name.casefold()) or {}
-        cid=source.get('character_id') or (characters.get(name.casefold()) or (None,))[0]
+        cid=source.get('character_id')
         row['character']=existing.get('character') or _entity_ref('character',cid,name) or dict(name=name)
         row['corporation']=existing.get('corporation')
         row['alliance']=existing.get('alliance')
         row['logged_corporation']=source.get('corporation','')
-        row['ships']=[_killmail_type_ref(types[name],name,'ship',64) if name in types else dict(name=name) for name in sorted(row['ship_names'])]
+        row['ships']=[dict(name=name) for name in sorted(row['ship_names'])]
         if not row['ships'] and existing.get('ship'): row['ships']=[existing['ship']]
     return rows
 
