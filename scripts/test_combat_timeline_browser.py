@@ -56,6 +56,8 @@ def main():
                 expect(page.get_by_role('link',name='Combat logs',exact=True)).to_have_class('nav-link active')
                 expect(page.locator('#ctRows img')).to_have_count(0)
                 page.locator('#ctRefresh').click()
+                expect(page.locator('#ctKillmails .killmail-row')).to_have_count(0)
+                page.locator('#ctRecalculate').click()
                 expect(page.locator('#ctKillmails .killmail-row-loss')).to_have_count(1)
                 expect(page.locator('#ctKillmails .killmail-row-kill')).to_have_count(1)
                 expect(page.locator('#ctKillmails a[href="/admin/debug/combat/kill/900"]').first).to_be_visible()

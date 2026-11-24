@@ -1,6 +1,6 @@
 """Admin-only timeline and authenticated, bounded desktop collector intake."""
 from contextlib import closing
-from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 from starlette.concurrency import run_in_threadpool
 from .auth import require_login, require_permission_or_redirect, get_user_permissions
@@ -38,7 +38,7 @@ def active_collector(token):
 
 
 @router.get('/admin/debug/combat/killmails')
-def killmails(request: Request, background_tasks: BackgroundTasks, observer: str='', page: int=1, date_from: str='', date_to: str='', month: str='', side: str='both', killmail_id: str=''):
+def killmails(request: Request, observer: str='', page: int=1, date_from: str='', date_to: str='', month: str='', side: str='both', killmail_id: str=''):
     user, redirect = admin(request)
     if redirect: return redirect
     try:
@@ -46,12 +46,20 @@ def killmails(request: Request, background_tasks: BackgroundTasks, observer: str
         kb=links.killboard_page(payload,side)
         payload['html']=templates.env.get_template('entity_killmails_fragment.html').render(killmail_page=kb,killmail_public=False)
     except ValueError: raise HTTPException(400, 'Invalid observer')
-    background_tasks.add_task(links.refresh)
     return JSONResponse(payload,headers={'Cache-Control':'no-store'})
 
 
+@router.post('/admin/debug/combat/recalculate')
+def recalculate(request: Request):
+    user, redirect = admin(request, 'admin.jobs.run')
+    if redirect: return redirect
+    if not links.refresh(force=True):
+        raise HTTPException(409, 'A recalculation is already running.')
+    return JSONResponse({'status':'finished'},headers={'Cache-Control':'no-store'})
+
+
 @router.post('/collector/combat-events')
-async def collect(request: Request, background_tasks: BackgroundTasks):
+async def collect(request: Request):
     auth=request.headers.get('authorization','')
     if not auth.startswith('Bearer '): raise HTTPException(401)
     owner=await run_in_threadpool(active_collector, auth[7:])
@@ -63,7 +71,6 @@ async def collect(request: Request, background_tasks: BackgroundTasks):
     try: ack=await run_in_threadpool(store.receive,owner,bytes(body),request.headers.get('idempotency-key',''))
     except store.EventConflict: raise HTTPException(409,'Conflicting event')
     except (ValueError,UnicodeError): raise HTTPException(422,'Invalid telemetry batch')
-    background_tasks.add_task(links.refresh)
     return JSONResponse(ack,headers={'Cache-Control':'no-store'})
 
 

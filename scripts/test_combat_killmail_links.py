@@ -56,19 +56,47 @@ class MatchingTests(StorageTests):
         self.assertNotIn('INSERT',conn.sql)
 
 
-class AutomaticWebsiteTests(RouteTests):
-    def test_site_intake_triggers_lookup_without_manual_analysis(self):
+class DeferredWebsiteTests(RouteTests):
+    def test_site_intake_commits_without_launching_a_lookup(self):
         raw=body([dict(event(kind='loss_signal'),character_id=123)])
-        with patch.object(routes,'active_collector',return_value=1),patch.object(links,'read_killboard',return_value=iter([(900,AT,'loss',670,'Capsule','29')])) as read:
+        with patch.object(routes,'active_collector',return_value=1),patch.object(links,'refresh',side_effect=AssertionError('Intake must not scan')) as scan:
             response=self.client.post('/collector/combat-events',content=raw,headers={'Authorization':'Bearer test','Idempotency-Key':hashlib.sha256(raw).hexdigest()})
+        self.assertEqual(response.status_code,200)
+        self.assertEqual(response.json()['inserted'],1)
+        self.assertEqual(store.timeline()['total'],1)
+        scan.assert_not_called()
+
+    def test_explicit_recalculation_matches_received_events(self):
+        self.ingest_for_recalculation()
+        with patch.object(routes,'require_login',return_value=ADMIN),patch.object(routes,'require_permission_or_redirect',return_value=None),patch.object(links,'read_killboard',return_value=iter([(900,AT,'loss',670,'Capsule','29')])) as read:
+            response=self.client.post('/admin/debug/combat/recalculate')
         self.assertEqual(response.status_code,200)
         read.assert_called_once()
         self.assertEqual(links.report()['killmails'][0]['killmail_id'],900)
+
+    def ingest_for_recalculation(self):
+        raw=body([dict(event(kind='loss_signal'),character_id=123)])
+        store.receive(1,raw,hashlib.sha256(raw).hexdigest())
+
+    def test_reading_killboard_does_not_launch_a_scan(self):
+        links.report()
+        with patch.object(routes,'require_login',return_value=ADMIN),patch.object(routes,'require_permission_or_redirect',return_value=None),patch.object(links,'refresh',side_effect=AssertionError('Viewing must not scan')) as scan,patch.object(links,'killboard_page',return_value={}):
+            response=self.client.get('/admin/debug/combat/killmails')
+        self.assertEqual(response.status_code,200)
+        scan.assert_not_called()
+
+    def test_explicit_scan_does_not_wait_for_an_existing_scan(self):
+        with links._lock:
+            with patch.object(routes,'require_login',return_value=ADMIN),patch.object(routes,'require_permission_or_redirect',return_value=None),patch.object(links,'read_killboard') as read:
+                response=self.client.post('/admin/debug/combat/recalculate')
+        self.assertEqual(response.status_code,409)
+        read.assert_not_called()
 
     def test_report_is_admin_only(self):
         from fastapi.responses import RedirectResponse
         with patch.object(routes,'require_login',return_value=None),patch.object(routes,'require_permission_or_redirect',return_value=RedirectResponse('/login',302)):
             self.assertEqual(self.client.get('/admin/debug/combat/killmails',follow_redirects=False).status_code,302)
+            self.assertEqual(self.client.post('/admin/debug/combat/recalculate',follow_redirects=False).status_code,302)
 
 
 class DebugPaginationTests(StorageTests):
@@ -108,6 +136,6 @@ class DebugPreviewTests(RouteTests):
         with patch.dict(sys.modules,{routes.__package__+'.routes_entities':source}),patch.object(routes,'require_login',return_value=ADMIN),patch.object(routes,'require_permission_or_redirect',return_value=None):
             response=self.client.get('/admin/debug/combat/kill/123')
         self.assertEqual(response.status_code,200)
-        self.assertIn('+ Healing',response.text)
+        self.assertIn('Top Healer',response.text)
         self.assertIn('100 HP',response.text)
         self.assertIn('TEST',response.text)

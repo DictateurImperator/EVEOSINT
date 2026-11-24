@@ -73,16 +73,17 @@ def choose_loss(at, candidates):
     return ('linked',best[0],best) if len(best)==1 else ('ambiguous',None,best)
 
 
-def refresh():
-    """Called by the site after intake and while the debug page is open."""
-    with _lock:
+def refresh(force=False):
+    """Explicit recalculation; concurrent requests do not queue another scan."""
+    if not _lock.acquire(blocking=False): return False
+    try:
         with store.connection() as conn:
             schema(conn)
             streams=[dict(r) for r in conn.execute('''SELECT s.*,x.events AS scanned_events,x.checked_at
                 FROM streams s LEFT JOIN combat_killmail_scans x USING(owner,observer)''')]
         for stream in streams:
             checked=stream['checked_at']
-            if checked:
+            if checked and not force:
                 age=(datetime.now(timezone.utc)-datetime.fromisoformat(checked.replace('Z','+00:00'))).total_seconds()
                 if age<30 or (stream['scanned_events']==stream['events'] and age<300): continue
             try:
@@ -94,6 +95,9 @@ def refresh():
                     conn.execute('INSERT OR REPLACE INTO combat_killmail_scans VALUES(?,?,?,?,?)',
                         (stream['owner'],stream['observer'],stream['events'],store.now(),'error'))
                     conn.commit()
+        return True
+    finally:
+        _lock.release()
 
 
 def refresh_stream(stream):

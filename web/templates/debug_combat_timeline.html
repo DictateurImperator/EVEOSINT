@@ -24,7 +24,11 @@
   <button id="ctOlder" class="btn btn-outline-secondary btn-sm" type="button" hidden>Older observations</button>
 </section>
 <section class="content-card p-3 p-md-4 mb-3">
-  <h2 class="h5">Kills and losses · Killmail links</h2>
+  <div class="d-flex flex-wrap gap-2 align-items-center mb-2">
+    <h2 class="h5 mb-0">Kills and losses · Killmail links</h2>
+    <button id="ctRecalculate" class="btn btn-outline-primary btn-sm" type="button">Recalculate killmail links</button>
+  </div>
+  <p class="small muted-line">Receiving observations only stores them. Run the recalculation when you are ready to match them to killmails.</p>
   <p class="small muted-line">The site reads each observer's killboard for the logged period. Inflicted kills come from that killboard. Loss notifications are compared with that character's losses by UTC time (nearest within 30 seconds). Repeated notifications may link to the same loss. Unknown or ambiguous losses stay separate. All links are stored in the separate debug database; existing killmails are never modified.</p>
   <div id="ctKmState" class="small muted-line" role="status"></div>
   <div id="ctKillmails"></div>
@@ -49,7 +53,7 @@
    $('ctKillmails').innerHTML=data.html;
    for(const link of $('ctKillmails').querySelectorAll('[data-killmail-page]')){const p=killmailParams();p.delete('page');p.delete('side');p.set('tab','combat');p.set('kb_page',link.dataset.killmailPage);p.set('kb_side',kmSide);link.href='/admin/debug?'+p.toString();link.removeAttribute('data-killmail-page');}
    $('ctUnknown').replaceChildren();for(const loss of data.unmatched_losses){const line=document.createElement('div');line.textContent=loss.occurred_at+' · '+loss.observer+' · '+(loss.status==='ambiguous'?'Ambiguous loss':'Unknown killmail');$('ctUnknown').appendChild(line);}
-   $('ctKmState').textContent=data.scans.some(s=>s.status==='error')?'Lookup failed; the site will retry.':data.scans.length?'Last site lookup: '+data.scans.map(s=>s.observer+' '+s.checked_at).join(' · '):'Waiting for the site to match received events…';
+   $('ctKmState').textContent=data.scans.some(s=>s.status==='error')?'Lookup failed. Use Recalculate killmail links to retry.':data.scans.length?'Last site lookup: '+data.scans.map(s=>s.observer+' '+s.checked_at).join(' · '):'No recalculation yet.';
   }catch(e){if(e.name!=='AbortError')$('ctKmState').textContent=e.message;}
  }
  function killmailParams(){const p=params();p.delete('kind');p.set('page',kmPage);p.set('side',kmSide);return p;}
@@ -76,6 +80,15 @@
  for(const id of ['ctObserver','ctFrom','ctTo'])$(id).onchange=()=>{kmPage=1;load();loadKillmails();};
  $('ctKind').onchange=()=>load();
  $('ctRefresh').onclick=()=>{load();loadKillmails();};$('ctOlder').onclick=()=>{$('ctLive').checked=false;load(true);};
+ $('ctRecalculate').onclick=async()=>{
+  const button=$('ctRecalculate');button.disabled=true;button.textContent='Recalculating…';
+  try{
+   const r=await fetch('/admin/debug/combat/recalculate',{method:'POST'});
+   if(!r.ok){const data=await r.json();throw new Error(data.detail||('Recalculation failed (HTTP '+r.status+').'));}
+   await loadKillmails();await load();
+  }catch(e){$('ctKmState').textContent=e.message;}
+  finally{button.disabled=false;button.textContent='Recalculate killmail links';}
+ };
  setInterval(()=>{if($('ctLive').checked&&!document.hidden&&!older){load();loadKillmails();}},5000);
  window.addEventListener('beforeunload',()=>{controller?.abort();kmController?.abort();});
 
