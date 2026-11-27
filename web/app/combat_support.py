@@ -34,7 +34,7 @@ def start():
         if _status.get('status') == 'running':
             return False
         _status.clear()
-        _status.update(status='running', recipients=0, killmails=0, scores=0)
+        _status.update(status='running', recipients=0, killmails=0, scores=0,marked=0,purged=0)
     threading.Thread(target=_background, daemon=True, name='combat-support').start()
     return True
 
@@ -176,6 +176,74 @@ def save_scores(scores):
                 (km_id,side,resource,source,value['amount'],Json(value['source'])))
 
 
+
+def processing_time(cur):
+    cur.execute('SELECT clock_timestamp()')
+    return cur.fetchone()[0]
+
+
+def prepare_run(conn, first, last):
+    """Freeze the eligible IDs, not intake: concurrent uploads stay unmarked.
+
+    A successful first pass marks a row. Marked rows are due on every run
+    during their first three days, then once more at age seven days. Only
+    rows already marked when this run began can be removed after success.
+    """
+    with conn.cursor() as cur:
+        started=processing_time(cur)
+        cur.execute('''CREATE TEMP TABLE combat_completion_candidates ON COMMIT PRESERVE ROWS AS
+            SELECT owner,event_id,occurred_at,processed_at IS NOT NULL AS previously_processed
+            FROM devencour.raw_events
+            WHERE occurred_at>=%s AND occurred_at<=%s AND (
+                processed_at IS NULL OR occurred_at>%s OR occurred_at<=%s)''',
+            (first,last-timedelta(minutes=30),started-timedelta(days=3),started-timedelta(days=7)))
+        cur.execute('ALTER TABLE combat_completion_candidates ADD PRIMARY KEY(owner,event_id)')
+        cur.execute('''SELECT DISTINCT day FROM (
+            SELECT date_trunc('day',occurred_at AT TIME ZONE 'UTC') AT TIME ZONE 'UTC' AS day
+                FROM combat_completion_candidates
+            UNION SELECT date_trunc('day',(occurred_at+interval '30 minutes') AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'
+                FROM combat_completion_candidates
+            UNION SELECT date_trunc('day',occurred_at AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'
+                FROM devencour.death_summaries WHERE occurred_at BETWEEN %s AND %s
+            UNION SELECT date_trunc('day',(occurred_at+interval '30 seconds') AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'
+                FROM devencour.death_summaries WHERE occurred_at BETWEEN %s AND %s
+            ) due ORDER BY day DESC''',(first,last,first,last))
+        days=[row[0] for row in cur.fetchall() if row[0]<=last and row[0]+timedelta(days=1)>first]
+    conn.commit()
+    return started,days
+
+
+def finish_run(conn, started):
+    """Called only after ALL scores were saved. No destructive work on failure.
+
+    Commit small batches so maintenance can pause cleanup between batches.
+    Previously unmarked historical uploads get a first mark, never an
+    immediate deletion: a later run must actually retry them first.
+    """
+    marked=purged=0
+    batch='''SELECT owner,event_id,previously_processed FROM combat_completion_candidates
+        ORDER BY owner,event_id LIMIT 5000'''
+    while True:
+        store.check_writing()
+        with conn.cursor() as cur:
+            cur.execute('UPDATE devencour.raw_events r SET processed_at=clock_timestamp() FROM ('+batch+
+                ') c WHERE r.owner=c.owner AND r.event_id=c.event_id')
+            marked_batch=cur.rowcount
+            store.check_writing()
+            cur.execute('DELETE FROM devencour.raw_events r USING ('+batch+
+                ') c WHERE r.owner=c.owner AND r.event_id=c.event_id AND c.previously_processed '
+                'AND r.processed_at IS NOT NULL AND r.occurred_at<=%s',(started-timedelta(days=7),))
+            purged_batch=cur.rowcount
+            cur.execute('DELETE FROM combat_completion_candidates r USING ('+batch+
+                ') c WHERE r.owner=c.owner AND r.event_id=c.event_id')
+            consumed=cur.rowcount
+        conn.commit()
+        marked+=marked_batch;purged+=purged_batch
+        progress(marked=marked,purged=purged)
+        if not consumed:
+            return dict(marked=marked,purged=purged)
+
+
 def recalculate(date_from=None, date_to=None):
     store.check_writing()
     # A DB lock also excludes a second CLI/process, not only another UI click.
@@ -188,12 +256,12 @@ def recalculate(date_from=None, date_to=None):
                 cur.execute('SELECT min(first_at),max(last_at) FROM devencour.collector_streams')
                 first,last = cur.fetchone()
             if first is None:
-                return dict(recipients=0,killmails=0,scores=0)
+                return dict(recipients=0,killmails=0,scores=0,marked=0,purged=0)
             first = max(first, date_from) if date_from else first
             last = min(last+timedelta(minutes=30), date_to) if date_to else last+timedelta(minutes=30)
-            day = last.replace(hour=0,minute=0,second=0,microsecond=0)
+            started,days=prepare_run(lock_conn,first,last)
             counts = dict(recipients=0,killmails=0,scores=0)
-            while day <= last and day+timedelta(days=1) > first:
+            for day in days:
                 end = min(day+timedelta(days=1),last)
                 begin = max(day,first)
                 scores = {}
@@ -220,7 +288,8 @@ def recalculate(date_from=None, date_to=None):
                 save_scores(scores)
                 counts['scores'] += len(scores)
                 progress(day=day.date().isoformat(), **counts)
-                day -= timedelta(days=1)
+            counts.update(finish_run(lock_conn,started))
             return counts
         finally:
+            lock_conn.rollback()
             lock.execute('SELECT pg_advisory_unlock(17320617,1)')

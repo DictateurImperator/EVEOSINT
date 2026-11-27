@@ -100,6 +100,100 @@ class DatabaseTests(unittest.TestCase):
         self.assertEqual(self.rows('SELECT supporter_key,amount FROM devencour.killmail_support ORDER BY supporter_key'),[('logi',100),('second logi',200)])
         self.assertEqual(self.rows('SELECT count(*) FROM devencour.collector_streams WHERE character_id=100'),[(0,)])
 
+    def run_at(self,at,board=None):
+        from contextlib import ExitStack
+        with ExitStack() as stack:
+            stack.enter_context(patch.object(support,'db',lambda:psycopg2.connect(base.DSN)))
+            stack.enter_context(patch.object(support,'processing_time',return_value=at))
+            lookup=stack.enter_context(patch.object(support,'read_killboard',side_effect=board or (lambda *_:iter([]))))
+            result=support.recalculate()
+            return result,lookup.call_count
+
+    def test_each_run_before_three_days_then_final_retry_at_seven_days(self):
+        self.ingest([e(70,at=T)])
+        first,calls=self.run_at(T+timedelta(hours=2))
+        self.assertGreater(calls,0)
+        self.assertEqual((first['marked'],first['purged']),(1,0))
+        mark=self.rows('SELECT processed_at FROM devencour.raw_events')[0][0]
+        second,calls=self.run_at(T+timedelta(days=2))
+        self.assertGreater(calls,0)
+        self.assertEqual((second['marked'],second['purged']),(1,0))
+        mark2=self.rows('SELECT processed_at FROM devencour.raw_events')[0][0]
+        self.assertGreater(mark2,mark)
+        for days in (3,6):
+            result,calls=self.run_at(T+timedelta(days=days))
+            self.assertEqual(calls,0)
+            self.assertEqual((result['marked'],result['purged']),(0,0))
+            self.assertEqual(self.rows('SELECT processed_at FROM devencour.raw_events')[0][0],mark2)
+        result,calls=self.run_at(T+timedelta(days=7))
+        self.assertGreater(calls,0)
+        self.assertEqual((result['marked'],result['purged']),(1,1))
+        self.assertEqual(self.rows('SELECT count(*) FROM devencour.raw_events'),[(0,)])
+
+    def test_old_first_import_requires_second_success_and_failure_preserves_marker(self):
+        self.ingest([e(71,at=T)])
+        result,_=self.run_at(T+timedelta(days=20))
+        self.assertEqual((result['marked'],result['purged']),(1,0))
+        mark=self.rows('SELECT processed_at FROM devencour.raw_events')[0][0]
+        def fail(*_): raise RuntimeError('Synthetic matching failure')
+        with self.assertRaisesRegex(RuntimeError,'Synthetic'):
+            self.run_at(T+timedelta(days=20,seconds=1),fail)
+        self.assertEqual(self.rows('SELECT processed_at FROM devencour.raw_events'),[(mark,)])
+        result,_=self.run_at(T+timedelta(days=20,seconds=2))
+        self.assertEqual((result['marked'],result['purged']),(1,1))
+
+    def test_new_upload_during_processing_is_not_marked_or_purged(self):
+        self.ingest([e(72,at=T)])
+        self.run_at(T+timedelta(days=1))
+        first_save=support.save_scores;inserted=False
+        def upload(scores):
+            nonlocal inserted
+            if not inserted:
+                self.ingest([e(73,at=T)])
+                inserted=True
+            first_save(scores)
+        with patch.object(support,'save_scores',side_effect=upload):
+            result,_=self.run_at(T+timedelta(days=7))
+        self.assertEqual(result['purged'],1)
+        self.assertEqual(self.rows('SELECT event_id,processed_at FROM devencour.raw_events'),[(e(73)['event_id'],None)])
+
+    def test_maintenance_between_mark_and_delete_rolls_back_batch(self):
+        self.ingest([e(75,at=T)])
+        self.run_at(T+timedelta(days=1))
+        mark=self.rows('SELECT processed_at FROM devencour.raw_events')[0][0]
+        finish=support.finish_run
+        def interrupt(conn,started):
+            calls=0
+            def gate():
+                nonlocal calls
+                calls+=1
+                if calls==2: raise base.store.Maintenance()
+            with patch.object(base.store,'check_writing',side_effect=gate):
+                return finish(conn,started)
+        with patch.object(support,'finish_run',side_effect=interrupt):
+            with self.assertRaises(base.store.Maintenance):
+                self.run_at(T+timedelta(days=7))
+        self.assertEqual(self.rows('SELECT processed_at FROM devencour.raw_events'),[(mark,)])
+
+    def test_partial_killmail_period_does_not_mark_an_incomplete_thirty_minute_window(self):
+        self.ingest([e(76,at=T)])
+        with patch.object(support,'db',lambda:psycopg2.connect(base.DSN)),patch.object(support,'processing_time',return_value=T+timedelta(days=8)):
+            result=support.recalculate(T,T+timedelta(minutes=15))
+        self.assertEqual((result['marked'],result['purged']),(0,0))
+        self.assertEqual(self.rows('SELECT processed_at FROM devencour.raw_events'),[(None,)])
+
+    def test_purge_keeps_summaries_and_compact_scores_and_receipt_time_is_not_age(self):
+        self.ingest([e(74,at=T)])
+        base.ingest(base.summary(),True)
+        support.save_scores({(44,'defense','logi','healing'):dict(amount=100,source=dict(name='Logi'))})
+        # received_at is now, but event time is old: it is due immediately for
+        # its first pass, then removable only after a successful second pass.
+        self.run_at(T+timedelta(days=8))
+        result,_=self.run_at(T+timedelta(days=8,seconds=1))
+        self.assertEqual(result['purged'],1)
+        self.assertEqual(self.rows('SELECT count(*) FROM devencour.death_summaries'),[(1,)])
+        self.assertEqual(self.rows('SELECT amount FROM devencour.killmail_support'),[(100,)])
+
     def test_capacitor_summary_upgrade_does_not_change_original_totals_or_receipt(self):
         payload=base.summary();base.ingest(payload,True)
         receipt=self.rows('SELECT received_at FROM devencour.death_summaries')

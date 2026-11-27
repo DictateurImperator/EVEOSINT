@@ -28,7 +28,7 @@
     <h2 class="h5 mb-0">Kills and losses · Killmail links</h2>
     <button id="ctRecalculate" class="btn btn-outline-primary btn-sm" type="button">Recalculate support &amp; killmail links</button>
   </div>
-  <p class="small muted-line">Receiving observations only stores them. Run the recalculation when you are ready to match them to killmails.</p>
+  <p class="small muted-line">Receiving observations only stores them. Run the recalculation when you are ready to match them to killmails. Successfully processed raw lines are marked, retried on each run during their first 3 days, then retried once more at 7 days before deletion. Age is measured from the event time. Summaries and support scores are kept.</p>
   <p class="small muted-line">The site reads each observer's killboard for the logged period. Inflicted kills come from that killboard. Loss notifications are compared with that character's losses by UTC time (nearest within 30 seconds). Repeated notifications may link to the same loss. Unknown or ambiguous losses stay separate. All links are stored in the separate debug database; existing killmails are never modified.</p>
   <div id="ctProcessState" class="small muted-line mb-2" role="status"></div>
   <div id="ctKmState" class="small muted-line" role="status"></div>
@@ -98,7 +98,7 @@
    const state=await r.json();const running=state.status==='running';
    $('ctRecalculate').disabled=running;
    $('ctRecalculate').textContent=running?'Recalculating…':'Recalculate support & killmail links';
-   $('ctProcessState').textContent=state.status==='idle'?'':state.message||[state.status,state.day,'Killmail participations: '+(state.killmails||0),'Support scores: '+(state.scores||0)].filter(Boolean).join(' · ');
+   $('ctProcessState').textContent=state.status==='idle'?'':state.message||[state.status,state.day,'Killmail participations: '+(state.killmails||0),'Support scores: '+(state.scores||0),'Lines marked: '+(state.marked||0),'Lines purged: '+(state.purged||0)].filter(Boolean).join(' · ');
    if(state.status==='finished'&&previousProcess==='running'){await loadKillmails();await load();}
    previousProcess=state.status;
    if(running)setTimeout(()=>processState().catch(()=>{}),2000);

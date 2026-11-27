@@ -24,6 +24,7 @@ CREATE TABLE IF NOT EXISTS devencour.raw_events (
  occurred_at timestamptz NOT NULL, kind text NOT NULL, payload jsonb NOT NULL,
  received_at timestamptz NOT NULL DEFAULT clock_timestamp(), PRIMARY KEY(owner,event_id)
 );
+ALTER TABLE devencour.raw_events ADD COLUMN IF NOT EXISTS processed_at timestamptz;
 CREATE INDEX IF NOT EXISTS raw_events_time ON devencour.raw_events(occurred_at DESC,event_id DESC,owner DESC);
 CREATE INDEX IF NOT EXISTS raw_events_observer_time ON devencour.raw_events(observer,occurred_at DESC,event_id DESC,owner DESC);
 CREATE INDEX IF NOT EXISTS raw_events_kind_time ON devencour.raw_events(kind,occurred_at DESC);
