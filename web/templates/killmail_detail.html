@@ -339,8 +339,18 @@
   }
 
   .killmail-shell.has-healers { max-width: 1800px; }
+  .killmail-shell.has-assists { max-width: 2200px; }
+  .has-assists .killmail-main-grid { grid-template-columns: minmax(620px,1.6fr) minmax(320px,.8fr) minmax(320px,.8fr); }
   .has-healers .killmail-main-grid { grid-template-columns: minmax(360px, .85fr) minmax(680px, 1.55fr) minmax(360px, .85fr); }
+  .has-healers.has-assists .killmail-main-grid { grid-template-columns: minmax(320px,.8fr) minmax(620px,1.6fr) minmax(320px,.8fr) minmax(320px,.8fr); }
+  @media (max-width:1850px) { .has-assists .killmail-main-grid, .has-healers.has-assists .killmail-main-grid { grid-template-columns:1fr; } }
   .healers-window { align-self: start; }
+  .healers-window .eve-window-title,.has-assists .attackers-window .eve-window-title { flex-wrap: wrap; gap: .4rem; }
+  .healers-window .eve-window-title > span:first-child { white-space: nowrap; }
+  .victim-activity { margin: 0; }
+  .victim-activity-grid { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 16px; padding: 12px; }
+  @media (max-width: 600px) { .victim-activity-grid { grid-template-columns: 1fr; } }
+  .support-stack { display: grid; gap: 12px; align-content: start; min-width: 0; }
   @media (max-width: 1600px) { .has-healers .killmail-main-grid { grid-template-columns: 1fr; } }
 
   .attackers-window {
@@ -715,7 +725,7 @@
     {% endif %}
   {% endfor %}
 
-  <div class="killmail-shell{% if healers %} has-healers{% endif %}">
+  <div class="killmail-shell{% if healers or batteries %} has-healers{% endif %}{% if assists or battery_assists %} has-assists{% endif %}">
     <div class="killmail-summary">
       <div class="summary-main">
         <div>
@@ -760,7 +770,13 @@
     </div>
 
     <div class="killmail-main-grid">
-      {% if healers %}{% include "killmail_healers.html" %}{% endif %}
+      {% if healers or batteries %}
+      <div class="support-stack">
+        {% if healers %}{% include "killmail_healers.html" %}{% endif %}
+        {% if batteries %}{% with healers=batteries,support_id='batteries',support_title='Battery',support_unit='GJ',support_top='Top Battery' %}{% include "killmail_healers.html" %}{% endwith %}{% endif %}
+      </div>
+      {% endif %}
+      <div class="support-stack victim-column">
       <section class="eve-window">
         <div class="eve-window-title">
           <span>{% if killmail.is_structure %}Structure & fitting{% else %}Victim & fitting{% endif %}</span>
@@ -938,7 +954,22 @@
         </div>
       </section>
 
+    {% if killmail.recorded_activity is defined %}
+    <section class="eve-window victim-activity" aria-label="Victim recorded activity">
+      <div class="eve-window-title">Victim activity · 30 minutes before destruction</div>
+      <div class="victim-activity-grid">
+        <div><span class="muted">Damage dealt</span><div>{{ "{:,}".format(killmail.recorded_activity.damage_hp) }} HP</div></div>
+        <div><span class="muted">Healing done</span><div>{{ "{:,}".format(killmail.recorded_activity.healing_hp) }} HP</div></div>
+        <div><span class="muted">Capacitor supplied</span><div>{{ "{:,}".format(killmail.recorded_activity.capacitor_gj) }} GJ</div></div>
+      </div>
+    </section>
+    {% endif %}
+      </div>
       {% include 'killmail_attackers.html' %}
+      {% if assists or battery_assists %}<div class="support-stack assist-stack">{% endif %}
+      {% if assists %}{% with healers=assists,support_id='assists',support_title='Assists',support_unit='HP',support_top='Top Assist' %}{% include 'killmail_healers.html' %}{% endwith %}{% endif %}
+      {% if battery_assists %}{% with healers=battery_assists,support_id='battery-assists',support_title='Battery Assist',support_unit='GJ',support_top='Top Battery Assist' %}{% include 'killmail_healers.html' %}{% endwith %}{% endif %}
+      {% if assists or battery_assists %}</div>{% endif %}
     </div>
 
     <section class="eve-window inventory-board">
@@ -1032,6 +1063,8 @@
 (() => {
   document.querySelectorAll('[data-participants-panel]').forEach((panel) => {
   const healing = panel.dataset.healing === '1';
+  const topLabel = panel.dataset.topLabel || (healing ? 'Top Healer' : 'Top Damage');
+  const valueUnit = panel.dataset.valueUnit || '';
   const list = panel.querySelector('.attackers-list');
   const summary = panel.querySelector('.muted');
   const buttons = Array.from(panel.querySelectorAll('[data-attacker-mode]'));
@@ -1140,7 +1173,7 @@
         addTag(tags, "Final Blow", "final-blow-label");
       }
       if (isTopDamage) {
-        addTag(tags, healing ? "Top Healer" : "Top Damage", "top-damage-label");
+        addTag(tags, topLabel, "top-damage-label");
       }
       main.appendChild(tags);
     }
@@ -1170,7 +1203,7 @@
 
     const raw = document.createElement("div");
     raw.className = "raw";
-    raw.textContent = numberFormatter.format(group.damage) + (healing ? " HP" : "");
+    raw.textContent = numberFormatter.format(group.damage) + (valueUnit ? " " + valueUnit : "");
     damage.appendChild(raw);
 
     row.appendChild(damage);

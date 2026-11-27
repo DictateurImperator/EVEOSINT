@@ -2619,8 +2619,8 @@ def kill_profile(request: Request, killmail_id: int):
     except EntityError as exc:
         return _entity_route_error_response(request, exc)
 
-    from .combat_healing import get_healers
-    healers = get_healers(killmail)
+    from .combat_healing import get_support
+    support = get_support(killmail)
 
     title = "EVEOSINT - Killmail"
     if killmail and killmail.get("victim_ship"):
@@ -2637,7 +2637,7 @@ def kill_profile(request: Request, killmail_id: int):
         "error": error,
         "killmail_id": killmail_id,
         "killmail": killmail,
-        "healers": healers,
+        **support,
         "location_previews": get_killmail_location_previews(killmail.get("location")) if killmail else {},
     })
     return templates.TemplateResponse(

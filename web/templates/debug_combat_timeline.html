@@ -26,21 +26,30 @@
 <section class="content-card p-3 p-md-4 mb-3">
   <div class="d-flex flex-wrap gap-2 align-items-center mb-2">
     <h2 class="h5 mb-0">Kills and losses · Killmail links</h2>
-    <button id="ctRecalculate" class="btn btn-outline-primary btn-sm" type="button">Recalculate killmail links</button>
+    <button id="ctRecalculate" class="btn btn-outline-primary btn-sm" type="button">Recalculate support &amp; killmail links</button>
   </div>
   <p class="small muted-line">Receiving observations only stores them. Run the recalculation when you are ready to match them to killmails.</p>
   <p class="small muted-line">The site reads each observer's killboard for the logged period. Inflicted kills come from that killboard. Loss notifications are compared with that character's losses by UTC time (nearest within 30 seconds). Repeated notifications may link to the same loss. Unknown or ambiguous losses stay separate. All links are stored in the separate debug database; existing killmails are never modified.</p>
+  <div id="ctProcessState" class="small muted-line mb-2" role="status"></div>
   <div id="ctKmState" class="small muted-line" role="status"></div>
   <div id="ctKillmails"></div>
   <div id="ctUnknown" class="small muted-line"></div>
 </section>
 
+<section class="content-card p-3 p-md-4 mb-3">
+  <h2 class="h5">Request a battle period</h2>
+  <p class="small muted-line">Full events are sent for the last 7 days. Older history keeps healing and capacitor transfers. Use the character and UTC dates above to request full events for an older battle. Files must still exist on the device. This does not start any calculation.</p>
+  <button id="ctRequestReplay" class="btn btn-outline-primary btn-sm" type="button">Request full events for selected period</button>
+  <div id="ctReplayState" class="small muted-line mt-2" role="status"></div>
+  <div id="ctReplays" class="small mt-2"></div>
+</section>
 <script>
 (() => {
  const $=id=>document.getElementById(id);
  const types={damage_in:'Damage received',damage_out:'Damage dealt',miss_in:'Incoming miss',miss_out:'Outgoing miss',shield_in:'Shield received',shield_out:'Shield sent',armor_in:'Armor received',armor_out:'Armor sent',hull_in:'Hull received',hull_out:'Hull sent',capacitor_in:'Capacitor received',capacitor_out:'Capacitor sent',capacitor_neutralized:'Energy neutralized',capacitor_drained:'Energy drained',warp_scramble:'Warp scramble attempt',warp_disruption:'Warp disruption attempt',jammed:'Locks broken',loss_signal:'Loss signal · unconfirmed',jump:'System jump',undock:'Undocking',warp:'Warp',module:'Module notification',combat_other:'Other combat',other:'Other logged event'};
  for(const [key,label] of Object.entries(types))$('ctKind').add(new Option(label,key));
  const initial=new URLSearchParams(location.search);
+ let streamIds={};
  let cursor='',controller=null,older=false,kmController=null,kmPage=Math.max(1,Number(initial.get('kb_page'))||1),kmSide=initial.get('kb_side')||'both';
  if(initial.get('observer')){$('ctObserver').add(new Option(initial.get('observer'),initial.get('observer')));$('ctObserver').value=initial.get('observer');}
  for(const [id,key] of [['ctFrom','date_from'],['ctTo','date_to']])if(initial.get(key))$(id).value=initial.get(key).replace('Z','');
@@ -72,6 +81,7 @@
    if(!append){$('ctRows').replaceChildren();older=false;}else older=true;
    cursor=data.next;$('ctOlder').hidden=!cursor;
    const selected=$('ctObserver').value;$('ctObserver').replaceChildren(new Option('All characters',''));
+   streamIds=Object.fromEntries(data.streams.map(s=>[s.observer,s.character_id]));
    $('ctStreams').replaceChildren();for(const s of data.streams){$('ctObserver').add(new Option(s.observer+' · '+s.events.toLocaleString('en-US'),s.observer));const badge=document.createElement('span');badge.className='badge text-bg-secondary';badge.textContent=s.observer+' · '+s.events.toLocaleString('en-US');badge.title='Latest event: '+s.last_at+' / received: '+s.received_at;$('ctStreams').appendChild(badge);}$('ctObserver').value=selected;
    for(const e of data.events){const tr=document.createElement('tr');tr.title=e.raw||e.message||'';cell(tr,e.occurred_at.replace('T',' ').replace('Z',''));cell(tr,e.observer);cell(tr,types[e.kind]||e.kind);cell(tr,actor(e.source)+(e.source||e.target?' → ':'')+actor(e.target)||(e.from_system||e.to_system?(e.from_system||'')+' → '+(e.to_system||''):(e.message||e.raw)));cell(tr,e.amount==null?'—':e.amount.toLocaleString('en-US')+(e.kind.startsWith('capacitor')?' GJ':' HP')+(e.deflected!=null?' · '+e.deflected.toLocaleString('en-US')+' deflected':''));cell(tr,e.weapon||'—');const linkCell=cell(tr,e.killmail_link?.status||'—');if(e.killmail_link?.url){linkCell.textContent='';const a=document.createElement('a');a.href=e.killmail_link.url;a.textContent='#'+e.killmail_link.killmail_id;linkCell.appendChild(a);}$('ctRows').appendChild(tr);}
    $('ctTotal').textContent=data.total.toLocaleString('en-US')+' observations received';$('ctState').textContent=data.events.length?'Updated '+new Date().toLocaleTimeString():'No matching observations yet.';
@@ -80,15 +90,49 @@
  for(const id of ['ctObserver','ctFrom','ctTo'])$(id).onchange=()=>{kmPage=1;load();loadKillmails();};
  $('ctKind').onchange=()=>load();
  $('ctRefresh').onclick=()=>{load();loadKillmails();};$('ctOlder').onclick=()=>{$('ctLive').checked=false;load(true);};
+ let checkingProcess=false,previousProcess='';
+ async function processState(){
+  if(checkingProcess)return;checkingProcess=true;
+  try{
+   const r=await fetch('/admin/debug/combat/recalculate',{cache:'no-store'});if(!r.ok)return;
+   const state=await r.json();const running=state.status==='running';
+   $('ctRecalculate').disabled=running;
+   $('ctRecalculate').textContent=running?'Recalculating…':'Recalculate support & killmail links';
+   $('ctProcessState').textContent=state.status==='idle'?'':state.message||[state.status,state.day,'Killmail participations: '+(state.killmails||0),'Support scores: '+(state.scores||0)].filter(Boolean).join(' · ');
+   if(state.status==='finished'&&previousProcess==='running'){await loadKillmails();await load();}
+   previousProcess=state.status;
+   if(running)setTimeout(()=>processState().catch(()=>{}),2000);
+  }finally{checkingProcess=false;}
+ }
  $('ctRecalculate').onclick=async()=>{
-  const button=$('ctRecalculate');button.disabled=true;button.textContent='Recalculating…';
+  const button=$('ctRecalculate');button.disabled=true;
   try{
    const r=await fetch('/admin/debug/combat/recalculate',{method:'POST'});
    if(!r.ok){const data=await r.json();throw new Error(data.detail||('Recalculation failed (HTTP '+r.status+').'));}
-   await loadKillmails();await load();
-  }catch(e){$('ctKmState').textContent=e.message;}
-  finally{button.disabled=false;button.textContent='Recalculate killmail links';}
+   previousProcess="running";await processState();
+  }catch(e){$('ctProcessState').textContent=e.message;button.disabled=false;}
  };
+ async function loadReplays(){
+  const r=await fetch('/admin/debug/combat/replays',{cache:'no-store'});if(!r.ok)return;
+  const data=await r.json();$('ctReplays').replaceChildren();
+  for(const item of data.requests){
+   const line=document.createElement('div');line.textContent='#'+item.id+' · '+item.date_from+' → '+item.date_to+' · '+(item.character_id||'All selected characters')+' ';
+   const cancel=document.createElement('button');cancel.type='button';cancel.className='btn btn-outline-secondary btn-sm';cancel.textContent='Cancel';
+   cancel.onclick=async()=>{const result=await fetch('/admin/debug/combat/replays/'+item.id,{method:'DELETE'});if(result.ok)loadReplays();else $('ctReplayState').textContent='Cancellation failed (HTTP '+result.status+').';};
+   line.appendChild(cancel);$('ctReplays').appendChild(line);
+  }
+ }
+ $('ctRequestReplay').onclick=async()=>{
+  const p=params();const date_from=p.get('date_from'),date_to=p.get('date_to');
+  if(!date_from||!date_to){$('ctReplayState').textContent='Choose both UTC dates above.';return;}
+  const payload={date_from,date_to};const name=$('ctObserver').value;
+  if(name){if(!streamIds[name]){$('ctReplayState').textContent='Character ID unavailable.';return;}payload.character_id=streamIds[name];}
+  $('ctRequestReplay').disabled=true;
+  try{const r=await fetch('/admin/debug/combat/replays',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});if(!r.ok)throw new Error('Request failed (HTTP '+r.status+').');$('ctReplayState').textContent='Period requested. Matching files will be sent when collection is running.';await loadReplays();}
+  catch(e){$('ctReplayState').textContent=e.message;}
+  finally{$('ctRequestReplay').disabled=false;}
+ };
+ processState().catch(()=>{});loadReplays().catch(()=>{});
  setInterval(()=>{if($('ctLive').checked&&!document.hidden&&!older){load();loadKillmails();}},5000);
  window.addEventListener('beforeunload',()=>{controller?.abort();kmController?.abort();});
 

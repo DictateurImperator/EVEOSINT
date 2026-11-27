@@ -15,6 +15,7 @@ import tempfile
 import os
 import psycopg2
 from scripts.test_combat_dev import DSN,summary
+support=f.load("combat_support")
 
 
 class ReadConnection:
@@ -37,6 +38,7 @@ def main():
          patch.object(store,'db',lambda:psycopg2.connect(DSN)), \
          patch.object(routes.links,'db',return_value=ReadConnection()), \
          patch.object(f.entities,'_hydrate_global_killmail_entries',side_effect=hydrate), \
+         patch.object(support,'recalculate',return_value=dict(recipients=0,killmails=2,scores=0)), \
          patch.object(routes,'require_login',return_value=ADMIN), \
          patch.object(routes,'require_permission_or_redirect',return_value=None), \
          patch.object(routes.links,'read_killboard',side_effect=lambda *_:iter([(900,datetime(2026,10,20,19,22,13,tzinfo=timezone.utc),'loss',670,'Capsule','29'),(901,datetime(2026,10,20,19,22,14,tzinfo=timezone.utc),'kill',587,'Rifter','25')])):
@@ -86,6 +88,13 @@ def main():
                 expect(page.locator('#ctRows tr')).to_have_count(0)
                 page.locator('#ctFrom').fill('');page.locator('#ctFrom').dispatch_event('change')
                 expect(page.locator('#ctRows tr')).to_have_count(4)
+                page.locator('#ctLive').uncheck()
+                page.locator('#ctFrom').fill('2026-05-03T00:00')
+                page.locator('#ctTo').fill('2026-05-04T00:00')
+                page.locator('#ctRequestReplay').click()
+                expect(page.locator('#ctReplays')).to_contain_text('2026-05-03T00:00:00Z')
+                page.locator('#ctReplays').get_by_role('button',name='Cancel').click()
+                expect(page.locator('#ctReplays')).to_have_text('')
                 page.screenshot(path='/tmp/combat-timeline-debug-preview.png',full_page=True)
                 assert not errors,errors
                 browser.close()

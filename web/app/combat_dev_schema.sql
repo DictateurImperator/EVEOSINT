@@ -27,6 +27,22 @@ CREATE TABLE IF NOT EXISTS devencour.raw_events (
 CREATE INDEX IF NOT EXISTS raw_events_time ON devencour.raw_events(occurred_at DESC,event_id DESC,owner DESC);
 CREATE INDEX IF NOT EXISTS raw_events_observer_time ON devencour.raw_events(observer,occurred_at DESC,event_id DESC,owner DESC);
 CREATE INDEX IF NOT EXISTS raw_events_kind_time ON devencour.raw_events(kind,occurred_at DESC);
+CREATE INDEX IF NOT EXISTS raw_events_character_time ON devencour.raw_events(character_id,occurred_at);
+CREATE INDEX IF NOT EXISTS raw_events_target_time ON devencour.raw_events(lower(payload->'target'->>'name'),occurred_at)
+ WHERE kind IN ('shield_out','armor_out','hull_out','capacitor_out');
+-- Compact scores only: no permanent list of assisted recipients or transfers.
+CREATE TABLE IF NOT EXISTS devencour.killmail_support (
+ killmail_id bigint NOT NULL, side text NOT NULL CHECK(side IN ('defense','attack')),
+ resource text NOT NULL CHECK(resource IN ('healing','capacitor')), supporter_key text NOT NULL,
+ amount bigint NOT NULL CHECK(amount>0), source jsonb NOT NULL,
+ calculated_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+ PRIMARY KEY(killmail_id,side,resource,supporter_key)
+);
+CREATE TABLE IF NOT EXISTS devencour.replay_requests (
+ id bigserial PRIMARY KEY, owner bigint NOT NULL, character_id bigint,
+ date_from timestamptz NOT NULL, date_to timestamptz NOT NULL CHECK(date_to>=date_from),
+ active boolean NOT NULL DEFAULT true, created_at timestamptz NOT NULL DEFAULT clock_timestamp()
+);
 -- Debug killboard snapshots, populated only by the explicit recalculation action.
 CREATE TABLE IF NOT EXISTS devencour.killboard_entries (
  owner bigint NOT NULL, observer text NOT NULL, character_id bigint NOT NULL, killmail_id bigint NOT NULL,

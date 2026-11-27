@@ -1,8 +1,11 @@
       {% set healing = healing|default(false) %}
-      {% set panel_id = 'healers' if healing else 'attackers' %}
-      <section class="eve-window {{ 'healers-window' if healing else 'attackers-window' }}" data-participants-panel data-healing="{{ '1' if healing else '0' }}"{% if healing %} aria-label="Healing participants"{% endif %}>
+      {% set panel_id = support_id|default('healers' if healing else 'attackers') %}
+      {% set panel_title = support_title|default('Healing' if healing else 'Attackers') %}
+      {% set top_label = support_top|default('Top Healer' if healing else 'Top Damage') %}
+      {% set value_unit = support_unit|default('HP' if healing else '') %}
+      <section class="eve-window {{ 'healers-window' if healing else 'attackers-window' }}" data-participants-panel data-healing="{{ '1' if healing else '0' }}" data-top-label="{{ top_label }}" data-value-unit="{{ value_unit }}"{% if healing %} aria-label="{{ panel_title }} participants"{% endif %}>
         <div class="eve-window-title">
-          <span>{{ 'Healing' if healing else 'Attackers' }}</span>
+          <span>{{ panel_title }}</span>
           <div class="attackers-title-controls">
             <span class="muted" id="{{ panel_id }}-summary">{{ killmail.attackers_count }} involved</span>
             <div class="attacker-view-toggle" role="group" aria-label="Attacker grouping">
@@ -66,7 +69,7 @@
               {% if attacker.final_blow or is_top_damage %}
               <div class="attacker-tags">
                 {% if attacker.final_blow %}<span class="attacker-tag final-blow-label">Final Blow</span>{% endif %}
-                {% if is_top_damage %}<span class="attacker-tag top-damage-label">{{ 'Top Healer' if healing else 'Top Damage' }}</span>{% endif %}
+                {% if is_top_damage %}<span class="attacker-tag top-damage-label">{{ top_label }}</span>{% endif %}
               </div>
               {% endif %}
               <div class="attacker-sub">{% if attacker.ship %}{{ attacker.ship.name }}{% else %}Unknown ship{% endif %}{% if attacker.weapon %} · {{ attacker.weapon.name }}{% endif %}</div>
@@ -74,7 +77,7 @@
             </div>
             <div class="attacker-damage">
               <div class="pct">{{ "%.1f"|format(attacker_pct) }}%</div>
-              <div class="raw">{{ "{:,}".format(attacker.damage_done or 0) }}{% if healing %} HP{% endif %}</div>
+              <div class="raw">{{ "{:,}".format(attacker.damage_done or 0) }}{% if value_unit %} {{ value_unit }}{% endif %}</div>
             </div>
             <div class="damage-track"><span style="width: {{ attacker_pct }}%;"></span></div>
           </div>

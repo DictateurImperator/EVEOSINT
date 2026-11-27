@@ -5,7 +5,7 @@ from datetime import datetime, timedelta, timezone
 import json
 import logging
 from . import combat_timeline as store
-from .entities import _entity_ref, _killmail_type_ref
+from .entities import _entity_ref, _killmail_type_ref, _killmail_attacker_coalition_map
 from .db import db
 
 logger = logging.getLogger(__name__)
@@ -107,9 +107,21 @@ def enrich(killmail, rows):
         row['character']=existing.get('character') or _entity_ref('character',cid,name) or refs['character'].get(name.casefold()) or dict(name=name)
         row['corporation']=refs['corporation'].get(source.get('corporation','').casefold()) or existing.get('corporation')
         row['alliance']=refs['alliance'].get(source.get('alliance','').casefold()) or existing.get('alliance')
+        row['coalition']=existing.get('coalition')
         row['logged_corporation']=source.get('corporation','')
         row['ships']=[refs['ship'].get(name.casefold()) or dict(name=name) for name in sorted(row['ship_names'])]
         if not row['ships'] and existing.get('ship'): row['ships']=[existing['ship']]
+    coalition_rows=[(i,None,None,(r.get('corporation') or {}).get('entity_id'),None,None,
+                     (r.get('alliance') or {}).get('entity_id')) for i,r in enumerate(rows)]
+    if any(r[3] or r[6] for r in coalition_rows):
+        try:
+            with closing(db()) as conn:
+                conn.set_session(readonly=True)
+                coalitions=_killmail_attacker_coalition_map(conn,coalition_rows,killmail['killmail_time'])
+            for i,row in enumerate(rows):
+                if i in coalitions: row['coalition']=coalitions[i]
+        except Exception:
+            logger.warning('Support coalition metadata unavailable; keeping recorded amounts')
     return rows
 
 
@@ -136,3 +148,29 @@ def get_healers(killmail):
     except Exception:
         logger.warning('Recorded healing unavailable for killmail %s',killmail.get('killmail_id'),exc_info=True)
         return []
+
+
+def get_support(killmail):
+    """Page loads only read compact scores; no raw scan or calculation here."""
+    groups={name:[] for name in ('healers','batteries','assists','battery_assists')}
+    if not killmail: return groups
+    summary_healers=get_healers(killmail)
+    names={('defense','healing'):'healers',('defense','capacitor'):'batteries',
+           ('attack','healing'):'assists',('attack','capacitor'):'battery_assists'}
+    try:
+        with store.connection() as conn,conn.cursor() as cur:
+            cur.execute('SELECT side,resource,amount,source FROM devencour.killmail_support WHERE killmail_id=%s',(killmail['killmail_id'],))
+            stored=cur.fetchall()
+        for side,resource,value,source in stored:
+            groups[names[(side,resource)]].append(dict(source=source,total=value,recipients=[],ship_names={source['ship']} if source.get('ship') else set()))
+        rows=[r for values in groups.values() for r in values]
+        enrich(killmail,rows)
+        for values in groups.values():
+            values.sort(key=lambda r:(-r['total'],r['source']['name'].casefold()))
+            total=sum(r['total'] for r in values)
+            for row in values: row['percent']=row['total']/total*100 if total else 0
+    except Exception:
+        logger.warning('Recorded support unavailable for killmail %s',killmail.get('killmail_id'),exc_info=True)
+    # Existing stored summaries keep working before the first deferred run.
+    if not groups['healers']: groups['healers']=summary_healers
+    return groups

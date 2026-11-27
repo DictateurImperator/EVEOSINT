@@ -114,7 +114,7 @@ def validate_event(e):
 
 
 def validate_summary(p):
-    if not isinstance(p,dict) or set(p)!={'version','summary_id','character_id','character_name','death_signal_at','window_seconds','emitted','received_healing'} or p['version']!=2 or p['window_seconds']!=1800:
+    if not isinstance(p,dict) or set(p)-{'received_capacitor'}!={'version','summary_id','character_id','character_name','death_signal_at','window_seconds','emitted','received_healing'} or p['version']!=2 or p['window_seconds']!=1800:
         raise ValueError('Invalid summary')
     identifier(p['summary_id']);timestamp(p['death_signal_at']);text(p['character_name'],128,False)
     if type(p['character_id']) is not int or p['character_id']<=0: raise ValueError('Invalid character')
@@ -130,6 +130,17 @@ def validate_summary(p):
         for key in ('ship','corporation','alliance'):
             if key in h: text(h[key])
         if 'character_id' in h and (type(h['character_id']) is not int or h['character_id']<=0): raise ValueError('Invalid healer id')
+    if not isinstance(p.get('received_capacitor',[]),list): raise ValueError('Invalid capacitor')
+    names=set()
+    for h in p.get('received_capacitor',[]):
+        if not isinstance(h,dict) or not {'name','gj'}<=set(h) or set(h)-{'name','ship','corporation','alliance','character_id','gj'}:
+            raise ValueError('Invalid capacitor donor')
+        text(h['name'],256,False);amount(h['gj'])
+        if h['name'].casefold() in names: raise ValueError('Duplicate capacitor donor')
+        names.add(h['name'].casefold())
+        for key in ('ship','corporation','alliance'):
+            if key in h: text(h[key])
+        if 'character_id' in h and (type(h['character_id']) is not int or h['character_id']<=0): raise ValueError('Invalid donor id')
     return p
 
 
@@ -165,7 +176,18 @@ def receive(owner,body,batch_id,summary=False):
                 fresh=bool(cur.fetchone());table,key,ident='raw_events','event_id',p['event_id']
             if not fresh:
                 cur.execute(f'SELECT payload FROM devencour.{table} WHERE owner=%s AND {key}=%s',(owner,ident))
-                if cur.fetchone()[0]!=p: raise EventConflict('Id reused with different data')
+                saved=cur.fetchone()[0]
+                if saved!=p:
+                    # The new reader may append cap donors to an old immutable
+                    # summary; all existing fields must remain exactly equal.
+                    if not summary or {k:v for k,v in saved.items() if k!='received_capacitor'}!={k:v for k,v in p.items() if k!='received_capacitor'}:
+                        raise EventConflict('Id reused with different data')
+                    old={h['name'].casefold():h for h in saved.get('received_capacitor',[])}
+                    merged=dict(old)
+                    for h in p.get('received_capacitor',[]):
+                        if h['gj']>merged.get(h['name'].casefold(),{}).get('gj',-1): merged[h['name'].casefold()]=h
+                    saved['received_capacitor']=sorted(merged.values(),key=lambda h:(-h['gj'],h['name'].casefold()))
+                    cur.execute('UPDATE devencour.death_summaries SET payload=%s WHERE owner=%s AND summary_id=%s',(Json(saved),owner,ident))
             if fresh:
                 at=p['death_signal_at'] if summary else p['occurred_at']
                 name=p['character_name'] if summary else p['observer']
@@ -207,3 +229,25 @@ def timeline(observer='',kind='',before='',date_from='',date_to='',limit=200):
     if more:
         last=rows[-1];cursor=base64.urlsafe_b64encode(json.dumps([utc(last['occurred_at']),last['event_id'],last['owner']]).encode()).decode().rstrip('=')
     return dict(events=[dict(r['payload'],received_at=utc(r['received_at']),collector_owner=r['owner']) for r in rows],streams=groups,next=cursor,total=sum(r['events'] for r in groups))
+
+
+def replay_requests(owner):
+    with connection() as conn,conn.cursor(cursor_factory=RealDictCursor) as cur:
+        cur.execute('SELECT id,character_id,date_from,date_to FROM devencour.replay_requests WHERE owner=%s AND active ORDER BY id DESC',(owner,))
+        return [{k:utc(v) for k,v in dict(r).items()} for r in cur.fetchall()]
+
+
+def request_replay(owner,date_from,date_to,character_id=None):
+    timestamp(date_from);timestamp(date_to)
+    if date_from>date_to: raise ValueError('Invalid date range')
+    if character_id is not None and (type(character_id) is not int or character_id<=0): raise ValueError('Invalid character')
+    check_writing()
+    with connection() as conn,conn.cursor() as cur:
+        cur.execute('INSERT INTO devencour.replay_requests(owner,character_id,date_from,date_to) VALUES(%s,%s,%s,%s) RETURNING id',(owner,character_id,date_from,date_to))
+        return cur.fetchone()[0]
+
+
+def cancel_replay(owner,request_id):
+    check_writing()
+    with connection() as conn,conn.cursor() as cur:
+        cur.execute('UPDATE devencour.replay_requests SET active=false WHERE owner=%s AND id=%s',(owner,request_id))

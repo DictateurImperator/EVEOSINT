@@ -25,7 +25,7 @@ def main():
         expect(page.locator('.healers-window .attacker-sub a')).to_have_count(0)
         expect(page.locator('.healers-window')).to_contain_text('100 HP')
         healer=page.locator('.healers-window').bounding_box()
-        victim=page.locator('.killmail-main-grid > section').nth(1).bounding_box()
+        victim=page.locator('.victim-column').bounding_box()
         assert healer['x']+healer['width']<=victim['x'],(healer,victim)
         attackers=page.locator('.attackers-window').bounding_box()
         assert abs(healer['width']-attackers['width'])<1,(healer,attackers)

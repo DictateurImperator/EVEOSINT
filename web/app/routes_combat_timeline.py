@@ -54,10 +54,46 @@ def killmails(request: Request, observer: str='', page: int=1, date_from: str=''
 def recalculate(request: Request):
     user, redirect = admin(request, 'admin.jobs.run')
     if redirect: return redirect
+    from . import combat_support
+    if store.MAINTENANCE.exists(): return maintenance_response()
+    if not combat_support.start(): raise HTTPException(409,'A recalculation is already running.')
+    return JSONResponse({'status':'running'},status_code=202,headers={'Cache-Control':'no-store'})
+
+
+@router.get('/admin/debug/combat/recalculate')
+def recalculation_status(request: Request):
+    user, redirect = admin(request)
+    if redirect: return redirect
+    from .combat_support import status
+    return JSONResponse(status(),headers={'Cache-Control':'no-store'})
+
+
+@router.get('/admin/debug/combat/replays')
+def replay_list(request: Request):
+    user, redirect = admin(request)
+    if redirect: return redirect
+    return JSONResponse({'requests':store.replay_requests(user['id'])},headers={'Cache-Control':'no-store'})
+
+
+@router.post('/admin/debug/combat/replays')
+async def replay_create(request: Request):
+    user, redirect = admin(request,'admin.jobs.run')
+    if redirect: return redirect
     try:
-        if not links.refresh(force=True): raise HTTPException(409, 'A recalculation is already running.')
+        p=await request.json()
+        ident=await run_in_threadpool(store.request_replay,user['id'],p['date_from'],p['date_to'],p.get('character_id'))
     except store.Maintenance: return maintenance_response()
-    return JSONResponse({'status':'finished'},headers={'Cache-Control':'no-store'})
+    except (ValueError,KeyError,TypeError): raise HTTPException(400,'Invalid replay period')
+    return JSONResponse({'id':ident},headers={'Cache-Control':'no-store'})
+
+
+@router.delete('/admin/debug/combat/replays/{request_id}')
+def replay_cancel(request: Request,request_id: int):
+    user, redirect = admin(request,'admin.jobs.run')
+    if redirect: return redirect
+    try: store.cancel_replay(user['id'],request_id)
+    except store.Maintenance: return maintenance_response()
+    return JSONResponse({'status':'cancelled'})
 
 
 def maintenance_response():
@@ -69,9 +105,10 @@ def maintenance_response():
 async def collector_status(request: Request):
     if store.MAINTENANCE.exists(): return maintenance_response()
     auth=request.headers.get('authorization','')
-    if not auth.startswith('Bearer ') or await run_in_threadpool(active_collector,auth[7:]) is None:
-        raise HTTPException(401)
-    return JSONResponse({'version':2,'status':'ready'},headers={'Cache-Control':'no-store'})
+    owner=await run_in_threadpool(active_collector,auth[7:]) if auth.startswith('Bearer ') else None
+    if owner is None: raise HTTPException(401)
+    requests=await run_in_threadpool(store.replay_requests,owner)
+    return JSONResponse({'version':2,'status':'ready','replay_requests':requests},headers={'Cache-Control':'no-store'})
 
 
 @router.post('/collector/combat-events')
