@@ -1,6 +1,12 @@
 {% extends "base.html" %}
 
 {% block content %}
+{% if not combat_debug %}
+  {% set healers = [] %}
+  {% set batteries = [] %}
+  {% set assists = [] %}
+  {% set battery_assists = [] %}
+{% endif %}
 <!-- EVEOSINT_KILLMAIL_PAGE_V76_STRUCTURE_KILLMAIL_SUPPORT -->
 
 {% macro zkill_item(item, size=32) -%}
@@ -954,7 +960,7 @@
         </div>
       </section>
 
-    {% if killmail.recorded_activity is defined %}
+    {% if combat_debug and killmail.recorded_activity is defined %}
     <section class="eve-window victim-activity" aria-label="Victim recorded activity">
       <div class="eve-window-title">Victim activity · 30 minutes before destruction</div>
       <div class="victim-activity-grid">

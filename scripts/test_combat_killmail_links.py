@@ -39,7 +39,7 @@ class DebugPreviewTests(RouteTests):
         from scripts.test_combat_healing import km, healing, event as heal_event
         mail=km();healers=healing.enrich(mail,healing.collect(mail,[heal_event()]))
         source=SimpleNamespace(kill_profile=lambda *args:SimpleNamespace(context=dict(killmail=mail,error=None,healers=healers)))
-        with patch.dict(sys.modules,{routes.__package__+'.routes_entities':source}),patch.object(routes,'require_login',return_value=ADMIN),patch.object(routes,'require_permission_or_redirect',return_value=None):
+        with patch.object(healing,'get_support',return_value=dict(healers=healers,batteries=[],assists=[],battery_assists=[])),patch.dict(sys.modules,{routes.__package__+'.routes_entities':source}),patch.object(routes,'require_login',return_value=ADMIN),patch.object(routes,'require_permission_or_redirect',return_value=None):
             response=self.client.get('/admin/debug/combat/kill/123')
         self.assertEqual(response.status_code,200)
         self.assertIn('Top Healer',response.text)

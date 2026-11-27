@@ -20,6 +20,7 @@ from urllib.parse import parse_qsl, urlencode, urlsplit
 
 ROOT = Path(__file__).resolve().parents[2] / 'data' / 'public_pages'
 CACHE_VERSION = 4
+KILLMAIL_VIEW_VERSION = 1
 MAX_ENTRIES = 256
 MAX_BYTES = 64 * 1024 * 1024
 MAX_ENTRY_BYTES = 2 * 1024 * 1024
@@ -366,6 +367,7 @@ def entries():
 
 def store(target, html):
     data = dict(source=target.source, created=time.time(), html=html, cache_version=CACHE_VERSION)
+    if target.key=='kill': data['killmail_view_version']=KILLMAIL_VIEW_VERSION
     if len(json.dumps(data, ensure_ascii=False).encode()) > MAX_ENTRY_BYTES:
         raise ValueError('Snapshot exceeds the 2 MiB page limit. Choose a smaller view.')
     with locked():
@@ -401,6 +403,8 @@ def load(target, *, allow_stale=False):
             return None
         data = json.loads(path.read_text())
         if data.get('cache_version')!=CACHE_VERSION or data['source'] != target.source or (not allow_stale and time.time() - data['created'] >= MAX_AGE):
+            return None
+        if target.key=='kill' and data.get('killmail_view_version')!=KILLMAIL_VIEW_VERSION:
             return None
         if not allow_stale:
             os.utime(path, None)  # Crawlers must not keep old results in the LRU.

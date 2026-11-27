@@ -307,6 +307,20 @@ class PublicTests(unittest.TestCase):
         public.store(target,'Shared private ship page')
         self.assertEqual(public.load(target)['html'],'Shared private ship page')
 
+    def test_cached_killmail_with_experimental_annotations_is_not_reused(self):
+        target=public.resolve('/kill/123')
+        public.store(target,'Standard killmail')
+        path=public.ROOT/('snapshot-'+target.digest+'.json')
+        saved=json.loads(path.read_text());saved.pop('killmail_view_version')
+        path.write_text(json.dumps(saved))
+        self.assertIsNone(public.load(target))
+        self.assertIsNone(public.load(target,allow_stale=True))
+        public.store(target,'Standard killmail')
+        self.assertEqual(public.load(target)['html'],'Standard killmail')
+        other=public.resolve('/character/1')
+        public.store(other,'Unchanged entity page')
+        self.assertEqual(public.load(other)['html'],'Unchanged entity page')
+
     def test_cached_links_revoke_immediately_without_mutating_source(self):
         self.enable('character', 'character:overview', 'character:stats', 'leaderboard', 'leaderboard:character')
         target = public.resolve('/leaderboard')

@@ -10,7 +10,7 @@ def main():
         alliance=f.entities._entity_ref('alliance',400,'Logi Alliance','ALLY'),
         coalition=dict(coalition_id=500,name='Logi Coalition',url='/coalition/500'))
     mail['recorded_activity']=dict(damage_hp=12345,healing_hp=6789,capacitor_gj=4321)
-    context=dict(killmail=mail,error=None,healers=[row],batteries=[row],assists=[row],battery_assists=[row])
+    context=dict(combat_debug=True,killmail=mail,error=None,healers=[row],batteries=[row],assists=[row],battery_assists=[row])
     renderer=f.load('public_page_renderer')
     with sync_playwright() as pw:
         browser=pw.chromium.launch(args=['--no-sandbox'])
@@ -40,7 +40,7 @@ def main():
         page.set_viewport_size({'width':390,'height':844})
         assert page.evaluate('document.documentElement.scrollWidth')<=390
         del mail['recorded_activity']
-        page.set_content(renderer.content('killmail_detail.html',dict(killmail=mail,error=None,healers=[])))
+        page.set_content(renderer.content('killmail_detail.html',dict(combat_debug=True,killmail=mail,error=None,healers=[])))
         expect(page.get_by_label('Victim recorded activity')).to_have_count(0)
         expect(page.locator('.healers-window')).to_have_count(0)
         assert not errors,errors

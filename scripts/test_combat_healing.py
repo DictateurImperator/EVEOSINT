@@ -57,7 +57,7 @@ class HealingTests(unittest.TestCase):
 
     def test_missing_observations_leave_original_km_template_unchanged(self):
         renderer=f.load('public_page_renderer')
-        html=renderer.content('killmail_detail.html',dict(killmail=km(),error=None,healers=[]))
+        html=renderer.content('killmail_detail.html',dict(combat_debug=True,killmail=km(),error=None,healers=[]))
         self.assertNotIn('aria-label="Healing participants"',html)
         self.assertIn('id="attackers-list"',html)
 
@@ -65,7 +65,7 @@ class HealingTests(unittest.TestCase):
         rows=healing.enrich(km(),healing.collect(km(),[event()]))
         rows[0]['character']=dict(name='<script>bad()</script>')
         renderer=f.load('public_page_renderer')
-        html=renderer.content('killmail_detail.html',dict(killmail=km(),error=None,healers=rows))
+        html=renderer.content('killmail_detail.html',dict(combat_debug=True,killmail=km(),error=None,healers=rows))
         self.assertIn('attacker-row healer-row',html)
         self.assertIn('Top Healer',html)
         self.assertNotIn('30 minutes before destruction',html)
@@ -104,6 +104,15 @@ class HealingTests(unittest.TestCase):
         self.assertIn('/types/302/icon',html)
         self.assertIn('100 HP',html)
         self.assertNotIn('To:',html)
+
+    def test_standard_killmail_hides_all_debug_annotations_even_if_data_is_present(self):
+        mail=km();mail['recorded_activity']=dict(damage_hp=12345,healing_hp=100,capacitor_gj=90)
+        rows=healing.enrich(mail,healing.collect(mail,[event()]))
+        html=f.load('public_page_renderer').content('killmail_detail.html',dict(killmail=mail,error=None,
+            healers=rows,batteries=rows,assists=rows,battery_assists=rows))
+        self.assertNotIn('data-healing="1"',html)
+        self.assertNotIn('aria-label="Victim recorded activity"',html)
+        self.assertIn('id="attackers-list"',html)
 
     def test_metadata_failure_keeps_healing_visible(self):
         rows=healing.collect(km(),[event(source=dict(name='Outside Logi',ship='Test Logi Ship'))])

@@ -17,7 +17,7 @@ def main():
         page=browser.new_page(viewport={'width':1920,'height':1080})
         page.route('https://images.evetech.net/**',lambda route:route.abort())
         errors=[];page.on('pageerror',lambda error:errors.append(str(error)))
-        page.set_content(renderer.content('killmail_detail.html',dict(killmail=mail,error=None,healers=healers)))
+        page.set_content(renderer.content('killmail_detail.html',dict(combat_debug=True,killmail=mail,error=None,healers=healers)))
         expect(page.locator('.healer-row')).to_have_count(2)
         expect(page.locator('.healers-window')).to_contain_text('Top Healer')
         expect(page.locator('.healers-window .attacker-tag')).to_have_count(1)
@@ -45,7 +45,7 @@ def main():
         page.set_viewport_size({'width':390,'height':844})
         healer=page.locator('.healers-window').bounding_box()
         assert healer['x']>=0 and healer['x']+healer['width']<=390,healer
-        page.set_content(renderer.content('killmail_detail.html',dict(killmail=mail,error=None,healers=[])))
+        page.set_content(renderer.content('killmail_detail.html',dict(combat_debug=True,killmail=mail,error=None,healers=[])))
         expect(page.locator('.healers-window')).to_have_count(0)
         expect(page.locator('#attackers-list .attacker-row')).to_have_count(2)
         assert not errors,errors

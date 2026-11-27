@@ -146,5 +146,10 @@ def killmail_test(request: Request, killmail_id: int):
     from .routes_entities import kill_profile
     response=kill_profile(request,killmail_id)
     if not hasattr(response,'context'): return response
+    from .combat_healing import get_support
+    # Keep experimental annotations off the standard handler and its data object.
+    killmail=response.context.get('killmail')
+    if killmail: killmail=dict(killmail)
+    support=get_support(killmail)
     return templates.TemplateResponse(request=request,name='killmail_detail.html',
-        context=dict(response.context,combat_debug=True))
+        context=dict(response.context,killmail=killmail,combat_debug=True,**support))
