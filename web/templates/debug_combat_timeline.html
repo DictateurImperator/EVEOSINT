@@ -1,6 +1,14 @@
 {% include "killmail_table_styles.html" %}
 <h1 class="h3 mb-2">Combat logs · Debug</h1>
 <p class="muted-line">Combat observations. Filter by observer to inspect one character's point of view. These are player-supplied logs, not verified killmails.</p>
+<section class="content-card p-3 p-md-4 mb-3" aria-label="Combat synchronization">
+  <div class="d-flex flex-wrap gap-2 align-items-center mb-2">
+    <h2 class="h5 mb-0">Synchronization</h2>
+    <button id="ctRecalculate" class="btn btn-primary btn-sm" type="button">Run synchronization</button>
+  </div>
+  <p class="small muted-line mb-2">Manual run: match stored observations to killmails, calculate healing and capacitor support, then mark or purge eligible raw lines. Receiving new observations or killmails does not start this synchronization.</p>
+  <div id="ctProcessState" class="small muted-line" role="status">Ready to start.</div>
+</section>
 <section class="content-card p-3 p-md-4 mb-3">
   <div class="d-flex flex-wrap gap-2 align-items-center mb-3">
     <strong id="ctTotal">Loading…</strong><span id="ctState" class="muted-line" role="status"></span>
@@ -26,11 +34,9 @@
 <section class="content-card p-3 p-md-4 mb-3">
   <div class="d-flex flex-wrap gap-2 align-items-center mb-2">
     <h2 class="h5 mb-0">Kills and losses · Killmail links</h2>
-    <button id="ctRecalculate" class="btn btn-outline-primary btn-sm" type="button">Recalculate support &amp; killmail links</button>
   </div>
   <p class="small muted-line">Receiving observations only stores them. Run the recalculation when you are ready to match them to killmails. Successfully processed raw lines are marked, retried on each run during their first 3 days, then retried once more at 7 days before deletion. Age is measured from the event time. Summaries and support scores are kept.</p>
   <p class="small muted-line">The site reads each observer's killboard for the logged period. Inflicted kills come from that killboard. Loss notifications are compared with that character's losses by UTC time (nearest within 30 seconds). Repeated notifications may link to the same loss. Unknown or ambiguous losses stay separate. All links are stored in the separate debug database; existing killmails are never modified.</p>
-  <div id="ctProcessState" class="small muted-line mb-2" role="status"></div>
   <div id="ctKmState" class="small muted-line" role="status"></div>
   <div id="ctKillmails"></div>
   <div id="ctUnknown" class="small muted-line"></div>
@@ -62,7 +68,7 @@
    $('ctKillmails').innerHTML=data.html;
    for(const link of $('ctKillmails').querySelectorAll('[data-killmail-page]')){const p=killmailParams();p.delete('page');p.delete('side');p.set('tab','combat');p.set('kb_page',link.dataset.killmailPage);p.set('kb_side',kmSide);link.href='/admin/debug?'+p.toString();link.removeAttribute('data-killmail-page');}
    $('ctUnknown').replaceChildren();for(const loss of data.unmatched_losses){const line=document.createElement('div');line.textContent=loss.occurred_at+' · '+loss.observer+' · '+(loss.status==='ambiguous'?'Ambiguous loss':'Unknown killmail');$('ctUnknown').appendChild(line);}
-   $('ctKmState').textContent=data.scans.some(s=>s.status==='error')?'Lookup failed. Use Recalculate killmail links to retry.':data.scans.length?'Last site lookup: '+data.scans.map(s=>s.observer+' '+s.checked_at).join(' · '):'No recalculation yet.';
+   $('ctKmState').textContent=data.scans.some(s=>s.status==='error')?'Lookup failed. Use Run synchronization to retry.':data.scans.length?'Last site lookup: '+data.scans.map(s=>s.observer+' '+s.checked_at).join(' · '):'No recalculation yet.';
   }catch(e){if(e.name!=='AbortError')$('ctKmState').textContent=e.message;}
  }
  function killmailParams(){const p=params();p.delete('kind');p.set('page',kmPage);p.set('side',kmSide);return p;}
@@ -97,8 +103,8 @@
    const r=await fetch('/admin/debug/combat/recalculate',{cache:'no-store'});if(!r.ok)return;
    const state=await r.json();const running=state.status==='running';
    $('ctRecalculate').disabled=running;
-   $('ctRecalculate').textContent=running?'Recalculating…':'Recalculate support & killmail links';
-   $('ctProcessState').textContent=state.status==='idle'?'':state.message||[state.status,state.day,'Killmail participations: '+(state.killmails||0),'Support scores: '+(state.scores||0),'Lines marked: '+(state.marked||0),'Lines purged: '+(state.purged||0)].filter(Boolean).join(' · ');
+   $('ctRecalculate').textContent=running?'Synchronizing…':'Run synchronization';
+   $('ctProcessState').textContent=state.status==='idle'?'Ready to start.':state.message||[state.status,state.day,'Killmail participations: '+(state.killmails||0),'Support scores: '+(state.scores||0),'Lines marked: '+(state.marked||0),'Lines purged: '+(state.purged||0)].filter(Boolean).join(' · ');
    if(state.status==='finished'&&previousProcess==='running'){await loadKillmails();await load();}
    previousProcess=state.status;
    if(running)setTimeout(()=>processState().catch(()=>{}),2000);
