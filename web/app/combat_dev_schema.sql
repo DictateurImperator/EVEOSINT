@@ -39,6 +39,13 @@ CREATE TABLE IF NOT EXISTS devencour.killmail_support (
  calculated_at timestamptz NOT NULL DEFAULT clock_timestamp(),
  PRIMARY KEY(killmail_id,side,resource,supporter_key)
 );
+-- Recovery for known losses without a client death signal. Separate from both
+-- original KMs and transmitted summaries; retained after raw-event cleanup.
+CREATE TABLE IF NOT EXISTS devencour.killmail_activity (
+ killmail_id bigint PRIMARY KEY, character_id bigint NOT NULL,
+ damage_hp bigint NOT NULL, healing_hp bigint NOT NULL, capacitor_gj bigint NOT NULL,
+ calculated_at timestamptz NOT NULL DEFAULT clock_timestamp()
+);
 CREATE TABLE IF NOT EXISTS devencour.replay_requests (
  id bigserial PRIMARY KEY, owner bigint NOT NULL, character_id bigint,
  date_from timestamptz NOT NULL, date_to timestamptz NOT NULL CHECK(date_to>=date_from),

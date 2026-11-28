@@ -100,6 +100,55 @@ class DatabaseTests(unittest.TestCase):
         self.assertEqual(self.rows('SELECT supporter_key,amount FROM devencour.killmail_support ORDER BY supporter_key'),[('logi',100),('second logi',200)])
         self.assertEqual(self.rows('SELECT count(*) FROM devencour.collector_streams WHERE character_id=100'),[(0,)])
 
+    def test_missing_summary_activity_is_recovered_before_purge_and_display_reads_saved_totals(self):
+        def outgoing(n,kind,value,at):
+            row=e(n,kind=kind,value=value,at=at)
+            row.update(character_id=100,observer='Victim',source=dict(name='Victim',character_id=100))
+            return row
+        events=[outgoing(801,'damage_out',7000,T-timedelta(minutes=30)),
+                outgoing(802,'damage_out',952,T),
+                outgoing(803,'damage_out',999,T-timedelta(minutes=30,seconds=1)),
+                outgoing(804,'damage_out',999,T+timedelta(seconds=1)),
+                outgoing(805,'shield_out',200,T),outgoing(806,'capacitor_out',70,T),
+                e(807,kind='damage_in',value=9999,at=T)]
+        self.ingest(events)
+        body=json.dumps(events[0]).encode()
+        base.store.receive(2,body,hashlib.sha256(body).hexdigest())
+        board=lambda cid,*_:iter([(44,T,'loss',1,'Ship','1')]) if cid==100 else iter([])
+        self.run_at(T+timedelta(days=8),board)
+        self.assertEqual(self.rows('SELECT killmail_id,damage_hp,healing_hp,capacitor_gj FROM devencour.killmail_activity'),[(44,7952,200,70)])
+        result,_=self.run_at(T+timedelta(days=8,seconds=1),board)
+        self.assertGreater(result['purged'],0)
+        self.assertEqual(self.rows('SELECT count(*) FROM devencour.raw_events'),[(0,)])
+        healing=load('combat_healing')
+        mail=dict(killmail_id=44,killmail_time=T,victim=dict(character=dict(entity_id=100,name='Victim')))
+        # No raw events remain: page loads must read the compact result only.
+        with patch.object(healing,'enrich',side_effect=lambda _,rows:rows):
+            healing.get_support(mail)
+        self.assertEqual(mail['recorded_activity'],dict(damage_hp=7952,healing_hp=200,capacitor_gj=70))
+        from scripts.test_combat_healing import km
+        preview=km();preview['recorded_activity']=mail['recorded_activity']
+        html=load('public_page_renderer').content('killmail_detail.html',dict(combat_debug=True,killmail=preview,error=None,healers=[]))
+        self.assertIn('7,952 HP',html)
+
+    def test_recovery_skips_existing_client_summary_empty_windows_and_non_losses(self):
+        row=e(810,kind='damage_out',value=999)
+        row.update(character_id=100,observer='Victim')
+        self.ingest([row])
+        summary=base.summary()
+        summary.update(character_id=100,character_name='Victim')
+        base.ingest(summary,True)
+        self.rows('INSERT INTO devencour.summary_killmail_links(owner,summary_id,killmail_id) VALUES(%s,%s,%s)',(1,summary['summary_id'],44))
+        support.recover_activity(RECIPIENT,[(44,T,'loss'),(45,T,'kill'),(46,T+timedelta(hours=2),'loss')])
+        self.assertEqual(self.rows('SELECT count(*) FROM devencour.killmail_activity'),[(0,)])
+        # A later client summary wins over an earlier recovered value.
+        self.rows('INSERT INTO devencour.killmail_activity VALUES(44,100,999,999,999,clock_timestamp())')
+        healing=load('combat_healing')
+        mail=dict(killmail_id=44,killmail_time=T,victim=dict(character=dict(entity_id=100,name='Victim')))
+        with patch.object(healing,'enrich',side_effect=lambda _,rows:rows):
+            healing.get_support(mail)
+        self.assertEqual(mail['recorded_activity'],summary['emitted'])
+
     def run_at(self,at,board=None):
         from contextlib import ExitStack
         with ExitStack() as stack:

@@ -159,6 +159,13 @@ def get_support(killmail):
            ('attack','healing'):'assists',('attack','capacitor'):'battery_assists'}
     try:
         with store.connection() as conn,conn.cursor() as cur:
+            if 'recorded_activity' not in killmail:
+                cur.execute('''SELECT damage_hp,healing_hp,capacitor_gj
+                    FROM devencour.killmail_activity WHERE killmail_id=%s AND character_id=%s''',
+                    (killmail['killmail_id'],(killmail.get('victim',{}).get('character') or {}).get('entity_id')))
+                activity=cur.fetchone()
+                if activity:
+                    killmail['recorded_activity']=dict(zip(('damage_hp','healing_hp','capacitor_gj'),activity))
             cur.execute('SELECT side,resource,amount,source FROM devencour.killmail_support WHERE killmail_id=%s',(killmail['killmail_id'],))
             stored=cur.fetchall()
         for side,resource,value,source in stored:

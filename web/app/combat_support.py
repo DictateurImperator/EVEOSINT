@@ -177,6 +177,52 @@ def save_scores(scores):
 
 
 
+def recover_activity(recipient, entries):
+    """Explicit sync recovers missing death summaries from the victim's logs.
+
+    Known losses provide the UTC end time. Deduplicate identical event IDs
+    across owners; a window without recorded combat actions creates no row.
+    Never rebuild a transmitted summary or modify an original killmail.
+    """
+    losses = sorted({(e[0],e[1]) for e in entries if e[2]=='loss'})
+    if not losses:
+        return
+    first=min(at for _,at in losses)-timedelta(minutes=30)
+    last=max(at for _,at in losses)
+    store.check_writing()
+    with store.connection() as conn,conn.cursor() as cur:
+        cur.execute('''WITH observations AS (
+            SELECT DISTINCT ON(event_id) event_id,occurred_at,kind,payload
+            FROM devencour.raw_events
+            WHERE character_id=%s AND occurred_at BETWEEN %s AND %s
+              AND kind IN ('damage_in','damage_out','shield_in','shield_out',
+                           'armor_in','armor_out','hull_in','hull_out','capacitor_in','capacitor_out')
+            ORDER BY event_id,received_at,owner
+          ), losses(killmail_id,at) AS (VALUES '''+','.join(['(%s::bigint,%s::timestamptz)']*len(losses))+''')
+          SELECT k.killmail_id,
+            coalesce(sum((e.payload->>'amount')::bigint) FILTER (WHERE e.kind='damage_out'),0),
+            coalesce(sum((e.payload->>'amount')::bigint) FILTER (WHERE e.kind IN ('shield_out','armor_out','hull_out')),0),
+            coalesce(sum((e.payload->>'amount')::bigint) FILTER (WHERE e.kind='capacitor_out'),0)
+          FROM losses k JOIN observations e
+            ON e.occurred_at BETWEEN k.at-interval '30 minutes' AND k.at
+          WHERE NOT EXISTS (
+            SELECT 1 FROM devencour.summary_killmail_links l
+            JOIN devencour.death_summaries s USING(owner,summary_id)
+            WHERE l.killmail_id=k.killmail_id AND s.character_id=%s)
+          GROUP BY k.killmail_id''',
+          [recipient['id'],first,last]+[v for loss in losses for v in loss]+[recipient['id']])
+        rows=cur.fetchall()
+        for km_id,damage,healing,capacitor in rows:
+            store.check_writing()
+            cur.execute('''INSERT INTO devencour.killmail_activity
+                (killmail_id,character_id,damage_hp,healing_hp,capacitor_gj)
+                VALUES(%s,%s,%s,%s,%s) ON CONFLICT(killmail_id) DO UPDATE SET
+                damage_hp=greatest(killmail_activity.damage_hp,excluded.damage_hp),
+                healing_hp=greatest(killmail_activity.healing_hp,excluded.healing_hp),
+                capacitor_gj=greatest(killmail_activity.capacitor_gj,excluded.capacitor_gj),
+                calculated_at=clock_timestamp()''',(km_id,recipient['id'],damage,healing,capacitor))
+
+
 def processing_time(cur):
     cur.execute('SELECT clock_timestamp()')
     return cur.fetchone()[0]
@@ -272,6 +318,7 @@ def recalculate(date_from=None, date_to=None):
                                if begin<=e[1]<=last and (e[1]<end or end==last)]
                     if not entries:
                         continue
+                    recover_activity(recipient,entries)
                     counts['recipients'] += 1
                     for km_id,side,local in rolling_scores(entries,events_for(recipient,begin-timedelta(minutes=30),end),recipient):
                         if side=='loss':
